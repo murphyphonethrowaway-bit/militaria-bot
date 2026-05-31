@@ -360,6 +360,13 @@ async def send_promo():
 @client.event
 async def on_ready():
     print(f"Logged in as {client.user}")
+    print(f"SCRIPT_DIR: {SCRIPT_DIR}")
+    logos_path = os.path.join(SCRIPT_DIR, "logos")
+    print(f"Logos folder: {logos_path}")
+    if os.path.exists(logos_path):
+        print(f"Logos found: {os.listdir(logos_path)}")
+    else:
+        print("ERROR: Logos folder not found!")
 
 @client.event
 async def on_message(message):
