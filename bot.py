@@ -26,14 +26,14 @@ DEALERS = [
     {
         "name": "Weitze Militaria",
         "url": "https://www.weitze.com/neuheiten.html",
-        "logo_file": "weitze.png.png",
+        "logo_file": "weitze.png",
         "item_selector": "a[href*='/militaria/']",
         "base_url": "https://www.weitze.com"
     },
     {
         "name": "Linda Mae Militaria",
         "url": "https://lindamaemilitaria.com/",
-        "logo_file": "lindamae.png.jpeg",
+        "logo_file": "lindamae.png",
         "item_selector": ".product a",
         "base_url": "https://lindamaemilitaria.com"
     },
@@ -44,43 +44,43 @@ EMAIL_DEALERS = [
     {
         "name": "The Ruptured Duck",
         "match": ["therupturedduck.com", "ruptured duck"],
-        "logo_file": "ruptured_duck.png.png",
+        "logo_file": "ruptured_duck.png",
         "url": "https://www.therupturedduck.com/collections/recently-added-items"
     },
     {
         "name": "War's End Shop",
         "match": ["warsendshop.com", "war's end", "wars end"],
-        "logo_file": "warsend.png.png",
+        "logo_file": "warsend.png",
         "url": "https://www.warsendshop.com/collections/new-items"
     },
     {
         "name": "Lakeside Trader",
         "match": ["lakesidetrader.com", "lakeside trader"],
-        "logo_file": "lakeside.png.jpg",
+        "logo_file": "lakeside.png",
         "url": "https://www.lakesidetrader.com/recently-added-items/"
     },
     {
         "name": "Dutch Militaria",
         "match": ["dutchmilitaria.com", "dutch militaria"],
-        "logo_file": "dutch_militaria.png.PNG",
+        "logo_file": "dutch_militaria.png",
         "url": "https://dutchmilitaria.com/"
     },
     {
         "name": "Militaria Sales",
         "match": ["militariasales.com", "militaria sales"],
-        "logo_file": "militaria_sales.png.PNG",
+        "logo_file": "militaria_sales.png",
         "url": "https://www.militariasales.com/new-item/"
     },
     {
         "name": "Military Collectibles",
         "match": ["militarycollectibles.com", "military collectibles"],
-        "logo_file": "military_collectibles.png.PNG",
+        "logo_file": "military_collectibles.png",
         "url": "https://militarycollectibles.com/shop?s=n"
     },
     {
         "name": "Military Collectors HQ",
         "match": ["militarycollectorshq.com", "military collectors hq"],
-        "logo_file": "militarycollectorshq.png.PNG",
+        "logo_file": "militarycollectorshq.png",
         "url": "https://militarycollectorshq.com/store-catalog"
     },
 ]
