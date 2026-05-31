@@ -134,6 +134,12 @@ EMAIL_DEALERS = [
         "logo_file": "enemy_militaria.png",
         "url": "https://enemymilitaria.com/"
     },
+    {
+        "name": "Hiscoll Military Antiques",
+        "match": ["hiscoll.com", "hiscoll military antiques", "hiscoll"],
+        "logo_file": "hiscoll.png",
+        "url": "https://hiscoll.com/shop"
+    },
 ]
 
 # ==================== BOT STATE ====================
