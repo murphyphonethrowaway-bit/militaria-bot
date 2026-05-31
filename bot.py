@@ -9,7 +9,7 @@ from datetime import datetime
 
 # ==================== CONFIGURATION ====================
 BOT_TOKEN = BOT_TOKEN = os.environ.get("BOT_TOKEN")
-CHANNEL_ID = 1158055385958199360
+CHANNEL_ID = int(os.environ.get("CHANNEL_ID"))
 CHECK_INTERVAL = 600  # Check every 10 minutes (in seconds)
 
 # ==================== DEALER CONFIG ====================
