@@ -84,6 +84,7 @@ DEALERS = [
 
 # ==================== BOT SETUP ====================
 intents = discord.Intents.default()
+intents.message_content = True
 client = discord.Client(intents=intents)
 
 SEEN_FILE = "seen_items.json"
@@ -109,7 +110,6 @@ async def fetch_page(session, url):
     return None
 
 def extract_item_links(html_bytes, selector, base_url):
-    """Extract just the product links/titles — ignore dynamic page content."""
     try:
         soup = BeautifulSoup(html_bytes, "html.parser", from_encoding="utf-8")
         items = soup.select(selector)
@@ -120,7 +120,6 @@ def extract_item_links(html_bytes, selector, base_url):
                 href = a["href"]
                 if href.startswith("/"):
                     href = base_url + href
-                # Strip query strings to avoid false positives
                 href = href.split("?")[0].split("#")[0]
                 links.add(href)
             else:
@@ -131,6 +130,34 @@ def extract_item_links(html_bytes, selector, base_url):
     except Exception as e:
         print(f"Error parsing HTML: {e}")
         return set()
+
+async def send_alert(channel, name, url, logo_file, test=False):
+    title = f"🧪 TEST — {name}" if test else f"🆕 New Items at {name}!"
+    description = f"This is a test notification for [{name}]({url})\n\n[**Click here to view items →**]({url})" if test else f"New items have been added to [{name}]({url})\n\n[**Click here to view new items →**]({url})"
+
+    embed = discord.Embed(
+        title=title,
+        description=description,
+        color=discord.Color.blurple() if test else discord.Color.dark_gold(),
+        timestamp=datetime.now(timezone.utc)
+    )
+    embed.set_footer(text="Militaria Alerts Bot — Test" if test else "Militaria Alerts Bot")
+
+    file = None
+    if os.path.exists(logo_file):
+        file = discord.File(logo_file, filename="logo.png")
+        embed.set_thumbnail(url="attachment://logo.png")
+        print(f"Logo found: {logo_file}")
+    else:
+        print(f"Logo not found at {logo_file} — sending without logo.")
+
+    try:
+        if file:
+            await channel.send(file=file, embed=embed)
+        else:
+            await channel.send(embed=embed)
+    except Exception as e:
+        print(f"Failed to send message for {name}: {e}")
 
 async def check_dealer(session, dealer, seen, channel):
     name = dealer["name"]
@@ -166,31 +193,6 @@ async def check_dealer(session, dealer, seen, channel):
     else:
         print(f"[{name}] No new items ({len(current_items)} items unchanged).")
 
-async def send_alert(channel, name, url, logo_file):
-    embed = discord.Embed(
-        title=f"🆕 New Items at {name}!",
-        description=f"New items have been added to [{name}]({url})\n\n[**Click here to view new items →**]({url})",
-        color=discord.Color.dark_gold(),
-        timestamp=datetime.now(timezone.utc)
-    )
-    embed.set_footer(text="Militaria Alerts Bot")
-
-    file = None
-    if os.path.exists(logo_file):
-        file = discord.File(logo_file, filename="logo.png")
-        embed.set_thumbnail(url="attachment://logo.png")
-        print(f"Logo found: {logo_file}")
-    else:
-        print(f"Logo not found at {logo_file} — sending without logo.")
-
-    try:
-        if file:
-            await channel.send(file=file, embed=embed)
-        else:
-            await channel.send(embed=embed)
-    except Exception as e:
-        print(f"Failed to send message for {name}: {e}")
-
 async def check_all_dealers():
     await client.wait_until_ready()
     channel = client.get_channel(CHANNEL_ID)
@@ -217,6 +219,21 @@ async def check_all_dealers():
 @client.event
 async def on_ready():
     print(f"Logged in as {client.user}")
+
+@client.event
+async def on_message(message):
+    # Ignore messages from the bot itself
+    if message.author == client.user:
+        return
+
+    if message.content.lower() == "!test":
+        await message.channel.send("🧪 Running test — sending a sample notification for each dealer...")
+        channel = client.get_channel(CHANNEL_ID)
+        for dealer in DEALERS:
+            logo_file = os.path.join(SCRIPT_DIR, "logos", dealer["logo_file"])
+            await send_alert(channel, dealer["name"], dealer["url"], logo_file, test=True)
+            await asyncio.sleep(1)
+        await message.channel.send("✅ Test complete!")
 
 async def main():
     async with client:
