@@ -102,6 +102,12 @@ EMAIL_DEALERS = [
         "logo_file": "1944militaria.png",
         "url": "https://www.1944militaria.com/New_Original_Items_s/1900.htm"
     },
+    {
+        "name": "International Military Antiques",
+        "match": ["ima-usa.com", "international military antiques", "ima usa"],
+        "logo_file": "ima.png",
+        "url": "https://www.ima-usa.com/collections/new-arrivals"
+    },
 ]
 
 # ==================== BOT STATE ====================
