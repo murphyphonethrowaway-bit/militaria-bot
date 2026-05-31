@@ -265,6 +265,7 @@ async def on_message(message):
         embed.add_field(name="!resume", value="Resumes automatic dealer checking", inline=False)
         embed.add_field(name="!stats", value="Shows how many alerts each dealer has triggered", inline=False)
         embed.add_field(name="!test", value="Sends a test notification for all dealers", inline=False)
+        embed.add_field(name="!promo", value="Sends the server promo message manually", inline=False)
         await message.channel.send(embed=embed)
 
     # !status
@@ -340,6 +341,34 @@ async def on_message(message):
         embed.set_footer(text="Militaria Alerts Bot")
         await message.channel.send(embed=embed)
 
+    # !promo
+    elif cmd == "!promo":
+        await message.channel.send("📣 Sending promo message...")
+        channel = client.get_channel(CHANNEL_ID)
+        banner_file = os.path.join(SCRIPT_DIR, "logos", "Server_Banner.png")
+        embed = discord.Embed(
+            title="🎖️ The Relic Registry",
+            description=(
+                "Looking for a great militaria community?\n\n"
+                "**The Relic Registry** is a server for collectors, by collectors.\n\n"
+                "📬 Get new item alerts from top dealers\n"
+                "🏛️ Connect with fellow collectors\n\n"
+                "[**Click here to join →**](http://discord.gg/therelicregistry)"
+            ),
+            color=discord.Color.dark_red(),
+            timestamp=datetime.now(timezone.utc)
+        )
+        embed.set_footer(text="Militaria Alerts Bot")
+        file = None
+        if os.path.exists(banner_file):
+            file = discord.File(banner_file, filename="banner.png")
+            embed.set_image(url="attachment://banner.png")
+        if file:
+            await channel.send(file=file, embed=embed)
+        else:
+            await channel.send(embed=embed)
+        await message.channel.send("✅ Promo sent!")
+
     # !test
     elif cmd == "!test":
         await message.channel.send("🧪 Running test — sending a sample notification for each dealer...")
@@ -350,9 +379,51 @@ async def on_message(message):
             await asyncio.sleep(1)
         await message.channel.send("✅ Test complete!")
 
+async def send_promo():
+    await client.wait_until_ready()
+    channel = client.get_channel(CHANNEL_ID)
+    if not channel:
+        return
+
+    PROMO_INTERVAL = 48 * 3600  # 48 hours in seconds
+
+    while not client.is_closed():
+        await asyncio.sleep(PROMO_INTERVAL)
+        banner_file = os.path.join(SCRIPT_DIR, "logos", "Server_Banner.png")
+
+        embed = discord.Embed(
+            title="🎖️ The Relic Registry",
+            description=(
+                "Looking for a great militaria community?\n\n"
+                "**The Relic Registry** is a server for collectors, by collectors.\n\n"
+                "📬 Get new item alerts from top dealers\n"
+                "🏛️ Connect with fellow collectors\n\n"
+                "[**Click here to join →**](http://discord.gg/therelicregistry)"
+            ),
+            color=discord.Color.dark_red(),
+            timestamp=datetime.now(timezone.utc)
+        )
+        embed.set_footer(text="Militaria Alerts Bot")
+
+        file = None
+        if os.path.exists(banner_file):
+            file = discord.File(banner_file, filename="banner.png")
+            embed.set_image(url="attachment://banner.png")
+
+        try:
+            if file:
+                await channel.send(file=file, embed=embed)
+            else:
+                await channel.send(embed=embed)
+            print("Promo message sent!")
+        except Exception as e:
+            print(f"Failed to send promo message: {e}")
+
 async def main():
     async with client:
         client.loop.create_task(check_all_dealers())
+        client.loop.create_task(send_promo())
         await client.start(BOT_TOKEN)
 
 asyncio.run(main())
+
