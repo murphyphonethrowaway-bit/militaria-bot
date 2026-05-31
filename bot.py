@@ -18,7 +18,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # ==================== GMAIL CONFIG ====================
 GMAIL_USER = "relicregistrybot@gmail.com"
-GMAIL_APP_PASSWORD = "vcwnbupjxqddpdkc"
+GMAIL_APP_PASSWORD = "hxurgoktwbeznvls"
 
 # ==================== DEALER CONFIG ====================
 # Web scraped dealers (still working)
