@@ -8,7 +8,7 @@ from bs4 import BeautifulSoup
 from datetime import datetime
 
 # ==================== CONFIGURATION ====================
-BOT_TOKEN = "MTUxMDQ0NTE3OTU5OTk3ODUwNg.GulcVb.24qMjzTQV_RXQf4K6L_NQmE0nV21ELwT_Esso8"
+BOT_TOKEN = BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHANNEL_ID = 1158055385958199360
 CHECK_INTERVAL = 600  # Check every 10 minutes (in seconds)
 
