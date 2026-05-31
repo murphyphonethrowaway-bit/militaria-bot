@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHANNEL_ID = 1510653092721590323
 CHECK_INTERVAL = 600  # Check every 10 minutes (in seconds)
+EMAIL_CHECK_INTERVAL = 120  # Check email every 2 minutes (in seconds)
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -320,7 +321,24 @@ async def check_all_dealers():
 
         save_seen(seen)
 
-        # Check email dealers
+        print(f"--- Done. Next check in {CHECK_INTERVAL//60} minutes. ---")
+        await asyncio.sleep(CHECK_INTERVAL)
+
+async def check_email_dealers():
+    await client.wait_until_ready()
+    channel = client.get_channel(CHANNEL_ID)
+
+    if not channel:
+        print("ERROR: Could not find channel for email checking.")
+        return
+
+    print(f"Email checker ready! Checking every {EMAIL_CHECK_INTERVAL//60} minutes.")
+
+    while not client.is_closed():
+        if bot_state["paused"]:
+            await asyncio.sleep(30)
+            continue
+
         seen_emails = load_seen_emails()
         triggered = await asyncio.get_event_loop().run_in_executor(None, check_gmail, seen_emails)
         save_seen_emails(seen_emails)
@@ -332,8 +350,7 @@ async def check_all_dealers():
             save_stats(stats)
             await send_alert(channel, dealer["name"], dealer["url"], logo_file)
 
-        print(f"--- Done. Next check in {CHECK_INTERVAL//60} minutes. ---")
-        await asyncio.sleep(CHECK_INTERVAL)
+        await asyncio.sleep(EMAIL_CHECK_INTERVAL)
 
 async def send_promo():
     await client.wait_until_ready()
@@ -521,6 +538,7 @@ async def on_message(message):
 async def main():
     async with client:
         client.loop.create_task(check_all_dealers())
+        client.loop.create_task(check_email_dealers())
         client.loop.create_task(send_promo())
         await client.start(BOT_TOKEN)
 
