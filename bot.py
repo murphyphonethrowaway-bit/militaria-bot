@@ -122,6 +122,18 @@ EMAIL_DEALERS = [
         "logo_file": "ima.png",
         "url": "https://www.ima-usa.com/collections/new-arrivals"
     },
+    {
+        "name": "Wolfgang Historica",
+        "match": ["wolfganghistorica.com", "wolfgang historica"],
+        "logo_file": "wolfgang_historica.png",
+        "url": "https://wolfganghistorica.com/"
+    },
+    {
+        "name": "Enemy Militaria",
+        "match": ["enemymilitaria.com", "enemy militaria"],
+        "logo_file": "enemy_militaria.png",
+        "url": "https://enemymilitaria.com/"
+    },
 ]
 
 # ==================== BOT STATE ====================
