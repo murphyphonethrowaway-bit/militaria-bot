@@ -8,6 +8,20 @@ import email
 from email.header import decode_header
 from bs4 import BeautifulSoup
 from datetime import datetime, timezone
+import random
+
+# Rotating user agents to avoid detection
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1 Safari/605.1.15",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.864.59 Safari/537.36 Edg/91.0.864.59",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36 OPR/76.0.4017.123",
+    "Mozilla/5.0 (Linux; Android 11; Pixel 4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.101 Mobile Safari/537.36",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1 Mobile/15E148 Safari/604.1",
+    "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+    "Mozilla/5.0 (compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm)",
+]
 
 # ==================== CONFIGURATION ====================
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
@@ -155,20 +169,45 @@ def save_seen_emails(seen):
     with open(SEEN_EMAILS_FILE, "w") as f:
         json.dump(list(seen), f)
 
-async def fetch_page(session, url):
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"}
-    try:
-        async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-            if resp.status == 200:
-                return await resp.read()
-    except Exception as e:
-        print(f"Error fetching {url}: {e}")
+async def fetch_page(session, url, retries=3):
+    for attempt in range(retries):
+        try:
+            headers = {
+                "User-Agent": random.choice(USER_AGENTS),
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.5",
+            }
+            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                if resp.status == 200:
+                    return await resp.read()
+                else:
+                    print(f"Attempt {attempt+1}/{retries} — status {resp.status} for {url}")
+        except Exception as e:
+            print(f"Attempt {attempt+1}/{retries} — error fetching {url}: {e}")
+            if attempt < retries - 1:
+                await asyncio.sleep(30)  # Wait 30 seconds before retrying
+    print(f"Failed to fetch {url} after {retries} attempts.")
     return None
 
 def extract_item_links(html_bytes, selector, base_url):
     try:
         soup = BeautifulSoup(html_bytes, "html.parser", from_encoding="utf-8")
+
+        # Try the configured selector first
         items = soup.select(selector)
+
+        # If nothing found, try the shopitemTitle selector (common on /shop.php sites)
+        if not items:
+            items = soup.find_all('a', class_='shopitemTitle')
+            if items:
+                print(f"  Found {len(items)} items using shopitemTitle selector")
+
+        # Also try 'li.entry' for BeVo-style sites
+        if not items:
+            items = soup.find_all('li', class_='entry')
+            if items:
+                print(f"  Found {len(items)} items using entry selector")
+
         links = set()
         for item in items:
             a = item if item.name == "a" else item.find("a")
