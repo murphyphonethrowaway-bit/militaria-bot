@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 
 # ==================== CONFIGURATION ====================
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-CHANNEL_ID = 1510426647239725198
+CHANNEL_ID = 1510653092721590323
 CHECK_INTERVAL = 600  # Check every 10 minutes (in seconds)
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
