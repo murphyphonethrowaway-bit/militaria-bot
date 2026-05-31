@@ -140,6 +140,12 @@ EMAIL_DEALERS = [
         "logo_file": "hiscoll.png",
         "url": "https://hiscoll.com/shop"
     },
+    {
+        "name": "Relics of the Reich",
+        "match": ["relicsofthereich.com", "relics of the reich"],
+        "logo_file": "relicsofthereich.png",
+        "url": "https://www.relicsofthereich.com/home"
+    },
 ]
 
 # ==================== BOT STATE ====================
