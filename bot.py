@@ -494,6 +494,7 @@ async def on_message(message):
         embed.add_field(name="!stats", value="Shows how many alerts each dealer has triggered", inline=False)
         embed.add_field(name="!test", value="Sends a test notification for all dealers", inline=False)
         embed.add_field(name="!promo", value="Sends the server promo message manually", inline=False)
+        embed.add_field(name="!adddealer", value="Add a new dealer: !adddealer \"Name\" url logo_url", inline=False)
         await message.channel.send(embed=embed)
 
     elif cmd == "!status":
@@ -576,6 +577,72 @@ async def on_message(message):
             await send_alert(channel, dealer["name"], dealer["url"], logo_file, test=True)
             await asyncio.sleep(1)
         await message.channel.send("✅ Test complete!")
+
+    elif cmd.startswith("!adddealer"):
+        parts = message.content.strip().split()
+        # Format: !adddealer "Dealer Name" https://url.com https://logo.png
+        # Parse quoted name
+        import shlex
+        try:
+            args = shlex.split(message.content)[1:]  # skip the command
+            if len(args) < 2:
+                await message.channel.send("⚠️ Usage: `!adddealer "Dealer Name" https://dealer-url.com https://logo-image-url.com`")
+            else:
+                dealer_name = args[0]
+                dealer_url = args[1]
+                logo_url = args[2] if len(args) > 2 else None
+
+                # Generate logo filename from dealer name
+                logo_filename = dealer_name.lower().replace(" ", "_").replace("'", "").replace(".", "") + ".png"
+                logo_path = os.path.join(SCRIPT_DIR, "logos", logo_filename)
+
+                # Download logo if URL provided
+                if logo_url:
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(logo_url) as resp:
+                            if resp.status == 200:
+                                with open(logo_path, "wb") as f:
+                                    f.write(await resp.read())
+                                print(f"Logo downloaded to {logo_path}")
+                            else:
+                                await message.channel.send(f"⚠️ Could not download logo from {logo_url} — dealer added without logo.")
+                                logo_filename = None
+
+                # Generate match keywords from dealer name
+                match_keywords = [
+                    dealer_url.replace("https://", "").replace("http://", "").replace("www.", "").split("/")[0],
+                    dealer_name.lower()
+                ]
+
+                # Add to EMAIL_DEALERS list
+                new_dealer = {
+                    "name": dealer_name,
+                    "match": match_keywords,
+                    "logo_file": logo_filename if logo_filename else "",
+                    "url": dealer_url
+                }
+                EMAIL_DEALERS.append(new_dealer)
+
+                embed = discord.Embed(
+                    title="✅ Dealer Added!",
+                    description=f"**{dealer_name}** has been added to the email monitoring list!
+
+[Visit Site]({dealer_url})",
+                    color=discord.Color.green(),
+                    timestamp=datetime.now(timezone.utc)
+                )
+                if logo_filename and os.path.exists(logo_path):
+                    file = discord.File(logo_path, filename="logo.png")
+                    embed.set_thumbnail(url="attachment://logo.png")
+                    await message.channel.send(file=file, embed=embed)
+                else:
+                    await message.channel.send(embed=embed)
+
+                await message.channel.send(f"📧 Remember to subscribe to **{dealer_name}'s** newsletter at {dealer_url} using `relicregistrybot@gmail.com`!")
+
+        except Exception as e:
+            await message.channel.send(f"⚠️ Error adding dealer: {e}
+Usage: `!adddealer "Dealer Name" https://dealer-url.com https://logo-image-url.com`")
 
     elif cmd == "!promo":
         await message.channel.send("📣 Sending promo message...")
