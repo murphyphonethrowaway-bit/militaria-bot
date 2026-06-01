@@ -1,43 +1,40 @@
 import discord
+from discord import app_commands
 import asyncio
 import aiohttp
 import json
 import os
 import imaplib
 import email
+import shlex
+import random
 from email.header import decode_header
 from bs4 import BeautifulSoup
 from datetime import datetime, timezone
-import random
 
-# Rotating user agents to avoid detection
+# ==================== CONFIGURATION ====================
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+CHANNEL_ID = 1510653092721590323
+WAF_ROLE_ID = 1511101033349124318
+CHECK_INTERVAL = 600
+EMAIL_CHECK_INTERVAL = 30
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+GMAIL_USER = "relicregistrybot@gmail.com"
+GMAIL_APP_PASSWORD = "tyvm uvfb jkxv ptvy"
+
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1 Safari/605.1.15",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.864.59 Safari/537.36 Edg/91.0.864.59",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36 OPR/76.0.4017.123",
     "Mozilla/5.0 (Linux; Android 11; Pixel 4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.101 Mobile Safari/537.36",
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1 Mobile/15E148 Safari/604.1",
     "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
     "Mozilla/5.0 (compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm)",
 ]
 
-# ==================== CONFIGURATION ====================
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-CHANNEL_ID = 1510653092721590323
-CHECK_INTERVAL = 600  # Check every 10 minutes (in seconds)
-WAF_ROLE_ID = 1511101033349124318  # WAF Estate role
-EMAIL_CHECK_INTERVAL = 30  # Check email every 30 seconds
-
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-
-# ==================== GMAIL CONFIG ====================
-GMAIL_USER = "relicregistrybot@gmail.com"
-GMAIL_APP_PASSWORD = "tyvm uvfb jkxv ptvy"
-
 # ==================== DEALER CONFIG ====================
-# Web scraped dealers (still working)
 DEALERS = [
     {
         "name": "Weitze Militaria",
@@ -55,190 +52,53 @@ DEALERS = [
     },
 ]
 
-# Email monitored dealers — matched by sender email domain or name
 EMAIL_DEALERS = [
-    {
-        "name": "The Ruptured Duck",
-        "match": ["therupturedduck.com", "ruptured duck"],
-        "logo_file": "ruptured_duck.png",
-        "url": "https://www.therupturedduck.com/collections/recently-added-items"
-    },
-    {
-        "name": "War's End Shop",
-        "match": ["warsendshop.com", "war's end", "wars end"],
-        "logo_file": "warsend.png",
-        "url": "https://www.warsendshop.com/collections/new-items"
-    },
-    {
-        "name": "Lakeside Trader",
-        "match": ["lakesidetrader.com", "lakeside trader"],
-        "logo_file": "lakeside.png",
-        "url": "https://www.lakesidetrader.com/recently-added-items/"
-    },
-    {
-        "name": "Dutch Militaria",
-        "match": ["dutchmilitaria.com", "dutch militaria"],
-        "logo_file": "dutch_militaria.png",
-        "url": "https://dutchmilitaria.com/"
-    },
-    {
-        "name": "Militaria Sales",
-        "match": ["militariasales.com", "militaria sales"],
-        "logo_file": "militaria_sales.png",
-        "url": "https://www.militariasales.com/new-item/"
-    },
-    {
-        "name": "Military Collectibles",
-        "match": ["militarycollectibles.com", "military collectibles"],
-        "logo_file": "military_collectibles.png",
-        "url": "https://militarycollectibles.com/shop?s=n"
-    },
-    {
-        "name": "Military Collectors HQ",
-        "match": ["militarycollectorshq.com", "military collectors hq"],
-        "logo_file": "militarycollectorshq.png",
-        "url": "https://militarycollectorshq.com/store-catalog"
-    },
-    {
-        "name": "Soviet Orders",
-        "match": ["sovietorders.com", "soviet orders"],
-        "logo_file": "Soviet_Orders.png",
-        "url": "https://sovietorders.com/new-in-store/"
-    },
-    {
-        "name": "Empire's Past",
-        "match": ["empirespast.com", "empire's past", "empires past"],
-        "logo_file": "Empire_past.png",
-        "url": "https://empirespast.com/newly-listed/"
-    },
-    {
-        "name": "1944 Militaria",
-        "match": ["1944militaria.com", "1944 militaria"],
-        "logo_file": "1944militaria.png",
-        "url": "https://www.1944militaria.com/New_Original_Items_s/1900.htm"
-    },
-    {
-        "name": "International Military Antiques",
-        "match": ["ima-usa.com", "international military antiques", "ima usa"],
-        "logo_file": "ima.png",
-        "url": "https://www.ima-usa.com/collections/new-arrivals"
-    },
-    {
-        "name": "Wolfgang Historica",
-        "match": ["wolfganghistorica.com", "wolfgang historica"],
-        "logo_file": "wolfgang_historica.png",
-        "url": "https://wolfganghistorica.com/"
-    },
-    {
-        "name": "Enemy Militaria",
-        "match": ["enemymilitaria.com", "enemy militaria"],
-        "logo_file": "Enemy_Militaria.png",
-        "url": "https://enemymilitaria.com/"
-    },
-    {
-        "name": "Hiscoll Military Antiques",
-        "match": ["hiscoll.com", "hiscoll military antiques", "hiscoll"],
-        "logo_file": "hiscoll.png",
-        "url": "https://hiscoll.com/shop"
-    },
-    {
-        "name": "Relics of the Reich",
-        "match": ["relicsofthereich.com", "relics of the reich"],
-        "logo_file": "relicsofthereich.png",
-        "url": "https://www.relicsofthereich.com/home"
-    },
-    {
-        "name": "Epic Artifacts",
-        "match": ["epicartifacts.com", "epic artifacts"],
-        "logo_file": "Epic_artifacts.png",
-        "url": "https://epicartifacts.com/newly-listed/"
-    },
-    {
-        "name": "RG Militaria",
-        "match": ["rg-militaria.com", "rg militaria"],
-        "logo_file": "rgmilitaria.png",
-        "url": "https://www.rg-militaria.com/new-items-nieuwe-items"
-    },
-    {
-        "name": "Military Antiques Stockholm",
-        "match": ["military-antiques-stockholm.com", "military antiques stockholm"],
-        "logo_file": "Military_Antiques_Stockholm.png",
-        "url": "https://www.military-antiques-stockholm.com/shop/"
-    },
-    {
-        "name": "Oorlogsspullen",
-        "match": ["oorlogsspullen.nl", "oorlogsspullen"],
-        "logo_file": "Oorlogspullen.png",
-        "url": "https://oorlogsspullen.nl/product-categorie/new/"
-    },
-    {
-        "name": "Wittmann Antique Militaria",
-        "match": ["wwiidaggers.com", "wittmann antique militaria", "wittmann"],
-        "logo_file": "wam.png",
-        "url": "https://www.wwiidaggers.com/updates.htm"
-    },
-    {
-        "name": "RBNr Militaria",
-        "match": ["rbnr.it", "rbnr militaria", "rbnr"],
-        "logo_file": "RBNR.png",
-        "url": "https://en.rbnr.it/collections/all"
-    },
-    {
-        "name": "Iraqi Militaria",
-        "match": ["iraqimilitaria.com", "iraqi militaria"],
-        "logo_file": "iraqi_militaria.png",
-        "url": "https://www.iraqimilitaria.com/"
-    },
-    {
-        "name": "Danzig Militaria",
-        "match": ["danzigmilitaria.com", "danzig militaria"],
-        "logo_file": "Danzig_Militaria.png",
-        "url": "https://danzigmilitaria.com/shop/"
-    },
-    {
-        "name": "FJM44",
-        "match": ["fjm44.com", "fjm44", "fjm 44"],
-        "logo_file": "fjm44.png",
-        "url": "https://fjm44.com/product-category/militaria/"
-    },
-    {
-        "name": "Kurland",
-        "match": ["kurland-docs.com", "kurland"],
-        "logo_file": "kurland.png",
-        "url": "https://www.kurland-docs.com/shop.php"
-    },
-    {
-        "name": "Queen City Militaria",
-        "match": ["queencitymilitaria.com", "queen city militaria"],
-        "logo_file": "queen_city_militaria.png",
-        "url": "https://www.queencitymilitaria.com/"
-    },
-    {
-        "name": "Combat Relics",
-        "match": ["combat-relics.com", "combat relics"],
-        "logo_file": "Combat_relics.png",
-        "url": "https://www.combat-relics.com/"
-    },
-    {
-        "name": "Tiger Militaria",
-        "match": ["tigermilitaria.com", "tiger militaria"],
-        "logo_file": "TigerMilitaria.png",
-        "url": "https://tigermilitaria.com/shop?showPerPage=24"
-    },
-    {
-        "name": "WAF Estate",
-        "match": ["wehrmacht-awards.com", "waf estate", "e-stand", "estand", "militaria e-stand"],
-        "logo_file": "waf.png",
-        "url": "https://www.wehrmacht-awards.com/forums/forum/the-militaria-e-stand",
-        "waf": True
-    },
+    {"name": "The Ruptured Duck", "match": ["therupturedduck.com", "ruptured duck"], "logo_file": "ruptured_duck.png", "url": "https://www.therupturedduck.com/collections/recently-added-items"},
+    {"name": "War's End Shop", "match": ["warsendshop.com", "war's end", "wars end"], "logo_file": "warsend.png", "url": "https://www.warsendshop.com/collections/new-items"},
+    {"name": "Lakeside Trader", "match": ["lakesidetrader.com", "lakeside trader"], "logo_file": "lakeside.png", "url": "https://www.lakesidetrader.com/recently-added-items/"},
+    {"name": "Dutch Militaria", "match": ["dutchmilitaria.com", "dutch militaria"], "logo_file": "dutch_militaria.png", "url": "https://dutchmilitaria.com/"},
+    {"name": "Militaria Sales", "match": ["militariasales.com", "militaria sales"], "logo_file": "militaria_sales.png", "url": "https://www.militariasales.com/new-item/"},
+    {"name": "Military Collectibles", "match": ["militarycollectibles.com", "military collectibles"], "logo_file": "military_collectibles.png", "url": "https://militarycollectibles.com/shop?s=n"},
+    {"name": "Military Collectors HQ", "match": ["militarycollectorshq.com", "military collectors hq"], "logo_file": "militarycollectorshq.png", "url": "https://militarycollectorshq.com/store-catalog"},
+    {"name": "Soviet Orders", "match": ["sovietorders.com", "soviet orders"], "logo_file": "Soviet_Orders.png", "url": "https://sovietorders.com/new-in-store/"},
+    {"name": "Empire's Past", "match": ["empirespast.com", "empire's past", "empires past"], "logo_file": "Empire_past.png", "url": "https://empirespast.com/newly-listed/"},
+    {"name": "1944 Militaria", "match": ["1944militaria.com", "1944 militaria"], "logo_file": "1944militaria.png", "url": "https://www.1944militaria.com/New_Original_Items_s/1900.htm"},
+    {"name": "International Military Antiques", "match": ["ima-usa.com", "international military antiques", "ima usa"], "logo_file": "ima.png", "url": "https://www.ima-usa.com/collections/new-arrivals"},
+    {"name": "Wolfgang Historica", "match": ["wolfganghistorica.com", "wolfgang historica"], "logo_file": "wolfgang_historica.png", "url": "https://wolfganghistorica.com/"},
+    {"name": "Enemy Militaria", "match": ["enemymilitaria.com", "enemy militaria"], "logo_file": "Enemy_Militaria.png", "url": "https://enemymilitaria.com/"},
+    {"name": "Hiscoll Military Antiques", "match": ["hiscoll.com", "hiscoll military antiques", "hiscoll"], "logo_file": "hiscoll.png", "url": "https://hiscoll.com/shop"},
+    {"name": "Relics of the Reich", "match": ["relicsofthereich.com", "relics of the reich"], "logo_file": "relicsofthereich.png", "url": "https://www.relicsofthereich.com/home"},
+    {"name": "Epic Artifacts", "match": ["epicartifacts.com", "epic artifacts"], "logo_file": "Epic_artifacts.png", "url": "https://epicartifacts.com/newly-listed/"},
+    {"name": "RG Militaria", "match": ["rg-militaria.com", "rg militaria"], "logo_file": "rgmilitaria.png", "url": "https://www.rg-militaria.com/new-items-nieuwe-items"},
+    {"name": "Military Antiques Stockholm", "match": ["military-antiques-stockholm.com", "military antiques stockholm"], "logo_file": "Military_Antiques_Stockholm.png", "url": "https://www.military-antiques-stockholm.com/shop/"},
+    {"name": "Oorlogsspullen", "match": ["oorlogsspullen.nl", "oorlogsspullen"], "logo_file": "Oorlogspullen.png", "url": "https://oorlogsspullen.nl/product-categorie/new/"},
+    {"name": "Wittmann Antique Militaria", "match": ["wwiidaggers.com", "wittmann antique militaria", "wittmann"], "logo_file": "wam.png", "url": "https://www.wwiidaggers.com/updates.htm"},
+    {"name": "RBNr Militaria", "match": ["rbnr.it", "rbnr militaria", "rbnr"], "logo_file": "RBNR.png", "url": "https://en.rbnr.it/collections/all"},
+    {"name": "Iraqi Militaria", "match": ["iraqimilitaria.com", "iraqi militaria"], "logo_file": "iraqi_militaria.png", "url": "https://www.iraqimilitaria.com/"},
+    {"name": "Danzig Militaria", "match": ["danzigmilitaria.com", "danzig militaria"], "logo_file": "Danzig_Militaria.png", "url": "https://danzigmilitaria.com/shop/"},
+    {"name": "FJM44", "match": ["fjm44.com", "fjm44", "fjm 44"], "logo_file": "fjm44.png", "url": "https://fjm44.com/product-category/militaria/"},
+    {"name": "Kurland", "match": ["kurland-docs.com", "kurland"], "logo_file": "kurland.png", "url": "https://www.kurland-docs.com/shop.php"},
+    {"name": "Queen City Militaria", "match": ["queencitymilitaria.com", "queen city militaria"], "logo_file": "queen_city_militaria.png", "url": "https://www.queencitymilitaria.com/"},
+    {"name": "Combat Relics", "match": ["combat-relics.com", "combat relics"], "logo_file": "Combat_relics.png", "url": "https://www.combat-relics.com/"},
+    {"name": "Tiger Militaria", "match": ["tigermilitaria.com", "tiger militaria"], "logo_file": "TigerMilitaria.png", "url": "https://tigermilitaria.com/shop?showPerPage=24"},
+    {"name": "WAF Estate", "match": ["wehrmacht-awards.com", "waf estate", "e-stand", "estand", "militaria e-stand"], "logo_file": "waf.png", "url": "https://www.wehrmacht-awards.com/forums/forum/the-militaria-e-stand", "waf": True},
 ]
 
-# ==================== BOT STATE ====================
+# ==================== BOT SETUP ====================
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
-client = discord.Client(intents=intents)
+
+class MilitariaBot(discord.Client):
+    def __init__(self):
+        super().__init__(intents=intents)
+        self.tree = app_commands.CommandTree(self)
+
+    async def setup_hook(self):
+        await self.tree.sync()
+        print("Slash commands synced!")
+
+client = MilitariaBot()
 
 SEEN_FILE = "seen_items.json"
 STATS_FILE = "stats.json"
@@ -281,45 +141,34 @@ def save_seen_emails(seen):
     with open(SEEN_EMAILS_FILE, "w") as f:
         json.dump(list(seen), f)
 
+def is_mod(member):
+    return member.guild_permissions.administrator or member.guild_permissions.manage_guild
+
 async def fetch_page(session, url, retries=3):
     for attempt in range(retries):
         try:
             headers = {
                 "User-Agent": random.choice(USER_AGENTS),
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.5",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             }
             async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
                 if resp.status == 200:
                     return await resp.read()
-                else:
-                    print(f"Attempt {attempt+1}/{retries} — status {resp.status} for {url}")
+                print(f"Attempt {attempt+1}/{retries} — status {resp.status} for {url}")
         except Exception as e:
-            print(f"Attempt {attempt+1}/{retries} — error fetching {url}: {e}")
+            print(f"Attempt {attempt+1}/{retries} — error: {e}")
             if attempt < retries - 1:
-                await asyncio.sleep(30)  # Wait 30 seconds before retrying
-    print(f"Failed to fetch {url} after {retries} attempts.")
+                await asyncio.sleep(30)
     return None
 
 def extract_item_links(html_bytes, selector, base_url):
     try:
         soup = BeautifulSoup(html_bytes, "html.parser", from_encoding="utf-8")
-
-        # Try the configured selector first
         items = soup.select(selector)
-
-        # If nothing found, try the shopitemTitle selector (common on /shop.php sites)
         if not items:
             items = soup.find_all('a', class_='shopitemTitle')
-            if items:
-                print(f"  Found {len(items)} items using shopitemTitle selector")
-
-        # Also try 'li.entry' for BeVo-style sites
         if not items:
             items = soup.find_all('li', class_='entry')
-            if items:
-                print(f"  Found {len(items)} items using entry selector")
-
         links = set()
         for item in items:
             a = item if item.name == "a" else item.find("a")
@@ -357,7 +206,6 @@ async def send_alert(channel, name, url, logo_file, test=False, waf=False):
     else:
         print(f"Logo not found at {logo_file}")
 
-    # Ping WAF role for WAF alerts
     content_msg = f"<@&{WAF_ROLE_ID}> New WAF Estate listing!" if waf and not test else None
 
     try:
@@ -388,7 +236,6 @@ async def check_dealer(session, dealer, seen, channel):
         return
 
     old_items = set(seen.get(items_key, []))
-
     if not old_items:
         seen[items_key] = list(current_items)
         print(f"[{name}] First check — saved {len(current_items)} items as baseline.")
@@ -396,7 +243,7 @@ async def check_dealer(session, dealer, seen, channel):
 
     new_items = current_items - old_items
     if new_items:
-        print(f"[{name}] {len(new_items)} NEW ITEM(S) DETECTED — sending alert!")
+        print(f"[{name}] {len(new_items)} NEW ITEM(S) DETECTED!")
         seen[items_key] = list(current_items)
         stats = load_stats()
         stats[name] = stats.get(name, 0) + 1
@@ -406,103 +253,75 @@ async def check_dealer(session, dealer, seen, channel):
         print(f"[{name}] No new items ({len(current_items)} items unchanged).")
 
 def check_gmail(seen_emails):
-    """Check Gmail for new dealer emails. Returns list of matched dealers."""
     triggered = []
     try:
         mail = imaplib.IMAP4_SSL("imap.gmail.com")
         mail.login(GMAIL_USER, GMAIL_APP_PASSWORD)
         mail.select("inbox")
-
         _, messages = mail.search(None, "UNSEEN")
         email_ids = messages[0].split()
-
         print(f"[Gmail] Found {len(email_ids)} unread email(s).")
-
         for eid in email_ids:
             _, msg_data = mail.fetch(eid, "(RFC822)")
             msg = email.message_from_bytes(msg_data[0][1])
-
-            # Get message ID to avoid duplicates
             msg_id = msg.get("Message-ID", str(eid))
             if msg_id in seen_emails:
                 continue
-
             seen_emails.add(msg_id)
-
-            # Get sender and subject
             sender = msg.get("From", "").lower()
             subject_raw = msg.get("Subject", "")
             subject = decode_header(subject_raw)[0][0]
             if isinstance(subject, bytes):
                 subject = subject.decode(errors="replace")
             subject = subject.lower()
-
             print(f"[Gmail] New email from: {sender} | Subject: {subject}")
-
-            # Match against dealer list
             for dealer in EMAIL_DEALERS:
                 for keyword in dealer["match"]:
                     if keyword.lower() in sender or keyword.lower() in subject:
                         print(f"[Gmail] Matched dealer: {dealer['name']}")
                         triggered.append(dealer)
                         break
-
         mail.logout()
     except Exception as e:
         print(f"[Gmail] Error checking email: {e}")
-
     return triggered
 
 async def check_all_dealers():
     await client.wait_until_ready()
     channel = client.get_channel(CHANNEL_ID)
-
     if not channel:
-        print("ERROR: Could not find channel. Check your CHANNEL_ID.")
+        print("ERROR: Could not find channel.")
         return
-
     print(f"Bot ready! Monitoring {len(DEALERS)} web dealers + {len(EMAIL_DEALERS)} email dealers. Checking every {CHECK_INTERVAL//60} minutes.")
-
     while not client.is_closed():
         if bot_state["paused"] and not bot_state["force_rescan"]:
             await asyncio.sleep(30)
             continue
-
         bot_state["force_rescan"] = False
         print(f"\n--- Checking dealers at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---")
         bot_state["last_check"] = datetime.now(timezone.utc)
         seen = load_seen()
-
-        # Check web dealers
         async with aiohttp.ClientSession() as session:
             for dealer in DEALERS:
                 await check_dealer(session, dealer, seen, channel)
                 await asyncio.sleep(2)
-
         save_seen(seen)
-
         print(f"--- Done. Next check in {CHECK_INTERVAL//60} minutes. ---")
         await asyncio.sleep(CHECK_INTERVAL)
 
 async def check_email_dealers():
     await client.wait_until_ready()
     channel = client.get_channel(CHANNEL_ID)
-
     if not channel:
-        print("ERROR: Could not find channel for email checking.")
         return
-
     print(f"Email checker ready! Checking every {EMAIL_CHECK_INTERVAL} seconds.")
-
     while not client.is_closed():
         if bot_state["paused"]:
             await asyncio.sleep(30)
             continue
-
         seen_emails = load_seen_emails()
         triggered = await asyncio.get_event_loop().run_in_executor(None, check_gmail, seen_emails)
         save_seen_emails(seen_emails)
-
         for dealer in triggered:
             logo_file = os.path.join(SCRIPT_DIR, "logos", dealer["logo_file"])
             stats = load_stats()
@@ -510,7 +329,6 @@ async def check_email_dealers():
             save_stats(stats)
             is_waf = dealer.get("waf", False)
             await send_alert(channel, dealer["name"], dealer["url"], logo_file, waf=is_waf)
-
         await asyncio.sleep(EMAIL_CHECK_INTERVAL)
 
 async def send_promo():
@@ -518,35 +336,23 @@ async def send_promo():
     channel = client.get_channel(CHANNEL_ID)
     if not channel:
         return
-
-    PROMO_INTERVAL = 48 * 3600
-
     while not client.is_closed():
-        await asyncio.sleep(PROMO_INTERVAL)
+        await asyncio.sleep(48 * 3600)
         if bot_state["promo_paused"]:
             print("Promo is paused — skipping.")
             continue
         banner_file = os.path.join(SCRIPT_DIR, "logos", "Server_Banner.png")
-
         embed = discord.Embed(
             title="🎖️ The Relic Registry",
-            description=(
-                "Looking for a great militaria community?\n\n"
-                "**The Relic Registry** is a server for collectors, by collectors.\n\n"
-                "📬 Get new item alerts from top dealers\n"
-                "🏛️ Connect with fellow collectors\n\n"
-                "[**Click here to join →**](http://discord.gg/therelicregistry)"
-            ),
+            description="Looking for a great militaria community?\n\n**The Relic Registry** is a server for collectors, by collectors.\n\n📬 Get new item alerts from top dealers\n🏛️ Connect with fellow collectors\n\n[**Click here to join →**](http://discord.gg/therelicregistry)",
             color=discord.Color.dark_red(),
             timestamp=datetime.now(timezone.utc)
         )
         embed.set_footer(text="The Relic Registry — Dealer Update")
-
         file = None
         if os.path.exists(banner_file):
             file = discord.File(banner_file, filename="banner.png")
             embed.set_image(url="attachment://banner.png")
-
         try:
             if file:
                 await channel.send(file=file, embed=embed)
@@ -554,295 +360,251 @@ async def send_promo():
                 await channel.send(embed=embed)
             print("Promo message sent!")
         except Exception as e:
-            print(f"Failed to send promo message: {e}")
+            print(f"Failed to send promo: {e}")
+
+# ==================== SLASH COMMANDS ====================
+
+@client.tree.command(name="help", description="Shows all available bot commands")
+async def help_cmd(interaction: discord.Interaction):
+    embed = discord.Embed(title="🎖️ The Relic Registry — Dealer Update Bot Commands", color=discord.Color.dark_gold())
+    embed.add_field(name="/help", value="Shows this help message", inline=False)
+    embed.add_field(name="/dealers", value="Lists all monitored dealers with links", inline=False)
+    embed.add_field(name="/status", value="Shows which dealers are reachable", inline=False)
+    embed.add_field(name="/lastcheck", value="Shows when the bot last checked dealers", inline=False)
+    embed.add_field(name="/joinwaf", value="Subscribe to WAF Estate alerts", inline=False)
+    embed.add_field(name="/leavewaf", value="Unsubscribe from WAF Estate alerts", inline=False)
+    embed.add_field(name="/myroles", value="Shows your current alert subscriptions", inline=False)
+    embed.add_field(name="/rescan 🔒", value="Forces an immediate check of all dealers", inline=False)
+    embed.add_field(name="/pause 🔒", value="Pauses automatic dealer checking", inline=False)
+    embed.add_field(name="/resume 🔒", value="Resumes automatic dealer checking", inline=False)
+    embed.add_field(name="/stats 🔒", value="Shows alert counts per dealer", inline=False)
+    embed.add_field(name="/test 🔒", value="Sends test notifications for all dealers", inline=False)
+    embed.add_field(name="/promo 🔒", value="Sends the server promo manually", inline=False)
+    embed.add_field(name="/pausepromo 🔒", value="Pauses the 48 hour auto-promo", inline=False)
+    embed.add_field(name="/resumepromo 🔒", value="Resumes the auto-promo", inline=False)
+    embed.add_field(name="/adddealer 🔒", value="Add a new dealer", inline=False)
+    embed.set_footer(text="🔒 = Mod only")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@client.tree.command(name="dealers", description="Lists all monitored dealers")
+async def dealers_cmd(interaction: discord.Interaction):
+    embed = discord.Embed(title="🏪 Monitored Dealers", description="All dealers currently being monitored:", color=discord.Color.dark_gold())
+    for dealer in DEALERS:
+        embed.add_field(name=f"🌐 {dealer['name']}", value=f"[View New Items]({dealer['url']})", inline=True)
+    for dealer in EMAIL_DEALERS:
+        embed.add_field(name=f"📧 {dealer['name']}", value=f"[Visit Site]({dealer['url']})", inline=True)
+    embed.set_footer(text="The Relic Registry — Dealer Update")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@client.tree.command(name="status", description="Check which dealer websites are reachable")
+async def status_cmd(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    embed = discord.Embed(title="📡 Dealer Status", color=discord.Color.dark_gold(), timestamp=datetime.now(timezone.utc))
+    async with aiohttp.ClientSession() as session:
+        for dealer in DEALERS:
+            html = await fetch_page(session, dealer["url"])
+            status = "✅ Online" if html else "❌ Unreachable"
+            embed.add_field(name=dealer["name"], value=status, inline=True)
+            await asyncio.sleep(1)
+    for dealer in EMAIL_DEALERS:
+        embed.add_field(name=dealer["name"], value="📧 Via Email", inline=True)
+    embed.set_footer(text="The Relic Registry — Dealer Update")
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+@client.tree.command(name="lastcheck", description="Shows when the bot last checked dealers")
+async def lastcheck_cmd(interaction: discord.Interaction):
+    if bot_state["last_check"]:
+        ts = int(bot_state["last_check"].timestamp())
+        await interaction.response.send_message(f"🕐 Last check was <t:{ts}:R> at <t:{ts}:T>", ephemeral=True)
+    else:
+        await interaction.response.send_message("⚠️ No check has run yet since the bot started.", ephemeral=True)
+
+@client.tree.command(name="joinwaf", description="Subscribe to WAF Estate alerts")
+async def joinwaf_cmd(interaction: discord.Interaction):
+    role = interaction.guild.get_role(WAF_ROLE_ID)
+    if role:
+        if role in interaction.user.roles:
+            await interaction.response.send_message("⚠️ You already have the WAF Estate role!", ephemeral=True)
+        else:
+            await interaction.user.add_roles(role)
+            await interaction.response.send_message("✅ You'll now receive WAF Estate alerts!", ephemeral=True)
+    else:
+        await interaction.response.send_message("⚠️ WAF Estate role not found. Please contact an admin.", ephemeral=True)
+
+@client.tree.command(name="leavewaf", description="Unsubscribe from WAF Estate alerts")
+async def leavewaf_cmd(interaction: discord.Interaction):
+    role = interaction.guild.get_role(WAF_ROLE_ID)
+    if role:
+        if role not in interaction.user.roles:
+            await interaction.response.send_message("⚠️ You don't have the WAF Estate role.", ephemeral=True)
+        else:
+            await interaction.user.remove_roles(role)
+            await interaction.response.send_message("✅ You've been removed from WAF Estate alerts.", ephemeral=True)
+    else:
+        await interaction.response.send_message("⚠️ WAF Estate role not found. Please contact an admin.", ephemeral=True)
+
+@client.tree.command(name="myroles", description="Shows your current alert subscriptions")
+async def myroles_cmd(interaction: discord.Interaction):
+    waf_role = interaction.guild.get_role(WAF_ROLE_ID)
+    has_waf = waf_role in interaction.user.roles if waf_role else False
+    embed = discord.Embed(title="🎖️ Your Alert Roles", color=discord.Color.dark_gold(), timestamp=datetime.now(timezone.utc))
+    embed.add_field(name="WAF Estate Alerts", value="✅ Subscribed" if has_waf else "❌ Not subscribed — use `/joinwaf` to subscribe", inline=False)
+    embed.set_footer(text="The Relic Registry — Dealer Update")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@client.tree.command(name="rescan", description="🔒 Force an immediate check of all dealers")
+async def rescan_cmd(interaction: discord.Interaction):
+    if not is_mod(interaction.user):
+        await interaction.response.send_message("🚫 You need Moderator permissions to use this command.", ephemeral=True)
+        return
+    bot_state["force_rescan"] = True
+    await interaction.response.send_message("🔄 Forcing an immediate rescan of all dealers...", ephemeral=True)
+
+@client.tree.command(name="pause", description="🔒 Pause automatic dealer checking")
+async def pause_cmd(interaction: discord.Interaction):
+    if not is_mod(interaction.user):
+        await interaction.response.send_message("🚫 You need Moderator permissions to use this command.", ephemeral=True)
+        return
+    if bot_state["paused"]:
+        await interaction.response.send_message("⚠️ Bot is already paused. Use `/resume` to turn it back on.", ephemeral=True)
+    else:
+        bot_state["paused"] = True
+        await interaction.response.send_message("⏸️ Bot paused — no more automatic checks until you use `/resume`.", ephemeral=True)
+
+@client.tree.command(name="resume", description="🔒 Resume automatic dealer checking")
+async def resume_cmd(interaction: discord.Interaction):
+    if not is_mod(interaction.user):
+        await interaction.response.send_message("🚫 You need Moderator permissions to use this command.", ephemeral=True)
+        return
+    if not bot_state["paused"]:
+        await interaction.response.send_message("⚠️ Bot is already running.", ephemeral=True)
+    else:
+        bot_state["paused"] = False
+        await interaction.response.send_message("▶️ Bot resumed — automatic checks are back on!", ephemeral=True)
+
+@client.tree.command(name="stats", description="🔒 Shows alert counts per dealer")
+async def stats_cmd(interaction: discord.Interaction):
+    if not is_mod(interaction.user):
+        await interaction.response.send_message("🚫 You need Moderator permissions to use this command.", ephemeral=True)
+        return
+    stats = load_stats()
+    embed = discord.Embed(title="📊 Alert Statistics", description="Number of times each dealer has triggered an alert:", color=discord.Color.dark_gold(), timestamp=datetime.now(timezone.utc))
+    all_dealers = DEALERS + EMAIL_DEALERS
+    for dealer in all_dealers:
+        count = stats.get(dealer["name"], 0)
+        embed.add_field(name=dealer["name"], value=f"🔔 {count} alert(s)", inline=True)
+    embed.set_footer(text="The Relic Registry — Dealer Update")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@client.tree.command(name="test", description="🔒 Send test notifications for all dealers")
+async def test_cmd(interaction: discord.Interaction):
+    if not is_mod(interaction.user):
+        await interaction.response.send_message("🚫 You need Moderator permissions to use this command.", ephemeral=True)
+        return
+    await interaction.response.send_message("🧪 Running test — sending sample notifications...", ephemeral=True)
+    channel = client.get_channel(CHANNEL_ID)
+    all_dealers = DEALERS + EMAIL_DEALERS
+    for dealer in all_dealers:
+        logo_file = os.path.join(SCRIPT_DIR, "logos", dealer["logo_file"])
+        await send_alert(channel, dealer["name"], dealer["url"], logo_file, test=True)
+        await asyncio.sleep(1)
+    await interaction.followup.send("✅ Test complete!", ephemeral=True)
+
+@client.tree.command(name="promo", description="🔒 Send the server promo message manually")
+async def promo_cmd(interaction: discord.Interaction):
+    if not is_mod(interaction.user):
+        await interaction.response.send_message("🚫 You need Moderator permissions to use this command.", ephemeral=True)
+        return
+    channel = client.get_channel(CHANNEL_ID)
+    banner_file = os.path.join(SCRIPT_DIR, "logos", "Server_Banner.png")
+    embed = discord.Embed(
+        title="🎖️ The Relic Registry",
+        description="Looking for a great militaria community?\n\n**The Relic Registry** is a server for collectors, by collectors.\n\n📬 Get new item alerts from top dealers\n🏛️ Connect with fellow collectors\n\n[**Click here to join →**](http://discord.gg/therelicregistry)",
+        color=discord.Color.dark_red(),
+        timestamp=datetime.now(timezone.utc)
+    )
+    embed.set_footer(text="The Relic Registry — Dealer Update")
+    file = None
+    if os.path.exists(banner_file):
+        file = discord.File(banner_file, filename="banner.png")
+        embed.set_image(url="attachment://banner.png")
+    if file:
+        await channel.send(file=file, embed=embed)
+    else:
+        await channel.send(embed=embed)
+    await interaction.response.send_message("✅ Promo sent!", ephemeral=True)
+
+@client.tree.command(name="pausepromo", description="🔒 Pause the automatic 48 hour promo message")
+async def pausepromo_cmd(interaction: discord.Interaction):
+    if not is_mod(interaction.user):
+        await interaction.response.send_message("🚫 You need Moderator permissions to use this command.", ephemeral=True)
+        return
+    if bot_state["promo_paused"]:
+        await interaction.response.send_message("⚠️ Promo messages are already paused.", ephemeral=True)
+    else:
+        bot_state["promo_paused"] = True
+        await interaction.response.send_message("⏸️ Promo messages paused.", ephemeral=True)
+
+@client.tree.command(name="resumepromo", description="🔒 Resume the automatic 48 hour promo message")
+async def resumepromo_cmd(interaction: discord.Interaction):
+    if not is_mod(interaction.user):
+        await interaction.response.send_message("🚫 You need Moderator permissions to use this command.", ephemeral=True)
+        return
+    if not bot_state["promo_paused"]:
+        await interaction.response.send_message("⚠️ Promo messages are already running.", ephemeral=True)
+    else:
+        bot_state["promo_paused"] = False
+        await interaction.response.send_message("▶️ Promo messages resumed!", ephemeral=True)
+
+@client.tree.command(name="adddealer", description="🔒 Add a new dealer to monitor")
+@app_commands.describe(name="Dealer name", url="Dealer website URL", logo_url="Direct URL to dealer logo image")
+async def adddealer_cmd(interaction: discord.Interaction, name: str, url: str, logo_url: str = None):
+    if not is_mod(interaction.user):
+        await interaction.response.send_message("🚫 You need Moderator permissions to use this command.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    logo_filename = name.lower().replace(" ", "_").replace("'", "").replace(".", "") + ".png"
+    logo_path = os.path.join(SCRIPT_DIR, "logos", logo_filename)
+
+    if logo_url:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(logo_url) as resp:
+                if resp.status == 200:
+                    with open(logo_path, "wb") as f:
+                        f.write(await resp.read())
+                else:
+                    logo_filename = None
+
+    match_keywords = [
+        url.replace("https://", "").replace("http://", "").replace("www.", "").split("/")[0],
+        name.lower()
+    ]
+
+    new_dealer = {"name": name, "match": match_keywords, "logo_file": logo_filename if logo_filename else "", "url": url}
+    EMAIL_DEALERS.append(new_dealer)
+
+    embed = discord.Embed(
+        title="✅ Dealer Added!",
+        description=f"**{name}** has been added to the email monitoring list!\n\n[Visit Site]({url})",
+        color=discord.Color.green(),
+        timestamp=datetime.now(timezone.utc)
+    )
+    if logo_filename and os.path.exists(logo_path):
+        file = discord.File(logo_path, filename="logo.png")
+        embed.set_thumbnail(url="attachment://logo.png")
+        await interaction.followup.send(file=file, embed=embed, ephemeral=True)
+    else:
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+# ==================== EVENTS ====================
 
 @client.event
 async def on_ready():
     print(f"Logged in as {client.user}")
     print(f"SCRIPT_DIR: {SCRIPT_DIR}")
     logos_path = os.path.join(SCRIPT_DIR, "logos")
-    print(f"Logos folder: {logos_path}")
     if os.path.exists(logos_path):
         print(f"Logos found: {os.listdir(logos_path)}")
-    else:
-        print("ERROR: Logos folder not found!")
-
-def is_mod(member):
-    """Check if member has administrator or manage guild permissions."""
-    return member.guild_permissions.administrator or member.guild_permissions.manage_guild
-
-@client.event
-async def on_message(message):
-    if message.author == client.user:
-        return
-
-    cmd = message.content.lower().strip()
-
-    if cmd == "/help":
-        embed = discord.Embed(
-            title="🎖️ The Relic Registry — Dealer Update Bot Commands",
-            color=discord.Color.dark_gold()
-        )
-        embed.add_field(name="/help", value="Shows this help message", inline=False)
-        embed.add_field(name="/status", value="Shows which dealers are reachable", inline=False)
-        embed.add_field(name="/dealers", value="Lists all monitored dealers with links", inline=False)
-        embed.add_field(name="/lastcheck", value="Shows when the bot last checked dealers", inline=False)
-        embed.add_field(name="/rescan", value="Forces an immediate check of all dealers", inline=False)
-        embed.add_field(name="/pause", value="Pauses automatic dealer checking", inline=False)
-        embed.add_field(name="/resume", value="Resumes automatic dealer checking", inline=False)
-        embed.add_field(name="/stats", value="Shows how many alerts each dealer has triggered", inline=False)
-        embed.add_field(name="/test", value="Sends a test notification for all dealers", inline=False)
-        embed.add_field(name="/promo", value="Sends the server promo message manually", inline=False)
-        embed.add_field(name="/pausepromo", value="Pauses the automatic 48 hour promo message", inline=False)
-        embed.add_field(name="/resumepromo", value="Resumes the automatic 48 hour promo message", inline=False)
-        embed.add_field(name="/adddealer", value="Add a new dealer: !adddealer \"Name\" url logo_url", inline=False)
-        embed.add_field(name="/joinwaf", value="Subscribe to WAF Estate alerts", inline=False)
-        embed.add_field(name="/leavewaf", value="Unsubscribe from WAF Estate alerts", inline=False)
-        embed.add_field(name="/myroles", value="Shows your current alert subscriptions", inline=False)
-        await message.channel.send(embed=embed)
-
-    elif cmd == "/status":
-        await message.channel.send("🔍 Checking all dealer websites, please wait...")
-        embed = discord.Embed(
-            title="📡 Dealer Status",
-            color=discord.Color.dark_gold(),
-            timestamp=datetime.now(timezone.utc)
-        )
-        async with aiohttp.ClientSession() as session:
-            for dealer in DEALERS:
-                html = await fetch_page(session, dealer["url"])
-                status = "✅ Online" if html else "❌ Unreachable"
-                embed.add_field(name=dealer["name"], value=status, inline=True)
-                await asyncio.sleep(1)
-        for dealer in EMAIL_DEALERS:
-            embed.add_field(name=dealer["name"], value="📧 Via Email", inline=True)
-        embed.set_footer(text="The Relic Registry — Dealer Update")
-        await message.channel.send(embed=embed)
-
-    elif cmd == "/dealers":
-        embed = discord.Embed(
-            title="🏪 Monitored Dealers",
-            description="Here are all the dealers currently being monitored:",
-            color=discord.Color.dark_gold()
-        )
-        for dealer in DEALERS:
-            embed.add_field(name=f"🌐 {dealer['name']}", value=f"[View New Items]({dealer['url']})", inline=True)
-        for dealer in EMAIL_DEALERS:
-            embed.add_field(name=f"📧 {dealer['name']}", value=f"[Visit Site]({dealer['url']})", inline=True)
-        embed.set_footer(text="The Relic Registry — Dealer Update")
-        await message.channel.send(embed=embed)
-
-    elif cmd == "/lastcheck":
-        if bot_state["last_check"]:
-            ts = int(bot_state["last_check"].timestamp())
-            await message.channel.send(f"🕐 Last check was <t:{ts}:R> at <t:{ts}:T>")
-        else:
-            await message.channel.send("⚠️ No check has run yet since the bot started.")
-
-    elif cmd == "/rescan":
-        if not is_mod(message.author):
-            await message.channel.send(f"🚫 {message.author.mention} You need Moderator permissions to use `/rescan`.", delete_after=5)
-            return
-        await message.channel.send("🔄 Forcing an immediate rescan of all dealers...")
-        bot_state["force_rescan"] = True
-
-    elif cmd == "/pause":
-        if not is_mod(message.author):
-            await message.channel.send(f"🚫 {message.author.mention} You need Moderator permissions to use `/pause`.", delete_after=5)
-            return
-        if bot_state["paused"]:
-            await message.channel.send("⚠️ Bot is already paused. Use `/resume` to turn it back on.")
-        else:
-            bot_state["paused"] = True
-            await message.channel.send("⏸️ Bot paused — no more automatic checks until you use `!resume`.")
-
-    elif cmd == "/resume":
-        if not is_mod(message.author):
-            await message.channel.send(f"🚫 {message.author.mention} You need Moderator permissions to use `/resume`.", delete_after=5)
-            return
-        if not bot_state["paused"]:
-            await message.channel.send("⚠️ Bot is already running. Use `/pause` to pause it.")
-        else:
-            bot_state["paused"] = False
-            await message.channel.send("▶️ Bot resumed — automatic checks are back on!")
-
-    elif cmd == "/stats":
-        if not is_mod(message.author):
-            await message.channel.send(f"🚫 {message.author.mention} You need Moderator permissions to use `/stats`.", delete_after=5)
-            return
-        stats = load_stats()
-        embed = discord.Embed(
-            title="📊 Alert Statistics",
-            description="Number of times each dealer has triggered a new item alert:",
-            color=discord.Color.dark_gold(),
-            timestamp=datetime.now(timezone.utc)
-        )
-        all_dealers = DEALERS + EMAIL_DEALERS
-        for dealer in all_dealers:
-            count = stats.get(dealer["name"], 0)
-            embed.add_field(name=dealer["name"], value=f"🔔 {count} alert(s)", inline=True)
-        embed.set_footer(text="The Relic Registry — Dealer Update")
-        await message.channel.send(embed=embed)
-
-    elif cmd == "/test":
-        if not is_mod(message.author):
-            await message.channel.send(f"🚫 {message.author.mention} You need Moderator permissions to use `/test`.", delete_after=5)
-            return
-        await message.channel.send("🧪 Running test — sending a sample notification for each dealer...")
-        channel = client.get_channel(CHANNEL_ID)
-        all_dealers = DEALERS + EMAIL_DEALERS
-        for dealer in all_dealers:
-            logo_file = os.path.join(SCRIPT_DIR, "logos", dealer["logo_file"])
-            await send_alert(channel, dealer["name"], dealer["url"], logo_file, test=True)
-            await asyncio.sleep(1)
-        await message.channel.send("✅ Test complete!")
-
-    elif cmd.startswith("/adddealer"):
-        if not is_mod(message.author):
-            await message.channel.send(f"🚫 {message.author.mention} You need Moderator permissions to use `/adddealer`.", delete_after=5)
-            return
-        parts = message.content.strip().split()
-        # Format: !adddealer "Dealer Name" https://url.com https://logo.png
-        # Parse quoted name
-        import shlex
-        try:
-            args = shlex.split(message.content)[1:]  # skip the command
-            if len(args) < 2:
-                await message.channel.send('⚠️ Usage: `/adddealer "Dealer Name" https://dealer-url.com https://logo-image-url.com`')
-            else:
-                dealer_name = args[0]
-                dealer_url = args[1]
-                logo_url = args[2] if len(args) > 2 else None
-
-                # Generate logo filename from dealer name
-                logo_filename = dealer_name.lower().replace(" ", "_").replace("'", "").replace(".", "") + ".png"
-                logo_path = os.path.join(SCRIPT_DIR, "logos", logo_filename)
-
-                # Download logo if URL provided
-                if logo_url:
-                    async with aiohttp.ClientSession() as session:
-                        async with session.get(logo_url) as resp:
-                            if resp.status == 200:
-                                with open(logo_path, "wb") as f:
-                                    f.write(await resp.read())
-                                print(f"Logo downloaded to {logo_path}")
-                            else:
-                                await message.channel.send(f"⚠️ Could not download logo from {logo_url} — dealer added without logo.")
-                                logo_filename = None
-
-                # Generate match keywords from dealer name
-                match_keywords = [
-                    dealer_url.replace("https://", "").replace("http://", "").replace("www.", "").split("/")[0],
-                    dealer_name.lower()
-                ]
-
-                # Add to EMAIL_DEALERS list
-                new_dealer = {
-                    "name": dealer_name,
-                    "match": match_keywords,
-                    "logo_file": logo_filename if logo_filename else "",
-                    "url": dealer_url
-                }
-                EMAIL_DEALERS.append(new_dealer)
-
-                embed = discord.Embed(
-                    title="Dealer Added!",
-                    description=f"**{dealer_name}** has been added to the email monitoring list!\n\n[Visit Site]({dealer_url})",
-                    color=discord.Color.green(),
-                    timestamp=datetime.now(timezone.utc)
-                )
-                if logo_filename and os.path.exists(logo_path):
-                    file = discord.File(logo_path, filename="logo.png")
-                    embed.set_thumbnail(url="attachment://logo.png")
-                    await message.channel.send(file=file, embed=embed)
-                else:
-                    await message.channel.send(embed=embed)
-
-                await message.channel.send(f"📧 Remember to subscribe to **{dealer_name}'s** newsletter at {dealer_url} using `relicregistrybot@gmail.com`!")
-
-        except Exception as e:
-            await message.channel.send(f"⚠️ Error adding dealer: {e}\nUsage: `/adddealer \"Dealer Name\" https://dealer-url.com https://logo-image-url.com`")
-
-    elif cmd == "/joinwaf":
-        role = message.guild.get_role(WAF_ROLE_ID)
-        if role:
-            if role in message.author.roles:
-                await message.channel.send(f"⚠️ {message.author.mention} you already have the WAF Estate role!", delete_after=5)
-            else:
-                await message.author.add_roles(role)
-                await message.channel.send(f"✅ {message.author.mention} you'll now receive WAF Estate alerts!", delete_after=5)
-        else:
-            await message.channel.send("⚠️ WAF Estate role not found. Please contact an admin.", delete_after=5)
-
-    elif cmd == "/leavewaf":
-        role = message.guild.get_role(WAF_ROLE_ID)
-        if role:
-            if role not in message.author.roles:
-                await message.channel.send(f"⚠️ {message.author.mention} you don't have the WAF Estate role.", delete_after=5)
-            else:
-                await message.author.remove_roles(role)
-                await message.channel.send(f"✅ {message.author.mention} you've been removed from WAF Estate alerts.", delete_after=5)
-        else:
-            await message.channel.send("⚠️ WAF Estate role not found. Please contact an admin.", delete_after=5)
-
-    elif cmd == "/myroles":
-        waf_role = message.guild.get_role(WAF_ROLE_ID)
-        has_waf = waf_role in message.author.roles if waf_role else False
-        embed = discord.Embed(
-            title="🎖️ Your Alert Roles",
-            color=discord.Color.dark_gold(),
-            timestamp=datetime.now(timezone.utc)
-        )
-        embed.add_field(name="WAF Estate Alerts", value="✅ Subscribed" if has_waf else "❌ Not subscribed — type `/joinwaf` to subscribe", inline=False)
-        embed.set_footer(text="The Relic Registry — Dealer Update")
-        await message.channel.send(embed=embed, delete_after=15)
-
-    elif cmd == "/pausepromo":
-        if not is_mod(message.author):
-            await message.channel.send(f"🚫 {message.author.mention} You need Moderator permissions to use `/pausepromo`.", delete_after=5)
-            return
-        if bot_state["promo_paused"]:
-            await message.channel.send("⚠️ Promo messages are already paused. Use `!resumepromo` to turn them back on.")
-        else:
-            bot_state["promo_paused"] = True
-            await message.channel.send("⏸️ Promo messages paused — the 48 hour auto-promo will not send until you use `!resumepromo`.")
-
-    elif cmd == "/resumepromo":
-        if not is_mod(message.author):
-            await message.channel.send(f"🚫 {message.author.mention} You need Moderator permissions to use `/resumepromo`.", delete_after=5)
-            return
-        if not bot_state["promo_paused"]:
-            await message.channel.send("⚠️ Promo messages are already running.")
-        else:
-            bot_state["promo_paused"] = False
-            await message.channel.send("▶️ Promo messages resumed — auto-promo is back on!")
-
-    elif cmd == "/promo":
-        await message.channel.send("📣 Sending promo message...")
-        channel = client.get_channel(CHANNEL_ID)
-        banner_file = os.path.join(SCRIPT_DIR, "logos", "Server_Banner.png")
-        embed = discord.Embed(
-            title="🎖️ The Relic Registry",
-            description=(
-                "Looking for a great militaria community?\n\n"
-                "**The Relic Registry** is a server for collectors, by collectors.\n\n"
-                "📬 Get new item alerts from top dealers\n"
-                "🏛️ Connect with fellow collectors\n\n"
-                "[**Click here to join →**](http://discord.gg/therelicregistry)"
-            ),
-            color=discord.Color.dark_red(),
-            timestamp=datetime.now(timezone.utc)
-        )
-        embed.set_footer(text="The Relic Registry — Dealer Update")
-        file = None
-        if os.path.exists(banner_file):
-            file = discord.File(banner_file, filename="banner.png")
-            embed.set_image(url="attachment://banner.png")
-        if file:
-            await channel.send(file=file, embed=embed)
-        else:
-            await channel.send(embed=embed)
-        await message.channel.send("✅ Promo sent!")
 
 async def main():
     async with client:
