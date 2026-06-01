@@ -152,6 +152,18 @@ EMAIL_DEALERS = [
         "logo_file": "Epic_artifacts.png",
         "url": "https://epicartifacts.com/newly-listed/"
     },
+    {
+        "name": "RG Militaria",
+        "match": ["rg-militaria.com", "rg militaria"],
+        "logo_file": "rgmilitaria.png",
+        "url": "https://www.rg-militaria.com/new-items-nieuwe-items"
+    },
+    {
+        "name": "Military Antiques Stockholm",
+        "match": ["military-antiques-stockholm.com", "military antiques stockholm"],
+        "logo_file": "Military_Antiques_Stockholm.png",
+        "url": "https://www.military-antiques-stockholm.com/shop/"
+    },
 ]
 
 # ==================== BOT STATE ====================
