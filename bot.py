@@ -586,7 +586,7 @@ async def on_message(message):
         try:
             args = shlex.split(message.content)[1:]  # skip the command
             if len(args) < 2:
-                await message.channel.send("⚠️ Usage: `!adddealer "Dealer Name" https://dealer-url.com https://logo-image-url.com`")
+                await message.channel.send('⚠️ Usage: `!adddealer "Dealer Name" https://dealer-url.com https://logo-image-url.com`')
             else:
                 dealer_name = args[0]
                 dealer_url = args[1]
