@@ -182,6 +182,12 @@ EMAIL_DEALERS = [
         "logo_file": "RBNR.png",
         "url": "https://en.rbnr.it/collections/all"
     },
+    {
+        "name": "Iraqi Militaria",
+        "match": ["iraqimilitaria.com", "iraqi militaria"],
+        "logo_file": "iraqi_militaria.png",
+        "url": "https://www.iraqimilitaria.com/"
+    },
 ]
 
 # ==================== BOT STATE ====================
