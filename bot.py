@@ -27,7 +27,7 @@ USER_AGENTS = [
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHANNEL_ID = 1510653092721590323
 CHECK_INTERVAL = 600  # Check every 10 minutes (in seconds)
-EMAIL_CHECK_INTERVAL = 120  # Check email every 2 minutes (in seconds)
+EMAIL_CHECK_INTERVAL = 30  # Check email every 30 seconds
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
