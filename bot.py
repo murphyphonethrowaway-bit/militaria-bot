@@ -131,7 +131,7 @@ EMAIL_DEALERS = [
     {
         "name": "Enemy Militaria",
         "match": ["enemymilitaria.com", "enemy militaria"],
-        "logo_file": "enemy_militaria.png",
+        "logo_file": "Enemy_Militaria.png",
         "url": "https://enemymilitaria.com/"
     },
     {
@@ -167,7 +167,7 @@ EMAIL_DEALERS = [
     {
         "name": "Oorlogsspullen",
         "match": ["oorlogsspullen.nl", "oorlogsspullen"],
-        "logo_file": "oorlogsspullen.png",
+        "logo_file": "Oorlogspullen.png",
         "url": "https://oorlogsspullen.nl/product-categorie/new/"
     },
     {
@@ -211,6 +211,18 @@ EMAIL_DEALERS = [
         "match": ["queencitymilitaria.com", "queen city militaria"],
         "logo_file": "queen_city_militaria.png",
         "url": "https://www.queencitymilitaria.com/"
+    },
+    {
+        "name": "Combat Relics",
+        "match": ["combat-relics.com", "combat relics"],
+        "logo_file": "Combat_relics.png",
+        "url": "https://www.combat-relics.com/"
+    },
+    {
+        "name": "Tiger Militaria",
+        "match": ["tigermilitaria.com", "tiger militaria"],
+        "logo_file": "TigerMilitaria.png",
+        "url": "https://tigermilitaria.com/shop?showPerPage=24"
     },
 ]
 
