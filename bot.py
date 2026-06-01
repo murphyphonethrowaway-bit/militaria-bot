@@ -146,6 +146,12 @@ EMAIL_DEALERS = [
         "logo_file": "relicsofthereich.png",
         "url": "https://www.relicsofthereich.com/home"
     },
+    {
+        "name": "Epic Artifacts",
+        "match": ["epicartifacts.com", "epic artifacts"],
+        "logo_file": "Epic_artifacts.png",
+        "url": "https://epicartifacts.com/newly-listed/"
+    },
 ]
 
 # ==================== BOT STATE ====================
