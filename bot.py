@@ -164,6 +164,24 @@ EMAIL_DEALERS = [
         "logo_file": "Military_Antiques_Stockholm.png",
         "url": "https://www.military-antiques-stockholm.com/shop/"
     },
+    {
+        "name": "Oorlogsspullen",
+        "match": ["oorlogsspullen.nl", "oorlogsspullen"],
+        "logo_file": "oorlogsspullen.png",
+        "url": "https://oorlogsspullen.nl/product-categorie/new/"
+    },
+    {
+        "name": "Wittmann Antique Militaria",
+        "match": ["wwiidaggers.com", "wittmann antique militaria", "wittmann"],
+        "logo_file": "wam.png",
+        "url": "https://www.wwiidaggers.com/updates.htm"
+    },
+    {
+        "name": "RBNr Militaria",
+        "match": ["rbnr.it", "rbnr militaria", "rbnr"],
+        "logo_file": "RBNR.png",
+        "url": "https://en.rbnr.it/collections/all"
+    },
 ]
 
 # ==================== BOT STATE ====================
