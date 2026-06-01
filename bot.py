@@ -188,6 +188,12 @@ EMAIL_DEALERS = [
         "logo_file": "iraqi_militaria.png",
         "url": "https://www.iraqimilitaria.com/"
     },
+    {
+        "name": "Danzig Militaria",
+        "match": ["danzigmilitaria.com", "danzig militaria"],
+        "logo_file": "Danzig_Militaria.png",
+        "url": "https://danzigmilitaria.com/shop/"
+    },
 ]
 
 # ==================== BOT STATE ====================
@@ -203,6 +209,7 @@ bot_state = {
     "paused": False,
     "last_check": None,
     "force_rescan": False,
+    "promo_paused": False,
 }
 
 def load_seen():
@@ -473,6 +480,9 @@ async def send_promo():
 
     while not client.is_closed():
         await asyncio.sleep(PROMO_INTERVAL)
+        if bot_state["promo_paused"]:
+            print("Promo is paused — skipping.")
+            continue
         banner_file = os.path.join(SCRIPT_DIR, "logos", "Server_Banner.png")
 
         embed = discord.Embed(
@@ -536,6 +546,8 @@ async def on_message(message):
         embed.add_field(name="!stats", value="Shows how many alerts each dealer has triggered", inline=False)
         embed.add_field(name="!test", value="Sends a test notification for all dealers", inline=False)
         embed.add_field(name="!promo", value="Sends the server promo message manually", inline=False)
+        embed.add_field(name="!pausepromo", value="Pauses the automatic 48 hour promo message", inline=False)
+        embed.add_field(name="!resumepromo", value="Resumes the automatic 48 hour promo message", inline=False)
         embed.add_field(name="!adddealer", value="Add a new dealer: !adddealer \"Name\" url logo_url", inline=False)
         await message.channel.send(embed=embed)
 
@@ -682,6 +694,20 @@ async def on_message(message):
 
         except Exception as e:
             await message.channel.send(f"⚠️ Error adding dealer: {e}\nUsage: `!adddealer \"Dealer Name\" https://dealer-url.com https://logo-image-url.com`")
+
+    elif cmd == "!pausepromo":
+        if bot_state["promo_paused"]:
+            await message.channel.send("⚠️ Promo messages are already paused. Use `!resumepromo` to turn them back on.")
+        else:
+            bot_state["promo_paused"] = True
+            await message.channel.send("⏸️ Promo messages paused — the 48 hour auto-promo will not send until you use `!resumepromo`.")
+
+    elif cmd == "!resumepromo":
+        if not bot_state["promo_paused"]:
+            await message.channel.send("⚠️ Promo messages are already running.")
+        else:
+            bot_state["promo_paused"] = False
+            await message.channel.send("▶️ Promo messages resumed — auto-promo is back on!")
 
     elif cmd == "!promo":
         await message.channel.send("📣 Sending promo message...")
