@@ -16,6 +16,29 @@ from datetime import datetime, timezone
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHANNEL_ID = 1510653092721590323
 WAF_ROLE_ID = 1511101033349124318
+
+WAF_CATEGORIES = [
+    {"name": "All WAF Updates", "role_id": 1511112093774905386, "keywords": []},
+    {"name": "1957 Medals & Decorations", "role_id": 1511112215544201367, "keywords": ["1957", "medal", "decoration"]},
+    {"name": "Medals, Badges & Awards", "role_id": 1511112409451073828, "keywords": ["medal", "badge", "award", "cross", "iron cross"]},
+    {"name": "Photos & Paper Items", "role_id": 1511112501792739388, "keywords": ["photo", "paper", "document", "postcard", "soldbuch"]},
+    {"name": "Uniforms", "role_id": 1511112564824866897, "keywords": ["uniform", "tunic", "jacket", "trousers", "coat"]},
+    {"name": "Flags, Banners & Pennants", "role_id": 1511112671963906068, "keywords": ["flag", "banner", "pennant", "standard"]},
+    {"name": "Equipment/Field Gear & Dog Tags", "role_id": 1511112754491297922, "keywords": ["equipment", "field gear", "footwear", "boot", "dog tag", "canteen"]},
+    {"name": "Optics", "role_id": 1511112866495729706, "keywords": ["optic", "binocular", "scope", "telescope"]},
+    {"name": "Cloth Headgear", "role_id": 1511112942358368307, "keywords": ["cloth", "headgear", "cap", "visor", "field cap"]},
+    {"name": "German Helmets", "role_id": 1511113046167130293, "keywords": ["helmet", "stahlhelm", "M35", "M40", "M42"]},
+    {"name": "Belts & Buckles", "role_id": 1511113224869773393, "keywords": ["belt", "buckle", "brocade"]},
+    {"name": "Edged Weapons", "role_id": 1511113345816854529, "keywords": ["dagger", "sword", "bayonet", "knife", "blade"]},
+    {"name": "Firearms & Ordnance", "role_id": 1511113443501932838, "keywords": ["firearm", "pistol", "rifle", "gun", "luger", "p38"]},
+    {"name": "Imperial Militaria", "role_id": 1511113528046653520, "keywords": ["imperial", "ww1", "1914", "1918", "pickelhaube"]},
+    {"name": "Freikorps / Weimar Period", "role_id": 1511113644015095839, "keywords": ["freikorps", "weimar"]},
+    {"name": "U.S. & British Militaria", "role_id": 1511113709328662648, "keywords": ["american", "british", "allied", "usa", "uk"]},
+    {"name": "International Militaria", "role_id": 1511113776923938869, "keywords": ["international", "italian", "japanese", "soviet", "french"]},
+    {"name": "Books & Media", "role_id": 1511118900488569015, "keywords": ["book", "media", "magazine", "manual"]},
+    {"name": "Misc. Third Reich Items", "role_id": 1511119017807581347, "keywords": ["misc", "third reich", "nsdap"]},
+]
+
 CHECK_INTERVAL = 600
 EMAIL_CHECK_INTERVAL = 30
 
