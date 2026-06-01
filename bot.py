@@ -206,7 +206,10 @@ async def send_alert(channel, name, url, logo_file, test=False, waf=False):
     else:
         print(f"Logo not found at {logo_file}")
 
-    content_msg = f"<@&{WAF_ROLE_ID}> New WAF Estate listing!" if waf and not test else None
+    # For WAF alerts, ping matching category roles based on subject
+    content_msg = None
+    if waf and not test:
+        content_msg = f"<@&{WAF_ROLE_ID}> New WAF Estate listing!"
 
     try:
         if file:
@@ -419,36 +422,147 @@ async def lastcheck_cmd(interaction: discord.Interaction):
     else:
         await interaction.response.send_message("⚠️ No check has run yet since the bot started.", ephemeral=True)
 
-@client.tree.command(name="joinwaf", description="Subscribe to WAF Estate alerts")
-async def joinwaf_cmd(interaction: discord.Interaction):
-    role = interaction.guild.get_role(WAF_ROLE_ID)
-    if role:
-        if role in interaction.user.roles:
-            await interaction.response.send_message("⚠️ You already have the WAF Estate role!", ephemeral=True)
+class WAFCategorySelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label=cat["name"], value=str(cat["role_id"]))
+            for cat in WAF_CATEGORIES
+        ]
+        super().__init__(
+            placeholder="Choose WAF categories to subscribe to...",
+            min_values=1,
+            max_values=len(options),
+            options=options
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        added = []
+        already_have = []
+        for value in self.values:
+            role_id = int(value)
+            role = interaction.guild.get_role(role_id)
+            if role:
+                if role in interaction.user.roles:
+                    already_have.append(role.name)
+                else:
+                    await interaction.user.add_roles(role)
+                    added.append(role.name)
+
+        # Also give them the base WAF role
+        waf_role = interaction.guild.get_role(WAF_ROLE_ID)
+        if waf_role and waf_role not in interaction.user.roles:
+            await interaction.user.add_roles(waf_role)
+
+        msg = ""
+        if added:
+            msg += f"✅ Subscribed to: {', '.join(added)}\n"
+        if already_have:
+            msg += f"⚠️ Already subscribed to: {', '.join(already_have)}"
+        await interaction.response.send_message(msg or "No changes made.", ephemeral=True)
+
+class WAFCategoryView(discord.ui.View):
+    def __init__(self):
+        super().__init__()
+        self.add_item(WAFCategorySelect())
+
+class WAFLeaveSelect(discord.ui.Select):
+    def __init__(self, current_roles):
+        options = [
+            discord.SelectOption(label=cat["name"], value=str(cat["role_id"]))
+            for cat in WAF_CATEGORIES
+            if interaction_guild_has_role(current_roles, cat["role_id"])
+        ]
+        if not options:
+            options = [discord.SelectOption(label="No WAF roles to remove", value="none")]
+        super().__init__(
+            placeholder="Choose categories to unsubscribe from...",
+            min_values=1,
+            max_values=len(options),
+            options=options
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        removed = []
+        for value in self.values:
+            if value == "none":
+                continue
+            role_id = int(value)
+            role = interaction.guild.get_role(role_id)
+            if role and role in interaction.user.roles:
+                await interaction.user.remove_roles(role)
+                removed.append(role.name)
+        if removed:
+            await interaction.response.send_message(f"✅ Unsubscribed from: {', '.join(removed)}", ephemeral=True)
         else:
-            await interaction.user.add_roles(role)
-            await interaction.response.send_message("✅ You'll now receive WAF Estate alerts!", ephemeral=True)
-    else:
-        await interaction.response.send_message("⚠️ WAF Estate role not found. Please contact an admin.", ephemeral=True)
+            await interaction.response.send_message("No changes made.", ephemeral=True)
+
+def interaction_guild_has_role(member_roles, role_id):
+    return any(r.id == role_id for r in member_roles)
+
+@client.tree.command(name="joinwaf", description="Subscribe to WAF Estate alerts by category")
+async def joinwaf_cmd(interaction: discord.Interaction):
+    view = WAFCategoryView()
+    await interaction.response.send_message(
+        "🎖️ **Select which WAF Estate categories you want alerts for:**\nYou can select multiple categories!",
+        view=view,
+        ephemeral=True
+    )
 
 @client.tree.command(name="leavewaf", description="Unsubscribe from WAF Estate alerts")
 async def leavewaf_cmd(interaction: discord.Interaction):
-    role = interaction.guild.get_role(WAF_ROLE_ID)
-    if role:
-        if role not in interaction.user.roles:
-            await interaction.response.send_message("⚠️ You don't have the WAF Estate role.", ephemeral=True)
-        else:
-            await interaction.user.remove_roles(role)
-            await interaction.response.send_message("✅ You've been removed from WAF Estate alerts.", ephemeral=True)
-    else:
-        await interaction.response.send_message("⚠️ WAF Estate role not found. Please contact an admin.", ephemeral=True)
+    waf_roles = [r for r in interaction.user.roles if any(r.id == cat["role_id"] for cat in WAF_CATEGORIES)]
+    if not waf_roles:
+        await interaction.response.send_message("⚠️ You don't have any WAF Estate subscriptions.", ephemeral=True)
+        return
+
+    options = [
+        discord.SelectOption(label=cat["name"], value=str(cat["role_id"]))
+        for cat in WAF_CATEGORIES
+        if any(r.id == cat["role_id"] for r in interaction.user.roles)
+    ]
+    select = discord.ui.Select(
+        placeholder="Choose categories to unsubscribe from...",
+        min_values=1,
+        max_values=len(options),
+        options=options
+    )
+
+    async def leave_callback(i: discord.Interaction):
+        removed = []
+        for value in select.values:
+            role_id = int(value)
+            role = i.guild.get_role(role_id)
+            if role and role in i.user.roles:
+                await i.user.remove_roles(role)
+                removed.append(role.name)
+        # Remove base WAF role if no category roles left
+        remaining = [r for r in i.user.roles if any(r.id == cat["role_id"] for cat in WAF_CATEGORIES)]
+        if not remaining:
+            waf_role = i.guild.get_role(WAF_ROLE_ID)
+            if waf_role and waf_role in i.user.roles:
+                await i.user.remove_roles(waf_role)
+        await i.response.send_message(f"✅ Unsubscribed from: {', '.join(removed)}", ephemeral=True)
+
+    select.callback = leave_callback
+    view = discord.ui.View()
+    view.add_item(select)
+    await interaction.response.send_message("Select categories to unsubscribe from:", view=view, ephemeral=True)
 
 @client.tree.command(name="myroles", description="Shows your current alert subscriptions")
 async def myroles_cmd(interaction: discord.Interaction):
-    waf_role = interaction.guild.get_role(WAF_ROLE_ID)
-    has_waf = waf_role in interaction.user.roles if waf_role else False
-    embed = discord.Embed(title="🎖️ Your Alert Roles", color=discord.Color.dark_gold(), timestamp=datetime.now(timezone.utc))
-    embed.add_field(name="WAF Estate Alerts", value="✅ Subscribed" if has_waf else "❌ Not subscribed — use `/joinwaf` to subscribe", inline=False)
+    embed = discord.Embed(title="🎖️ Your WAF Alert Subscriptions", color=discord.Color.dark_gold(), timestamp=datetime.now(timezone.utc))
+    subscribed = []
+    not_subscribed = []
+    for cat in WAF_CATEGORIES:
+        role = interaction.guild.get_role(cat["role_id"])
+        if role and role in interaction.user.roles:
+            subscribed.append(cat["name"])
+        else:
+            not_subscribed.append(cat["name"])
+    if subscribed:
+        embed.add_field(name="✅ Subscribed", value="\n".join(subscribed), inline=False)
+    else:
+        embed.add_field(name="✅ Subscribed", value="None — use `/joinwaf` to subscribe", inline=False)
     embed.set_footer(text="The Relic Registry — Dealer Update")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
