@@ -27,6 +27,7 @@ USER_AGENTS = [
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHANNEL_ID = 1510653092721590323
 CHECK_INTERVAL = 600  # Check every 10 minutes (in seconds)
+WAF_ROLE_ID = 1511101033349124318  # WAF Estate role
 EMAIL_CHECK_INTERVAL = 30  # Check email every 30 seconds
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -224,11 +225,19 @@ EMAIL_DEALERS = [
         "logo_file": "TigerMilitaria.png",
         "url": "https://tigermilitaria.com/shop?showPerPage=24"
     },
+    {
+        "name": "WAF Estate",
+        "match": ["wehrmacht-awards.com", "waf estate", "e-stand", "estand", "militaria e-stand"],
+        "logo_file": "waf.png",
+        "url": "https://www.wehrmacht-awards.com/forums/forum/the-militaria-e-stand",
+        "waf": True
+    },
 ]
 
 # ==================== BOT STATE ====================
 intents = discord.Intents.default()
 intents.message_content = True
+intents.members = True
 client = discord.Client(intents=intents)
 
 SEEN_FILE = "seen_items.json"
@@ -329,7 +338,7 @@ def extract_item_links(html_bytes, selector, base_url):
         print(f"Error parsing HTML: {e}")
         return set()
 
-async def send_alert(channel, name, url, logo_file, test=False):
+async def send_alert(channel, name, url, logo_file, test=False, waf=False):
     title = f"🧪 TEST — {name}" if test else f"🆕 New Items at {name}!"
     description = f"This is a test notification for [{name}]({url})\n\n[**Click here to view items →**]({url})" if test else f"New items have been added to [{name}]({url})\n\n[**Click here to view new items →**]({url})"
 
@@ -348,11 +357,14 @@ async def send_alert(channel, name, url, logo_file, test=False):
     else:
         print(f"Logo not found at {logo_file}")
 
+    # Ping WAF role for WAF alerts
+    content_msg = f"<@&{WAF_ROLE_ID}> New WAF Estate listing!" if waf and not test else None
+
     try:
         if file:
-            await channel.send(file=file, embed=embed)
+            await channel.send(content=content_msg, file=file, embed=embed)
         else:
-            await channel.send(embed=embed)
+            await channel.send(content=content_msg, embed=embed)
     except Exception as e:
         print(f"Failed to send message for {name}: {e}")
 
@@ -496,7 +508,8 @@ async def check_email_dealers():
             stats = load_stats()
             stats[dealer["name"]] = stats.get(dealer["name"], 0) + 1
             save_stats(stats)
-            await send_alert(channel, dealer["name"], dealer["url"], logo_file)
+            is_waf = dealer.get("waf", False)
+            await send_alert(channel, dealer["name"], dealer["url"], logo_file, waf=is_waf)
 
         await asyncio.sleep(EMAIL_CHECK_INTERVAL)
 
@@ -554,6 +567,10 @@ async def on_ready():
     else:
         print("ERROR: Logos folder not found!")
 
+def is_mod(member):
+    """Check if member has administrator or manage guild permissions."""
+    return member.guild_permissions.administrator or member.guild_permissions.manage_guild
+
 @client.event
 async def on_message(message):
     if message.author == client.user:
@@ -561,27 +578,30 @@ async def on_message(message):
 
     cmd = message.content.lower().strip()
 
-    if cmd == "!help":
+    if cmd == "/help":
         embed = discord.Embed(
             title="🎖️ The Relic Registry — Dealer Update Bot Commands",
             color=discord.Color.dark_gold()
         )
-        embed.add_field(name="!help", value="Shows this help message", inline=False)
-        embed.add_field(name="!status", value="Shows which dealers are reachable", inline=False)
-        embed.add_field(name="!dealers", value="Lists all monitored dealers with links", inline=False)
-        embed.add_field(name="!lastcheck", value="Shows when the bot last checked dealers", inline=False)
-        embed.add_field(name="!rescan", value="Forces an immediate check of all dealers", inline=False)
-        embed.add_field(name="!pause", value="Pauses automatic dealer checking", inline=False)
-        embed.add_field(name="!resume", value="Resumes automatic dealer checking", inline=False)
-        embed.add_field(name="!stats", value="Shows how many alerts each dealer has triggered", inline=False)
-        embed.add_field(name="!test", value="Sends a test notification for all dealers", inline=False)
-        embed.add_field(name="!promo", value="Sends the server promo message manually", inline=False)
-        embed.add_field(name="!pausepromo", value="Pauses the automatic 48 hour promo message", inline=False)
-        embed.add_field(name="!resumepromo", value="Resumes the automatic 48 hour promo message", inline=False)
-        embed.add_field(name="!adddealer", value="Add a new dealer: !adddealer \"Name\" url logo_url", inline=False)
+        embed.add_field(name="/help", value="Shows this help message", inline=False)
+        embed.add_field(name="/status", value="Shows which dealers are reachable", inline=False)
+        embed.add_field(name="/dealers", value="Lists all monitored dealers with links", inline=False)
+        embed.add_field(name="/lastcheck", value="Shows when the bot last checked dealers", inline=False)
+        embed.add_field(name="/rescan", value="Forces an immediate check of all dealers", inline=False)
+        embed.add_field(name="/pause", value="Pauses automatic dealer checking", inline=False)
+        embed.add_field(name="/resume", value="Resumes automatic dealer checking", inline=False)
+        embed.add_field(name="/stats", value="Shows how many alerts each dealer has triggered", inline=False)
+        embed.add_field(name="/test", value="Sends a test notification for all dealers", inline=False)
+        embed.add_field(name="/promo", value="Sends the server promo message manually", inline=False)
+        embed.add_field(name="/pausepromo", value="Pauses the automatic 48 hour promo message", inline=False)
+        embed.add_field(name="/resumepromo", value="Resumes the automatic 48 hour promo message", inline=False)
+        embed.add_field(name="/adddealer", value="Add a new dealer: !adddealer \"Name\" url logo_url", inline=False)
+        embed.add_field(name="/joinwaf", value="Subscribe to WAF Estate alerts", inline=False)
+        embed.add_field(name="/leavewaf", value="Unsubscribe from WAF Estate alerts", inline=False)
+        embed.add_field(name="/myroles", value="Shows your current alert subscriptions", inline=False)
         await message.channel.send(embed=embed)
 
-    elif cmd == "!status":
+    elif cmd == "/status":
         await message.channel.send("🔍 Checking all dealer websites, please wait...")
         embed = discord.Embed(
             title="📡 Dealer Status",
@@ -599,7 +619,7 @@ async def on_message(message):
         embed.set_footer(text="The Relic Registry — Dealer Update")
         await message.channel.send(embed=embed)
 
-    elif cmd == "!dealers":
+    elif cmd == "/dealers":
         embed = discord.Embed(
             title="🏪 Monitored Dealers",
             description="Here are all the dealers currently being monitored:",
@@ -612,32 +632,44 @@ async def on_message(message):
         embed.set_footer(text="The Relic Registry — Dealer Update")
         await message.channel.send(embed=embed)
 
-    elif cmd == "!lastcheck":
+    elif cmd == "/lastcheck":
         if bot_state["last_check"]:
             ts = int(bot_state["last_check"].timestamp())
             await message.channel.send(f"🕐 Last check was <t:{ts}:R> at <t:{ts}:T>")
         else:
             await message.channel.send("⚠️ No check has run yet since the bot started.")
 
-    elif cmd == "!rescan":
+    elif cmd == "/rescan":
+        if not is_mod(message.author):
+            await message.channel.send(f"🚫 {message.author.mention} You need Moderator permissions to use `/rescan`.", delete_after=5)
+            return
         await message.channel.send("🔄 Forcing an immediate rescan of all dealers...")
         bot_state["force_rescan"] = True
 
-    elif cmd == "!pause":
+    elif cmd == "/pause":
+        if not is_mod(message.author):
+            await message.channel.send(f"🚫 {message.author.mention} You need Moderator permissions to use `/pause`.", delete_after=5)
+            return
         if bot_state["paused"]:
-            await message.channel.send("⚠️ Bot is already paused. Use `!resume` to turn it back on.")
+            await message.channel.send("⚠️ Bot is already paused. Use `/resume` to turn it back on.")
         else:
             bot_state["paused"] = True
             await message.channel.send("⏸️ Bot paused — no more automatic checks until you use `!resume`.")
 
-    elif cmd == "!resume":
+    elif cmd == "/resume":
+        if not is_mod(message.author):
+            await message.channel.send(f"🚫 {message.author.mention} You need Moderator permissions to use `/resume`.", delete_after=5)
+            return
         if not bot_state["paused"]:
-            await message.channel.send("⚠️ Bot is already running. Use `!pause` to pause it.")
+            await message.channel.send("⚠️ Bot is already running. Use `/pause` to pause it.")
         else:
             bot_state["paused"] = False
             await message.channel.send("▶️ Bot resumed — automatic checks are back on!")
 
-    elif cmd == "!stats":
+    elif cmd == "/stats":
+        if not is_mod(message.author):
+            await message.channel.send(f"🚫 {message.author.mention} You need Moderator permissions to use `/stats`.", delete_after=5)
+            return
         stats = load_stats()
         embed = discord.Embed(
             title="📊 Alert Statistics",
@@ -652,7 +684,10 @@ async def on_message(message):
         embed.set_footer(text="The Relic Registry — Dealer Update")
         await message.channel.send(embed=embed)
 
-    elif cmd == "!test":
+    elif cmd == "/test":
+        if not is_mod(message.author):
+            await message.channel.send(f"🚫 {message.author.mention} You need Moderator permissions to use `/test`.", delete_after=5)
+            return
         await message.channel.send("🧪 Running test — sending a sample notification for each dealer...")
         channel = client.get_channel(CHANNEL_ID)
         all_dealers = DEALERS + EMAIL_DEALERS
@@ -662,7 +697,10 @@ async def on_message(message):
             await asyncio.sleep(1)
         await message.channel.send("✅ Test complete!")
 
-    elif cmd.startswith("!adddealer"):
+    elif cmd.startswith("/adddealer"):
+        if not is_mod(message.author):
+            await message.channel.send(f"🚫 {message.author.mention} You need Moderator permissions to use `/adddealer`.", delete_after=5)
+            return
         parts = message.content.strip().split()
         # Format: !adddealer "Dealer Name" https://url.com https://logo.png
         # Parse quoted name
@@ -670,7 +708,7 @@ async def on_message(message):
         try:
             args = shlex.split(message.content)[1:]  # skip the command
             if len(args) < 2:
-                await message.channel.send('⚠️ Usage: `!adddealer "Dealer Name" https://dealer-url.com https://logo-image-url.com`')
+                await message.channel.send('⚠️ Usage: `/adddealer "Dealer Name" https://dealer-url.com https://logo-image-url.com`')
             else:
                 dealer_name = args[0]
                 dealer_url = args[1]
@@ -723,23 +761,63 @@ async def on_message(message):
                 await message.channel.send(f"📧 Remember to subscribe to **{dealer_name}'s** newsletter at {dealer_url} using `relicregistrybot@gmail.com`!")
 
         except Exception as e:
-            await message.channel.send(f"⚠️ Error adding dealer: {e}\nUsage: `!adddealer \"Dealer Name\" https://dealer-url.com https://logo-image-url.com`")
+            await message.channel.send(f"⚠️ Error adding dealer: {e}\nUsage: `/adddealer \"Dealer Name\" https://dealer-url.com https://logo-image-url.com`")
 
-    elif cmd == "!pausepromo":
+    elif cmd == "/joinwaf":
+        role = message.guild.get_role(WAF_ROLE_ID)
+        if role:
+            if role in message.author.roles:
+                await message.channel.send(f"⚠️ {message.author.mention} you already have the WAF Estate role!", delete_after=5)
+            else:
+                await message.author.add_roles(role)
+                await message.channel.send(f"✅ {message.author.mention} you'll now receive WAF Estate alerts!", delete_after=5)
+        else:
+            await message.channel.send("⚠️ WAF Estate role not found. Please contact an admin.", delete_after=5)
+
+    elif cmd == "/leavewaf":
+        role = message.guild.get_role(WAF_ROLE_ID)
+        if role:
+            if role not in message.author.roles:
+                await message.channel.send(f"⚠️ {message.author.mention} you don't have the WAF Estate role.", delete_after=5)
+            else:
+                await message.author.remove_roles(role)
+                await message.channel.send(f"✅ {message.author.mention} you've been removed from WAF Estate alerts.", delete_after=5)
+        else:
+            await message.channel.send("⚠️ WAF Estate role not found. Please contact an admin.", delete_after=5)
+
+    elif cmd == "/myroles":
+        waf_role = message.guild.get_role(WAF_ROLE_ID)
+        has_waf = waf_role in message.author.roles if waf_role else False
+        embed = discord.Embed(
+            title="🎖️ Your Alert Roles",
+            color=discord.Color.dark_gold(),
+            timestamp=datetime.now(timezone.utc)
+        )
+        embed.add_field(name="WAF Estate Alerts", value="✅ Subscribed" if has_waf else "❌ Not subscribed — type `/joinwaf` to subscribe", inline=False)
+        embed.set_footer(text="The Relic Registry — Dealer Update")
+        await message.channel.send(embed=embed, delete_after=15)
+
+    elif cmd == "/pausepromo":
+        if not is_mod(message.author):
+            await message.channel.send(f"🚫 {message.author.mention} You need Moderator permissions to use `/pausepromo`.", delete_after=5)
+            return
         if bot_state["promo_paused"]:
             await message.channel.send("⚠️ Promo messages are already paused. Use `!resumepromo` to turn them back on.")
         else:
             bot_state["promo_paused"] = True
             await message.channel.send("⏸️ Promo messages paused — the 48 hour auto-promo will not send until you use `!resumepromo`.")
 
-    elif cmd == "!resumepromo":
+    elif cmd == "/resumepromo":
+        if not is_mod(message.author):
+            await message.channel.send(f"🚫 {message.author.mention} You need Moderator permissions to use `/resumepromo`.", delete_after=5)
+            return
         if not bot_state["promo_paused"]:
             await message.channel.send("⚠️ Promo messages are already running.")
         else:
             bot_state["promo_paused"] = False
             await message.channel.send("▶️ Promo messages resumed — auto-promo is back on!")
 
-    elif cmd == "!promo":
+    elif cmd == "/promo":
         await message.channel.send("📣 Sending promo message...")
         channel = client.get_channel(CHANNEL_ID)
         banner_file = os.path.join(SCRIPT_DIR, "logos", "Server_Banner.png")
