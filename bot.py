@@ -194,6 +194,24 @@ EMAIL_DEALERS = [
         "logo_file": "Danzig_Militaria.png",
         "url": "https://danzigmilitaria.com/shop/"
     },
+    {
+        "name": "FJM44",
+        "match": ["fjm44.com", "fjm44", "fjm 44"],
+        "logo_file": "fjm44.png",
+        "url": "https://fjm44.com/product-category/militaria/"
+    },
+    {
+        "name": "Kurland",
+        "match": ["kurland-docs.com", "kurland"],
+        "logo_file": "kurland.png",
+        "url": "https://www.kurland-docs.com/shop.php"
+    },
+    {
+        "name": "Queen City Militaria",
+        "match": ["queencitymilitaria.com", "queen city militaria"],
+        "logo_file": "queen_city_militaria.png",
+        "url": "https://www.queencitymilitaria.com/"
+    },
 ]
 
 # ==================== BOT STATE ====================
