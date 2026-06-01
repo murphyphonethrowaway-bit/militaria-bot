@@ -624,10 +624,8 @@ async def on_message(message):
                 EMAIL_DEALERS.append(new_dealer)
 
                 embed = discord.Embed(
-                    title="✅ Dealer Added!",
-                    description=f"**{dealer_name}** has been added to the email monitoring list!
-
-[Visit Site]({dealer_url})",
+                    title="Dealer Added!",
+                    description=f"**{dealer_name}** has been added to the email monitoring list!\n\n[Visit Site]({dealer_url})",
                     color=discord.Color.green(),
                     timestamp=datetime.now(timezone.utc)
                 )
@@ -641,8 +639,7 @@ async def on_message(message):
                 await message.channel.send(f"📧 Remember to subscribe to **{dealer_name}'s** newsletter at {dealer_url} using `relicregistrybot@gmail.com`!")
 
         except Exception as e:
-            await message.channel.send(f"⚠️ Error adding dealer: {e}
-Usage: `!adddealer "Dealer Name" https://dealer-url.com https://logo-image-url.com`")
+            await message.channel.send(f"⚠️ Error adding dealer: {e}\nUsage: `!adddealer \"Dealer Name\" https://dealer-url.com https://logo-image-url.com`")
 
     elif cmd == "!promo":
         await message.channel.send("📣 Sending promo message...")
