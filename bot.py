@@ -401,7 +401,7 @@ async def check_email_dealers():
         print("ERROR: Could not find channel for email checking.")
         return
 
-    print(f"Email checker ready! Checking every {EMAIL_CHECK_INTERVAL//60} minutes.")
+    print(f"Email checker ready! Checking every {EMAIL_CHECK_INTERVAL} seconds.")
 
     while not client.is_closed():
         if bot_state["paused"]:
