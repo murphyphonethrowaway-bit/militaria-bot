@@ -109,6 +109,8 @@ bot_state = {
     "last_check": None,
     "force_rescan": False,
     "promo_paused": False,
+    "last_email_check": None,
+    "last_promo": None,
 }
 
 def load_seen():
@@ -322,6 +324,7 @@ async def check_email_dealers():
         if bot_state["paused"]:
             await asyncio.sleep(30)
             continue
+        bot_state["last_email_check"] = datetime.now(timezone.utc)
         seen_emails = load_seen_emails()
         triggered = await asyncio.get_event_loop().run_in_executor(None, check_gmail, seen_emails)
         save_seen_emails(seen_emails)
@@ -361,6 +364,7 @@ async def send_promo():
                 await channel.send(file=file, embed=embed)
             else:
                 await channel.send(embed=embed)
+            bot_state["last_promo"] = datetime.now(timezone.utc)
             print("Promo message sent!")
         except Exception as e:
             print(f"Failed to send promo: {e}")
@@ -386,6 +390,8 @@ async def help_cmd(interaction: discord.Interaction):
     embed.add_field(name="/pausepromo 🔒", value="Pauses the 48 hour auto-promo", inline=False)
     embed.add_field(name="/resumepromo 🔒", value="Resumes the auto-promo", inline=False)
     embed.add_field(name="/adddealer 🔒", value="Add a new dealer", inline=False)
+    embed.add_field(name="/nextemail 🔒", value="Shows countdown to next email check", inline=False)
+    embed.add_field(name="/nextpromo 🔒", value="Shows countdown to next promo message", inline=False)
     embed.set_footer(text="🔒 = Mod only")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -711,6 +717,37 @@ async def adddealer_cmd(interaction: discord.Interaction, name: str, url: str, l
         await interaction.followup.send(embed=embed, ephemeral=True)
 
 # ==================== EVENTS ====================
+
+@client.tree.command(name="nextemail", description="🔒 Shows countdown to next email check")
+async def nextemail_cmd(interaction: discord.Interaction):
+    if not is_mod(interaction.user):
+        await interaction.response.send_message("🚫 You need Moderator permissions to use this command.", ephemeral=True)
+        return
+    if bot_state["last_email_check"]:
+        next_check = bot_state["last_email_check"].timestamp() + EMAIL_CHECK_INTERVAL
+        ts = int(next_check)
+        last_ts = int(bot_state["last_email_check"].timestamp())
+        msg = f"📧 **Next email check:** <t:{ts}:R> at <t:{ts}:T>\n🕐 **Last email check:** <t:{last_ts}:R>"
+        await interaction.response.send_message(msg, ephemeral=True)
+    else:
+        await interaction.response.send_message("⚠️ No email check has run yet since the bot started.", ephemeral=True)
+
+@client.tree.command(name="nextpromo", description="🔒 Shows countdown to next automatic promo message")
+async def nextpromo_cmd(interaction: discord.Interaction):
+    if not is_mod(interaction.user):
+        await interaction.response.send_message("🚫 You need Moderator permissions to use this command.", ephemeral=True)
+        return
+    if bot_state["promo_paused"]:
+        await interaction.response.send_message("⏸️ Promo messages are currently **paused**. Use `/resumepromo` to turn them back on.", ephemeral=True)
+        return
+    if bot_state["last_promo"]:
+        next_promo = bot_state["last_promo"].timestamp() + (48 * 3600)
+        ts = int(next_promo)
+        last_ts = int(bot_state["last_promo"].timestamp())
+        msg = f"📣 **Next promo message:** <t:{ts}:R> at <t:{ts}:F>\n🕐 **Last promo sent:** <t:{last_ts}:R>"
+        await interaction.response.send_message(msg, ephemeral=True)
+    else:
+        await interaction.response.send_message("📣 No promo has been sent yet since the bot started.\nFirst auto-promo will fire **48 hours** after the bot started.", ephemeral=True)
 
 @client.event
 async def on_ready():
