@@ -1,5 +1,6 @@
 import discord
 from discord import app_commands
+import asyncpg
 import asyncio
 import aiohttp
 import json
@@ -23,6 +24,7 @@ CHECK_INTERVAL = 600
 EMAIL_CHECK_INTERVAL = 30
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+DATABASE_URL = os.environ.get('DATABASE_URL') or os.environ.get('DB_URL')
 GMAIL_USER = "relicregistrybot@gmail.com"
 GMAIL_APP_PASSWORD = "tyvm uvfb jkxv ptvy"
 
@@ -110,19 +112,51 @@ class MilitariaBot(discord.Client):
     def __init__(self):
         super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
+        self.db = None
 
     async def setup_hook(self):
+        self.db = await asyncpg.create_pool(DATABASE_URL)
+        await self.init_db()
         await self.tree.sync()
         print("Slash commands synced!")
 
+    async def init_db(self):
+        async with self.db.acquire() as conn:
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS reviews (
+                    id SERIAL PRIMARY KEY,
+                    dealer_name TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    username TEXT NOT NULL,
+                    rating INTEGER NOT NULL,
+                    review TEXT,
+                    date TEXT NOT NULL,
+                    timestamp BIGINT NOT NULL
+                )
+            ''')
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS warnings (
+                    dealer_name TEXT PRIMARY KEY,
+                    reason TEXT NOT NULL
+                )
+            ''')
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS seen_emails (
+                    msg_id TEXT PRIMARY KEY
+                )
+            ''')
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS dealer_stats (
+                    dealer_name TEXT PRIMARY KEY,
+                    alert_count INTEGER DEFAULT 0
+                )
+            ''')
+        print("Database initialized!")
+
 client = MilitariaBot()
 
-# ==================== FILE PATHS ====================
+# ==================== FILE PATHS (still used for seen_items) ====================
 SEEN_FILE = "seen_items.json"
-STATS_FILE = "stats.json"
-SEEN_EMAILS_FILE = "seen_emails.json"
-REVIEWS_FILE = "reviews.json"
-DEALER_WARNINGS_FILE = "dealer_warnings.json"
 
 bot_state = {
     "paused": False,
@@ -146,26 +180,90 @@ def save_json(filepath, data):
 
 def load_seen(): return load_json(SEEN_FILE, {})
 def save_seen(d): save_json(SEEN_FILE, d)
-def load_stats(): return load_json(STATS_FILE, {})
-def save_stats(d): save_json(STATS_FILE, d)
-def load_seen_emails(): return set(load_json(SEEN_EMAILS_FILE, []))
-def save_seen_emails(d): save_json(SEEN_EMAILS_FILE, list(d))
-def load_reviews(): return load_json(REVIEWS_FILE, {})
-def save_reviews(d): save_json(REVIEWS_FILE, d)
-def load_warnings(): return load_json(DEALER_WARNINGS_FILE, {})
-def save_warnings(d): save_json(DEALER_WARNINGS_FILE, d)
+
+# ==================== DATABASE FUNCTIONS ====================
+async def db_get_reviews(dealer_name):
+    async with client.db.acquire() as conn:
+        rows = await conn.fetch("SELECT * FROM reviews WHERE dealer_name=$1 ORDER BY timestamp ASC", dealer_name)
+        return [dict(r) for r in rows]
+
+async def db_add_review(dealer_name, user_id, username, rating, review, date, timestamp):
+    async with client.db.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO reviews (dealer_name, user_id, username, rating, review, date, timestamp) VALUES ($1,$2,$3,$4,$5,$6,$7)",
+            dealer_name, user_id, username, rating, review, date, timestamp
+        )
+
+async def db_delete_review(review_id):
+    async with client.db.acquire() as conn:
+        await conn.execute("DELETE FROM reviews WHERE id=$1", review_id)
+
+async def db_get_warning(dealer_name):
+    async with client.db.acquire() as conn:
+        row = await conn.fetchrow("SELECT reason FROM warnings WHERE dealer_name=$1", dealer_name)
+        return row["reason"] if row else None
+
+async def db_set_warning(dealer_name, reason):
+    async with client.db.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO warnings (dealer_name, reason) VALUES ($1,$2) ON CONFLICT (dealer_name) DO UPDATE SET reason=$2",
+            dealer_name, reason
+        )
+
+async def db_remove_warning(dealer_name):
+    async with client.db.acquire() as conn:
+        await conn.execute("DELETE FROM warnings WHERE dealer_name=$1", dealer_name)
+
+async def db_is_email_seen(msg_id):
+    async with client.db.acquire() as conn:
+        row = await conn.fetchrow("SELECT 1 FROM seen_emails WHERE msg_id=$1", msg_id)
+        return row is not None
+
+async def db_mark_email_seen(msg_id):
+    async with client.db.acquire() as conn:
+        await conn.execute("INSERT INTO seen_emails (msg_id) VALUES ($1) ON CONFLICT DO NOTHING", msg_id)
+
+async def db_get_stat(dealer_name):
+    async with client.db.acquire() as conn:
+        row = await conn.fetchrow("SELECT alert_count FROM dealer_stats WHERE dealer_name=$1", dealer_name)
+        return row["alert_count"] if row else 0
+
+async def db_increment_stat(dealer_name):
+    async with client.db.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO dealer_stats (dealer_name, alert_count) VALUES ($1,1) ON CONFLICT (dealer_name) DO UPDATE SET alert_count=dealer_stats.alert_count+1",
+            dealer_name
+        )
+
+async def db_get_all_stats():
+    async with client.db.acquire() as conn:
+        rows = await conn.fetch("SELECT dealer_name, alert_count FROM dealer_stats")
+        return {r["dealer_name"]: r["alert_count"] for r in rows}
+
+async def db_get_all_reviews():
+    async with client.db.acquire() as conn:
+        rows = await conn.fetch("SELECT * FROM reviews ORDER BY timestamp ASC")
+        result = {}
+        for r in rows:
+            d = dict(r)
+            if d["dealer_name"] not in result:
+                result[d["dealer_name"]] = []
+            result[d["dealer_name"]].append(d)
+        return result
 
 def is_mod(member):
     return member.guild_permissions.administrator or member.guild_permissions.manage_guild
 
 # ==================== REVIEW HELPERS ====================
-def get_dealer_rating(dealer_name):
-    reviews = load_reviews()
-    dealer_reviews = reviews.get(dealer_name, [])
+def get_dealer_rating_sync(dealer_reviews):
     if not dealer_reviews:
         return None, 0
     avg = sum(r["rating"] for r in dealer_reviews) / len(dealer_reviews)
     return round(avg, 1), len(dealer_reviews)
+
+async def get_dealer_rating(dealer_name):
+    dealer_reviews = await db_get_reviews(dealer_name)
+    return get_dealer_rating_sync(dealer_reviews)
 
 def stars_display(rating):
     if rating is None:
@@ -239,9 +337,9 @@ def extract_item_links(html_bytes, selector, base_url):
 
 # ==================== ALERTS ====================
 async def send_alert(channel, name, url, logo_file, test=False, waf=False):
-    warnings = load_warnings()
-    warning = warnings.get(name)
-    rating, review_count = get_dealer_rating(name)
+    warning = await db_get_warning(name)
+    dealer_reviews = await db_get_reviews(name)
+    rating, review_count = get_dealer_rating_sync(dealer_reviews)
 
     title = f"🧪 TEST — {name}" if test else f"🆕 New Items at {name}!"
     description = f"This is a test notification for [{name}]({url})\n\n[**Click here to view items →**]({url})" if test else f"New items have been added to [{name}]({url})\n\n[**Click here to view new items →**]({url})"
@@ -300,14 +398,12 @@ async def check_dealer(session, dealer, seen, channel):
     if new_items:
         print(f"[{name}] {len(new_items)} NEW ITEM(S) DETECTED!")
         seen[items_key] = list(current_items)
-        stats = load_stats()
-        stats[name] = stats.get(name, 0) + 1
-        save_stats(stats)
+        await db_increment_stat(name)
         await send_alert(channel, name, url, logo_file)
     else:
         print(f"[{name}] No new items ({len(current_items)} items unchanged).")
 
-def check_gmail(seen_emails):
+async def check_gmail_async():
     triggered = []
     try:
         mail = imaplib.IMAP4_SSL("imap.gmail.com")
@@ -320,9 +416,9 @@ def check_gmail(seen_emails):
             _, msg_data = mail.fetch(eid, "(RFC822)")
             msg = email.message_from_bytes(msg_data[0][1])
             msg_id = msg.get("Message-ID", str(eid))
-            if msg_id in seen_emails:
+            if await db_is_email_seen(msg_id):
                 continue
-            seen_emails.add(msg_id)
+            await db_mark_email_seen(msg_id)
             sender = msg.get("From", "").lower()
             subject_raw = msg.get("Subject", "")
             subject = decode_header(subject_raw)[0][0]
@@ -376,14 +472,10 @@ async def check_email_dealers():
             await asyncio.sleep(30)
             continue
         bot_state["last_email_check"] = datetime.now(timezone.utc)
-        seen_emails = load_seen_emails()
-        triggered = await asyncio.get_event_loop().run_in_executor(None, check_gmail, seen_emails)
-        save_seen_emails(seen_emails)
+        triggered = await check_gmail_async()
         for dealer in triggered:
             logo_file = os.path.join(SCRIPT_DIR, "logos", dealer["logo_file"])
-            stats = load_stats()
-            stats[dealer["name"]] = stats.get(dealer["name"], 0) + 1
-            save_stats(stats)
+            await db_increment_stat(dealer["name"])
             is_waf = dealer.get("waf", False)
             await send_alert(channel, dealer["name"], dealer["url"], logo_file, waf=is_waf)
         await asyncio.sleep(EMAIL_CHECK_INTERVAL)
@@ -560,11 +652,9 @@ async def dealerprofile_cmd(interaction: discord.Interaction, dealer_name: str):
         await interaction.response.send_message(f"⚠️ Dealer '{dealer_name}' not found. Use `/dealers` to see all dealers.", ephemeral=True)
         return
 
-    reviews = load_reviews()
-    warnings = load_warnings()
-    dealer_reviews = reviews.get(dealer["name"], [])
-    rating, count = get_dealer_rating(dealer["name"])
-    warning = warnings.get(dealer["name"])
+    dealer_reviews = await db_get_reviews(dealer["name"])
+    rating, count = get_dealer_rating_sync(dealer_reviews)
+    warning = await db_get_warning(dealer["name"])
 
     logo_file = os.path.join(SCRIPT_DIR, "logos", dealer["logo_file"])
 
@@ -620,34 +710,21 @@ async def ratedealer_cmd(interaction: discord.Interaction, dealer_name: str, rat
         await interaction.response.send_message(f"⚠️ Dealer '{dealer_name}' not found. Use `/dealers` to see all dealers.", ephemeral=True)
         return
 
-    reviews = load_reviews()
-    dealer_reviews = reviews.get(dealer["name"], [])
-
-    # Check if user already reviewed today
     today = datetime.now(timezone.utc).date().isoformat()
     user_id = str(interaction.user.id)
-    already_today = any(r.get("user_id") == user_id and r.get("date") == today for r in dealer_reviews)
+    dealer_reviews = await db_get_reviews(dealer["name"])
+    already_today = any(str(r.get("user_id")) == user_id and r.get("date") == today for r in dealer_reviews)
 
     if already_today:
         await interaction.response.send_message(f"⚠️ You've already reviewed **{dealer['name']}** today. Come back tomorrow!", ephemeral=True)
         return
 
-    # Save review
-    new_review = {
-        "user_id": user_id,
-        "username": str(interaction.user),
-        "rating": rating,
-        "review": review,
-        "date": today,
-        "timestamp": int(datetime.now(timezone.utc).timestamp())
-    }
-
-    dealer_reviews.append(new_review)
-    reviews[dealer["name"]] = dealer_reviews
-    save_reviews(reviews)
+    ts = int(datetime.now(timezone.utc).timestamp())
+    await db_add_review(dealer["name"], user_id, str(interaction.user), rating, review, today, ts)
 
     # Check for Trusted Reviewer role
-    total_user_reviews = sum(1 for d_reviews in reviews.values() for r in d_reviews if r.get("user_id") == user_id)
+    all_reviews = await db_get_all_reviews()
+    total_user_reviews = sum(1 for d_reviews in all_reviews.values() for r in d_reviews if str(r.get("user_id")) == user_id)
     if total_user_reviews >= TRUSTED_REVIEWER_THRESHOLD:
         trusted_role = interaction.guild.get_role(TRUSTED_REVIEWER_ROLE_ID)
         if trusted_role and trusted_role not in interaction.user.roles:
@@ -699,12 +776,13 @@ async def suggestdealer_cmd(interaction: discord.Interaction, dealer_name: str, 
 
 @client.tree.command(name="leaderboard", description="Shows top rated dealers and most active reviewers")
 async def leaderboard_cmd(interaction: discord.Interaction):
-    reviews = load_reviews()
+    all_reviews = await db_get_all_reviews()
 
     # Top dealers by rating (min 3 reviews)
     dealer_ratings = []
     for dealer in get_all_dealers():
-        rating, count = get_dealer_rating(dealer["name"])
+        dealer_reviews = all_reviews.get(dealer["name"], [])
+        rating, count = get_dealer_rating_sync(dealer_reviews)
         if rating and count >= 3:
             dealer_ratings.append((dealer["name"], rating, count))
     dealer_ratings.sort(key=lambda x: (x[1], x[2]), reverse=True)
@@ -713,7 +791,7 @@ async def leaderboard_cmd(interaction: discord.Interaction):
     # Top reviewers
     reviewer_counts = {}
     reviewer_names = {}
-    for dealer_reviews in reviews.values():
+    for dealer_reviews in all_reviews.values():
         for r in dealer_reviews:
             uid = r.get("user_id")
             if uid:
@@ -784,7 +862,7 @@ async def stats_cmd(interaction: discord.Interaction):
     if not is_mod(interaction.user):
         await interaction.response.send_message("🚫 You need Moderator permissions.", ephemeral=True)
         return
-    stats = load_stats()
+    stats = await db_get_all_stats()
     embed = discord.Embed(title="📊 Alert Statistics", color=discord.Color.dark_gold(), timestamp=datetime.now(timezone.utc))
     for dealer in get_all_dealers():
         count = stats.get(dealer["name"], 0)
@@ -883,9 +961,7 @@ async def warningdealer_cmd(interaction: discord.Interaction, dealer_name: str, 
     if not dealer:
         await interaction.response.send_message(f"⚠️ Dealer '{dealer_name}' not found.", ephemeral=True)
         return
-    warnings = load_warnings()
-    warnings[dealer["name"]] = reason
-    save_warnings(warnings)
+    await db_set_warning(dealer["name"], reason)
     await interaction.response.send_message(f"⚠️ Warning added to **{dealer['name']}**: {reason}", ephemeral=True)
 
 @client.tree.command(name="removewarning", description="🔒 Remove a warning from a dealer")
@@ -899,10 +975,9 @@ async def removewarning_cmd(interaction: discord.Interaction, dealer_name: str):
     if not dealer:
         await interaction.response.send_message(f"⚠️ Dealer '{dealer_name}' not found.", ephemeral=True)
         return
-    warnings = load_warnings()
-    if dealer["name"] in warnings:
-        del warnings[dealer["name"]]
-        save_warnings(warnings)
+    warning = await db_get_warning(dealer["name"])
+    if warning:
+        await db_remove_warning(dealer["name"])
         await interaction.response.send_message(f"✅ Warning removed from **{dealer['name']}**.", ephemeral=True)
     else:
         await interaction.response.send_message(f"⚠️ **{dealer['name']}** has no warning.", ephemeral=True)
@@ -917,8 +992,7 @@ async def deletereview_cmd(interaction: discord.Interaction, dealer_name: str, r
     if not dealer:
         await interaction.response.send_message(f"⚠️ Dealer '{dealer_name}' not found.", ephemeral=True)
         return
-    reviews = load_reviews()
-    dealer_reviews = reviews.get(dealer["name"], [])
+    dealer_reviews = await db_get_reviews(dealer["name"])
     if not dealer_reviews:
         await interaction.response.send_message(f"⚠️ No reviews found for **{dealer['name']}**.", ephemeral=True)
         return
@@ -926,9 +1000,8 @@ async def deletereview_cmd(interaction: discord.Interaction, dealer_name: str, r
     if idx < 0 or idx >= len(dealer_reviews):
         await interaction.response.send_message(f"⚠️ Review #{review_index} not found.", ephemeral=True)
         return
-    removed = dealer_reviews.pop(idx)
-    reviews[dealer["name"]] = dealer_reviews
-    save_reviews(reviews)
+    removed = dealer_reviews[idx]
+    await db_delete_review(removed["id"])
     await interaction.response.send_message(f"✅ Deleted review #{review_index} for **{dealer['name']}** by {removed.get('username', 'Unknown')}.", ephemeral=True)
 
 @client.tree.command(name="approvedealer", description="🔒 Approve a suggested dealer and add them")
