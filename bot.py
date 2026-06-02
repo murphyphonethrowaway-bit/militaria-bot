@@ -94,6 +94,9 @@ EMAIL_DEALERS = [
     {"name": "Combat Relics", "match": ["combat-relics.com", "combat relics"], "logo_file": "Combat_relics.png", "url": "https://www.combat-relics.com/"},
     {"name": "Tiger Militaria", "match": ["tigermilitaria.com", "tiger militaria"], "logo_file": "TigerMilitaria.png", "url": "https://tigermilitaria.com/shop?showPerPage=24"},
     {"name": "WAF Estate", "match": ["wehrmacht-awards.com", "waf estate", "e-stand", "estand", "militaria e-stand"], "logo_file": "waf.png", "url": "https://www.wehrmacht-awards.com/forums/forum/the-militaria-e-stand", "waf": True},
+    {"name": "EA Militaria", "match": ["ea-militaria.com", "ea militaria"], "logo_file": "eamilitaria.png", "url": "https://www.ea-militaria.com/new-items"},
+    {"name": "Militaria Plaza", "match": ["militariaplaza.nl", "militaria plaza"], "logo_file": "Militaria_Plaza.png", "url": "https://militariaplaza.nl/new"},
+    {"name": "The Collector's Guild", "match": ["germanmilitaria.com", "collector's guild", "collectors guild"], "logo_file": "germanmilitaria.png", "url": "https://www.germanmilitaria.com/Advanced.html"},
 ]
 
 # ==================== BOT SETUP ====================
@@ -172,6 +175,14 @@ def stars_display(rating):
 
 def get_all_dealers():
     return DEALERS + EMAIL_DEALERS
+
+async def dealer_autocomplete(interaction: discord.Interaction, current: str):
+    all_dealers = sorted(get_all_dealers(), key=lambda x: x["name"].lower())
+    return [
+        app_commands.Choice(name=d["name"], value=d["name"])
+        for d in all_dealers
+        if current.lower() in d["name"].lower()
+    ][:25]
 
 def find_dealer(name):
     name_lower = name.lower()
@@ -606,16 +617,14 @@ async def dealerprofile_cmd(interaction: discord.Interaction, dealer_name: str):
 
 @client.tree.command(name="ratedealer", description="Rate a dealer 1-5 stars with an optional review")
 @app_commands.describe(dealer_name="Name of the dealer", rating="Rating from 1 to 5 stars", review="Optional written review")
-@app_commands.choices(
-    dealer_name=[app_commands.Choice(name=d["name"], value=d["name"]) for d in sorted(DEALERS + EMAIL_DEALERS, key=lambda x: x["name"].lower())],
-    rating=[
-        app_commands.Choice(name="⭐ 1 Star", value=1),
-        app_commands.Choice(name="⭐⭐ 2 Stars", value=2),
-        app_commands.Choice(name="⭐⭐⭐ 3 Stars", value=3),
-        app_commands.Choice(name="⭐⭐⭐⭐ 4 Stars", value=4),
-        app_commands.Choice(name="⭐⭐⭐⭐⭐ 5 Stars", value=5),
-    ]
-)
+@app_commands.autocomplete(dealer_name=dealer_autocomplete)
+@app_commands.choices(rating=[
+    app_commands.Choice(name="⭐ 1 Star", value=1),
+    app_commands.Choice(name="⭐⭐ 2 Stars", value=2),
+    app_commands.Choice(name="⭐⭐⭐ 3 Stars", value=3),
+    app_commands.Choice(name="⭐⭐⭐⭐ 4 Stars", value=4),
+    app_commands.Choice(name="⭐⭐⭐⭐⭐ 5 Stars", value=5),
+])
 async def ratedealer_cmd(interaction: discord.Interaction, dealer_name: str, rating: int, review: str = None):
     dealer = find_dealer(dealer_name)
     if not dealer:
