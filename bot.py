@@ -564,7 +564,7 @@ async def myroles_cmd(interaction: discord.Interaction):
 
 @client.tree.command(name="dealerprofile", description="View a dealer's full profile including ratings and reviews")
 @app_commands.describe(dealer_name="Name of the dealer")
-
+@app_commands.autocomplete(dealer_name=dealer_autocomplete)
 async def dealerprofile_cmd(interaction: discord.Interaction, dealer_name: str):
     dealer = find_dealer(dealer_name)
     if not dealer:
@@ -885,7 +885,7 @@ async def adddealer_cmd(interaction: discord.Interaction, name: str, url: str, l
 
 @client.tree.command(name="warningdealer", description="🔒 Flag a dealer as untrustworthy")
 @app_commands.describe(dealer_name="Name of the dealer", reason="Reason for the warning")
-
+@app_commands.autocomplete(dealer_name=dealer_autocomplete)
 async def warningdealer_cmd(interaction: discord.Interaction, dealer_name: str, reason: str):
     if not is_mod(interaction.user):
         await interaction.response.send_message("🚫 You need Moderator permissions.", ephemeral=True)
@@ -901,7 +901,7 @@ async def warningdealer_cmd(interaction: discord.Interaction, dealer_name: str, 
 
 @client.tree.command(name="removewarning", description="🔒 Remove a warning from a dealer")
 @app_commands.describe(dealer_name="Name of the dealer")
-
+@app_commands.autocomplete(dealer_name=dealer_autocomplete)
 async def removewarning_cmd(interaction: discord.Interaction, dealer_name: str):
     if not is_mod(interaction.user):
         await interaction.response.send_message("🚫 You need Moderator permissions.", ephemeral=True)
