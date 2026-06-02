@@ -6,16 +6,35 @@ import json
 import os
 import imaplib
 import email
-import shlex
 import random
 from email.header import decode_header
 from bs4 import BeautifulSoup
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 # ==================== CONFIGURATION ====================
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHANNEL_ID = 1510653092721590323
 WAF_ROLE_ID = 1511101033349124318
+DEALER_SUGGEST_CHANNEL_ID = 1511487755266556034  # #dealer-reviews channel
+REVIEW_LOG_CHANNEL_ID = 1511487836220817561  # #review-log channel
+TRUSTED_REVIEWER_ROLE_ID = 1511487130189168802  # @Trusted Reviewer role
+TRUSTED_REVIEWER_THRESHOLD = 25  # Number of reviews to get Trusted Reviewer role
+CHECK_INTERVAL = 600
+EMAIL_CHECK_INTERVAL = 30
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+GMAIL_USER = "relicregistrybot@gmail.com"
+GMAIL_APP_PASSWORD = "tyvm uvfb jkxv ptvy"
+
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1 Safari/605.1.15",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.864.59 Safari/537.36 Edg/91.0.864.59",
+    "Mozilla/5.0 (Linux; Android 11; Pixel 4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.101 Mobile Safari/537.36",
+    "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+    "Mozilla/5.0 (compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm)",
+]
 
 WAF_CATEGORIES = [
     {"name": "All WAF Updates", "role_id": 1511112093774905386, "keywords": []},
@@ -39,40 +58,10 @@ WAF_CATEGORIES = [
     {"name": "Misc. Third Reich Items", "role_id": 1511119017807581347, "keywords": ["misc", "third reich", "nsdap"]},
 ]
 
-CHECK_INTERVAL = 600
-EMAIL_CHECK_INTERVAL = 30
-
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-
-GMAIL_USER = "relicregistrybot@gmail.com"
-GMAIL_APP_PASSWORD = "tyvm uvfb jkxv ptvy"
-
-USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1 Safari/605.1.15",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.864.59 Safari/537.36 Edg/91.0.864.59",
-    "Mozilla/5.0 (Linux; Android 11; Pixel 4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.101 Mobile Safari/537.36",
-    "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
-    "Mozilla/5.0 (compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm)",
-]
-
 # ==================== DEALER CONFIG ====================
 DEALERS = [
-    {
-        "name": "Weitze Militaria",
-        "url": "https://www.weitze.com/neuheiten.html",
-        "logo_file": "weitze.png",
-        "item_selector": "a[href*='/militaria/']",
-        "base_url": "https://www.weitze.com"
-    },
-    {
-        "name": "Linda Mae Militaria",
-        "url": "https://lindamaemilitaria.com/",
-        "logo_file": "lindamae.png",
-        "item_selector": ".product a",
-        "base_url": "https://lindamaemilitaria.com"
-    },
+    {"name": "Weitze Militaria", "url": "https://www.weitze.com/neuheiten.html", "logo_file": "weitze.png", "item_selector": "a[href*='/militaria/']", "base_url": "https://www.weitze.com"},
+    {"name": "Linda Mae Militaria", "url": "https://lindamaemilitaria.com/", "logo_file": "lindamae.png", "item_selector": ".product a", "base_url": "https://lindamaemilitaria.com"},
 ]
 
 EMAIL_DEALERS = [
@@ -123,9 +112,12 @@ class MilitariaBot(discord.Client):
 
 client = MilitariaBot()
 
+# ==================== FILE PATHS ====================
 SEEN_FILE = "seen_items.json"
 STATS_FILE = "stats.json"
 SEEN_EMAILS_FILE = "seen_emails.json"
+REVIEWS_FILE = "reviews.json"
+DEALER_WARNINGS_FILE = "dealer_warnings.json"
 
 bot_state = {
     "paused": False,
@@ -136,39 +128,59 @@ bot_state = {
     "last_promo": None,
 }
 
-def load_seen():
-    if os.path.exists(SEEN_FILE):
-        with open(SEEN_FILE, "r") as f:
+# ==================== DATA FUNCTIONS ====================
+def load_json(filepath, default):
+    if os.path.exists(filepath):
+        with open(filepath, "r") as f:
             return json.load(f)
-    return {}
+    return default
 
-def save_seen(seen):
-    with open(SEEN_FILE, "w") as f:
-        json.dump(seen, f)
+def save_json(filepath, data):
+    with open(filepath, "w") as f:
+        json.dump(data, f, indent=2)
 
-def load_stats():
-    if os.path.exists(STATS_FILE):
-        with open(STATS_FILE, "r") as f:
-            return json.load(f)
-    return {}
-
-def save_stats(stats):
-    with open(STATS_FILE, "w") as f:
-        json.dump(stats, f)
-
-def load_seen_emails():
-    if os.path.exists(SEEN_EMAILS_FILE):
-        with open(SEEN_EMAILS_FILE, "r") as f:
-            return set(json.load(f))
-    return set()
-
-def save_seen_emails(seen):
-    with open(SEEN_EMAILS_FILE, "w") as f:
-        json.dump(list(seen), f)
+def load_seen(): return load_json(SEEN_FILE, {})
+def save_seen(d): save_json(SEEN_FILE, d)
+def load_stats(): return load_json(STATS_FILE, {})
+def save_stats(d): save_json(STATS_FILE, d)
+def load_seen_emails(): return set(load_json(SEEN_EMAILS_FILE, []))
+def save_seen_emails(d): save_json(SEEN_EMAILS_FILE, list(d))
+def load_reviews(): return load_json(REVIEWS_FILE, {})
+def save_reviews(d): save_json(REVIEWS_FILE, d)
+def load_warnings(): return load_json(DEALER_WARNINGS_FILE, {})
+def save_warnings(d): save_json(DEALER_WARNINGS_FILE, d)
 
 def is_mod(member):
     return member.guild_permissions.administrator or member.guild_permissions.manage_guild
 
+# ==================== REVIEW HELPERS ====================
+def get_dealer_rating(dealer_name):
+    reviews = load_reviews()
+    dealer_reviews = reviews.get(dealer_name, [])
+    if not dealer_reviews:
+        return None, 0
+    avg = sum(r["rating"] for r in dealer_reviews) / len(dealer_reviews)
+    return round(avg, 1), len(dealer_reviews)
+
+def stars_display(rating):
+    if rating is None:
+        return "⭐ No ratings yet"
+    full = int(rating)
+    half = 1 if rating - full >= 0.5 else 0
+    empty = 5 - full - half
+    return "⭐" * full + "✨" * half + "☆" * empty + f" {rating}/5"
+
+def get_all_dealers():
+    return DEALERS + EMAIL_DEALERS
+
+def find_dealer(name):
+    name_lower = name.lower()
+    for d in get_all_dealers():
+        if d["name"].lower() == name_lower or name_lower in d["name"].lower():
+            return d
+    return None
+
+# ==================== SCRAPING ====================
 async def fetch_page(session, url, retries=3):
     for attempt in range(retries):
         try:
@@ -212,29 +224,31 @@ def extract_item_links(html_bytes, selector, base_url):
         print(f"Error parsing HTML: {e}")
         return set()
 
+# ==================== ALERTS ====================
 async def send_alert(channel, name, url, logo_file, test=False, waf=False):
+    warnings = load_warnings()
+    warning = warnings.get(name)
+    rating, review_count = get_dealer_rating(name)
+
     title = f"🧪 TEST — {name}" if test else f"🆕 New Items at {name}!"
     description = f"This is a test notification for [{name}]({url})\n\n[**Click here to view items →**]({url})" if test else f"New items have been added to [{name}]({url})\n\n[**Click here to view new items →**]({url})"
 
-    embed = discord.Embed(
-        title=title,
-        description=description,
-        color=discord.Color.blurple() if test else discord.Color.dark_gold(),
-        timestamp=datetime.now(timezone.utc)
-    )
+    if warning and not test:
+        description = f"⚠️ **WARNING: {warning}**\n\n" + description
+
+    color = discord.Color.blurple() if test else (discord.Color.red() if warning else discord.Color.dark_gold())
+
+    embed = discord.Embed(title=title, description=description, color=color, timestamp=datetime.now(timezone.utc))
+    embed.add_field(name="Rating", value=stars_display(rating), inline=True)
+    embed.add_field(name="Total Reviews", value=f"📝 {review_count}", inline=True)
     embed.set_footer(text="The Relic Registry — Dealer Update")
 
     file = None
     if os.path.exists(logo_file):
         file = discord.File(logo_file, filename="logo.png")
         embed.set_thumbnail(url="attachment://logo.png")
-    else:
-        print(f"Logo not found at {logo_file}")
 
-    # For WAF alerts, ping matching category roles based on subject
-    content_msg = None
-    if waf and not test:
-        content_msg = f"<@&{WAF_ROLE_ID}> New WAF Estate listing!"
+    content_msg = f"<@&{WAF_ROLE_ID}> New WAF Estate listing!" if waf and not test else None
 
     try:
         if file:
@@ -314,13 +328,14 @@ def check_gmail(seen_emails):
         print(f"[Gmail] Error checking email: {e}")
     return triggered
 
+# ==================== BACKGROUND TASKS ====================
 async def check_all_dealers():
     await client.wait_until_ready()
     channel = client.get_channel(CHANNEL_ID)
     if not channel:
         print("ERROR: Could not find channel.")
         return
-    print(f"Bot ready! Monitoring {len(DEALERS)} web dealers + {len(EMAIL_DEALERS)} email dealers. Checking every {CHECK_INTERVAL//60} minutes.")
+    print(f"Bot ready! Monitoring {len(DEALERS)} web dealers + {len(EMAIL_DEALERS)} email dealers.")
     while not client.is_closed():
         if bot_state["paused"] and not bot_state["force_rescan"]:
             await asyncio.sleep(30)
@@ -368,7 +383,6 @@ async def send_promo():
     while not client.is_closed():
         await asyncio.sleep(48 * 3600)
         if bot_state["promo_paused"]:
-            print("Promo is paused — skipping.")
             continue
         banner_file = os.path.join(SCRIPT_DIR, "logos", "Server_Banner.png")
         embed = discord.Embed(
@@ -396,35 +410,45 @@ async def send_promo():
 
 @client.tree.command(name="help", description="Shows all available bot commands")
 async def help_cmd(interaction: discord.Interaction):
-    embed = discord.Embed(title="🎖️ The Relic Registry — Dealer Update Bot Commands", color=discord.Color.dark_gold())
-    embed.add_field(name="/help", value="Shows this help message", inline=False)
-    embed.add_field(name="/dealers", value="Lists all monitored dealers with links", inline=False)
-    embed.add_field(name="/status", value="Shows which dealers are reachable", inline=False)
-    embed.add_field(name="/lastcheck", value="Shows when the bot last checked dealers", inline=False)
-    embed.add_field(name="/joinwaf", value="Subscribe to WAF Estate alerts", inline=False)
-    embed.add_field(name="/leavewaf", value="Unsubscribe from WAF Estate alerts", inline=False)
-    embed.add_field(name="/myroles", value="Shows your current alert subscriptions", inline=False)
-    embed.add_field(name="/rescan 🔒", value="Forces an immediate check of all dealers", inline=False)
-    embed.add_field(name="/pause 🔒", value="Pauses automatic dealer checking", inline=False)
-    embed.add_field(name="/resume 🔒", value="Resumes automatic dealer checking", inline=False)
-    embed.add_field(name="/stats 🔒", value="Shows alert counts per dealer", inline=False)
-    embed.add_field(name="/test 🔒", value="Sends test notifications for all dealers", inline=False)
-    embed.add_field(name="/promo 🔒", value="Sends the server promo manually", inline=False)
-    embed.add_field(name="/pausepromo 🔒", value="Pauses the 48 hour auto-promo", inline=False)
-    embed.add_field(name="/resumepromo 🔒", value="Resumes the auto-promo", inline=False)
-    embed.add_field(name="/adddealer 🔒", value="Add a new dealer", inline=False)
-    embed.add_field(name="/nextemail 🔒", value="Shows countdown to next email check", inline=False)
-    embed.add_field(name="/nextpromo 🔒", value="Shows countdown to next promo message", inline=False)
+    embed = discord.Embed(title="🎖️ The Relic Registry — Commands", color=discord.Color.dark_gold())
+    embed.add_field(name="👥 Member Commands", value="\u200b", inline=False)
+    embed.add_field(name="/help", value="Shows this message", inline=True)
+    embed.add_field(name="/dealers", value="Lists all monitored dealers", inline=True)
+    embed.add_field(name="/status", value="Checks dealer site status", inline=True)
+    embed.add_field(name="/lastcheck", value="Last check time", inline=True)
+    embed.add_field(name="/joinwaf", value="Subscribe to WAF alerts", inline=True)
+    embed.add_field(name="/leavewaf", value="Unsubscribe from WAF", inline=True)
+    embed.add_field(name="/myroles", value="Your WAF subscriptions", inline=True)
+    embed.add_field(name="/dealerprofile", value="View a dealer's profile", inline=True)
+    embed.add_field(name="/ratedealer", value="Rate a dealer 1-5 stars", inline=True)
+    embed.add_field(name="/suggestdealer", value="Suggest a new dealer", inline=True)
+    embed.add_field(name="/leaderboard", value="Top dealers & reviewers", inline=True)
+    embed.add_field(name="🔒 Mod Commands", value="\u200b", inline=False)
+    embed.add_field(name="/rescan", value="Force immediate check", inline=True)
+    embed.add_field(name="/pause /resume", value="Pause/resume bot", inline=True)
+    embed.add_field(name="/stats", value="Alert statistics", inline=True)
+    embed.add_field(name="/test", value="Test notifications", inline=True)
+    embed.add_field(name="/promo", value="Send promo manually", inline=True)
+    embed.add_field(name="/pausepromo /resumepromo", value="Pause/resume auto-promo", inline=True)
+    embed.add_field(name="/adddealer", value="Add a new dealer", inline=True)
+    embed.add_field(name="/warningdealer", value="Flag dealer as untrustworthy", inline=True)
+    embed.add_field(name="/removewarning", value="Remove dealer warning", inline=True)
+    embed.add_field(name="/deletereview", value="Delete an abusive review", inline=True)
+    embed.add_field(name="/approvedealer", value="Approve a dealer suggestion", inline=True)
+    embed.add_field(name="/nextemail", value="Next email check countdown", inline=True)
+    embed.add_field(name="/nextpromo", value="Next promo countdown", inline=True)
     embed.set_footer(text="🔒 = Mod only")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @client.tree.command(name="dealers", description="Lists all monitored dealers")
 async def dealers_cmd(interaction: discord.Interaction):
-    embed = discord.Embed(title="🏪 Monitored Dealers", description="All dealers currently being monitored:", color=discord.Color.dark_gold())
+    embed = discord.Embed(title="🏪 Monitored Dealers", color=discord.Color.dark_gold())
     for dealer in DEALERS:
-        embed.add_field(name=f"🌐 {dealer['name']}", value=f"[View New Items]({dealer['url']})", inline=True)
+        rating, count = get_dealer_rating(dealer["name"])
+        embed.add_field(name=f"🌐 {dealer['name']}", value=f"[Visit]({dealer['url']})\n{stars_display(rating)}", inline=True)
     for dealer in EMAIL_DEALERS:
-        embed.add_field(name=f"📧 {dealer['name']}", value=f"[Visit Site]({dealer['url']})", inline=True)
+        rating, count = get_dealer_rating(dealer["name"])
+        embed.add_field(name=f"📧 {dealer['name']}", value=f"[Visit]({dealer['url']})\n{stars_display(rating)}", inline=True)
     embed.set_footer(text="The Relic Registry — Dealer Update")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -440,7 +464,6 @@ async def status_cmd(interaction: discord.Interaction):
             await asyncio.sleep(1)
     for dealer in EMAIL_DEALERS:
         embed.add_field(name=dealer["name"], value="📧 Via Email", inline=True)
-    embed.set_footer(text="The Relic Registry — Dealer Update")
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 @client.tree.command(name="lastcheck", description="Shows when the bot last checked dealers")
@@ -451,21 +474,11 @@ async def lastcheck_cmd(interaction: discord.Interaction):
     else:
         await interaction.response.send_message("⚠️ No check has run yet since the bot started.", ephemeral=True)
 
-
-
 @client.tree.command(name="joinwaf", description="Subscribe to WAF Estate alerts by category")
 async def joinwaf_cmd(interaction: discord.Interaction):
     try:
-        options = [
-            discord.SelectOption(label=cat["name"][:100], value=str(cat["role_id"]))
-            for cat in WAF_CATEGORIES
-        ]
-        select = discord.ui.Select(
-            placeholder="Choose WAF categories...",
-            min_values=1,
-            max_values=len(options),
-            options=options
-        )
+        options = [discord.SelectOption(label=cat["name"][:100], value=str(cat["role_id"])) for cat in WAF_CATEGORIES]
+        select = discord.ui.Select(placeholder="Choose WAF categories...", min_values=1, max_values=len(options), options=options)
 
         async def select_callback(i: discord.Interaction):
             added = []
@@ -492,33 +505,22 @@ async def joinwaf_cmd(interaction: discord.Interaction):
         select.callback = select_callback
         view = discord.ui.View()
         view.add_item(select)
-        await interaction.response.send_message(
-            "🎖️ **Select which WAF Estate categories you want alerts for:**",
-            view=view,
-            ephemeral=True
-        )
+        await interaction.response.send_message("🎖️ **Select which WAF Estate categories you want alerts for:**", view=view, ephemeral=True)
     except Exception as e:
         print(f"joinwaf error: {e}")
         await interaction.response.send_message(f"⚠️ Error: {e}", ephemeral=True)
 
 @client.tree.command(name="leavewaf", description="Unsubscribe from WAF Estate alerts")
 async def leavewaf_cmd(interaction: discord.Interaction):
-    waf_roles = [r for r in interaction.user.roles if any(r.id == cat["role_id"] for cat in WAF_CATEGORIES)]
-    if not waf_roles:
-        await interaction.response.send_message("⚠️ You don't have any WAF Estate subscriptions.", ephemeral=True)
-        return
-
     options = [
         discord.SelectOption(label=cat["name"], value=str(cat["role_id"]))
         for cat in WAF_CATEGORIES
         if any(r.id == cat["role_id"] for r in interaction.user.roles)
     ]
-    select = discord.ui.Select(
-        placeholder="Choose categories to unsubscribe from...",
-        min_values=1,
-        max_values=len(options),
-        options=options
-    )
+    if not options:
+        await interaction.response.send_message("⚠️ You don't have any WAF Estate subscriptions.", ephemeral=True)
+        return
+    select = discord.ui.Select(placeholder="Choose categories to unsubscribe from...", min_values=1, max_values=len(options), options=options)
 
     async def leave_callback(i: discord.Interaction):
         removed = []
@@ -528,7 +530,6 @@ async def leavewaf_cmd(interaction: discord.Interaction):
             if role and role in i.user.roles:
                 await i.user.remove_roles(role)
                 removed.append(role.name)
-        # Remove base WAF role if no category roles left
         remaining = [r for r in i.user.roles if any(r.id == cat["role_id"] for cat in WAF_CATEGORIES)]
         if not remaining:
             waf_role = i.guild.get_role(WAF_ROLE_ID)
@@ -541,77 +542,265 @@ async def leavewaf_cmd(interaction: discord.Interaction):
     view.add_item(select)
     await interaction.response.send_message("Select categories to unsubscribe from:", view=view, ephemeral=True)
 
-@client.tree.command(name="myroles", description="Shows your current alert subscriptions")
+@client.tree.command(name="myroles", description="Shows your current WAF alert subscriptions")
 async def myroles_cmd(interaction: discord.Interaction):
     embed = discord.Embed(title="🎖️ Your WAF Alert Subscriptions", color=discord.Color.dark_gold(), timestamp=datetime.now(timezone.utc))
-    subscribed = []
-    not_subscribed = []
-    for cat in WAF_CATEGORIES:
-        role = interaction.guild.get_role(cat["role_id"])
-        if role and role in interaction.user.roles:
-            subscribed.append(cat["name"])
-        else:
-            not_subscribed.append(cat["name"])
-    if subscribed:
-        embed.add_field(name="✅ Subscribed", value="\n".join(subscribed), inline=False)
-    else:
-        embed.add_field(name="✅ Subscribed", value="None — use `/joinwaf` to subscribe", inline=False)
+    subscribed = [cat["name"] for cat in WAF_CATEGORIES if any(r.id == cat["role_id"] for r in interaction.user.roles)]
+    embed.add_field(name="✅ Subscribed", value="\n".join(subscribed) if subscribed else "None — use `/joinwaf` to subscribe", inline=False)
     embed.set_footer(text="The Relic Registry — Dealer Update")
     await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@client.tree.command(name="dealerprofile", description="View a dealer's full profile including ratings and reviews")
+@app_commands.describe(dealer_name="Name of the dealer")
+
+@app_commands.choices(dealer_name=[app_commands.Choice(name=d["name"], value=d["name"]) for d in sorted(DEALERS + EMAIL_DEALERS, key=lambda x: x["name"].lower())])
+async def dealerprofile_cmd(interaction: discord.Interaction, dealer_name: str):
+    dealer = find_dealer(dealer_name)
+    if not dealer:
+        await interaction.response.send_message(f"⚠️ Dealer '{dealer_name}' not found. Use `/dealers` to see all dealers.", ephemeral=True)
+        return
+
+    reviews = load_reviews()
+    warnings = load_warnings()
+    dealer_reviews = reviews.get(dealer["name"], [])
+    rating, count = get_dealer_rating(dealer["name"])
+    warning = warnings.get(dealer["name"])
+
+    logo_file = os.path.join(SCRIPT_DIR, "logos", dealer["logo_file"])
+
+    color = discord.Color.red() if warning else discord.Color.dark_gold()
+    embed = discord.Embed(title=f"🏪 {dealer['name']}", color=color, timestamp=datetime.now(timezone.utc))
+
+    if warning:
+        embed.add_field(name="⚠️ WARNING", value=f"```{warning}```", inline=False)
+
+    embed.add_field(name="Website", value=f"[Visit Site]({dealer['url']})", inline=True)
+    embed.add_field(name="Rating", value=stars_display(rating), inline=True)
+    embed.add_field(name="Total Reviews", value=f"📝 {count}", inline=True)
+
+    # Show last 5 reviews (anonymous)
+    if dealer_reviews:
+        last_5 = dealer_reviews[-5:]
+        review_text = ""
+        for r in reversed(last_5):
+            stars = "⭐" * r["rating"]
+            review_text += f"{stars}\n"
+            if r.get("review"):
+                review_text += f"*\"{r['review'][:100]}\"*\n"
+            review_text += f"<t:{r['timestamp']}:R>\n\n"
+        embed.add_field(name="Recent Reviews", value=review_text[:1024], inline=False)
+    else:
+        embed.add_field(name="Recent Reviews", value="No reviews yet — be the first with `/ratedealer`!", inline=False)
+
+    embed.set_footer(text="The Relic Registry — Dealer Update")
+
+    file = None
+    if os.path.exists(logo_file):
+        file = discord.File(logo_file, filename="logo.png")
+        embed.set_thumbnail(url="attachment://logo.png")
+
+    if file:
+        await interaction.response.send_message(file=file, embed=embed, ephemeral=True)
+    else:
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@client.tree.command(name="ratedealer", description="Rate a dealer 1-5 stars with an optional review")
+@app_commands.describe(dealer_name="Name of the dealer", rating="Rating from 1 to 5 stars", review="Optional written review")
+@app_commands.choices(
+    dealer_name=[app_commands.Choice(name=d["name"], value=d["name"]) for d in sorted(DEALERS + EMAIL_DEALERS, key=lambda x: x["name"].lower())],
+    rating=[
+        app_commands.Choice(name="⭐ 1 Star", value=1),
+        app_commands.Choice(name="⭐⭐ 2 Stars", value=2),
+        app_commands.Choice(name="⭐⭐⭐ 3 Stars", value=3),
+        app_commands.Choice(name="⭐⭐⭐⭐ 4 Stars", value=4),
+        app_commands.Choice(name="⭐⭐⭐⭐⭐ 5 Stars", value=5),
+    ]
+)
+async def ratedealer_cmd(interaction: discord.Interaction, dealer_name: str, rating: int, review: str = None):
+    dealer = find_dealer(dealer_name)
+    if not dealer:
+        await interaction.response.send_message(f"⚠️ Dealer '{dealer_name}' not found. Use `/dealers` to see all dealers.", ephemeral=True)
+        return
+
+    reviews = load_reviews()
+    dealer_reviews = reviews.get(dealer["name"], [])
+
+    # Check if user already reviewed today
+    today = datetime.now(timezone.utc).date().isoformat()
+    user_id = str(interaction.user.id)
+    already_today = any(r.get("user_id") == user_id and r.get("date") == today for r in dealer_reviews)
+
+    if already_today:
+        await interaction.response.send_message(f"⚠️ You've already reviewed **{dealer['name']}** today. Come back tomorrow!", ephemeral=True)
+        return
+
+    # Save review
+    new_review = {
+        "user_id": user_id,
+        "username": str(interaction.user),
+        "rating": rating,
+        "review": review,
+        "date": today,
+        "timestamp": int(datetime.now(timezone.utc).timestamp())
+    }
+
+    dealer_reviews.append(new_review)
+    reviews[dealer["name"]] = dealer_reviews
+    save_reviews(reviews)
+
+    # Check for Trusted Reviewer role
+    total_user_reviews = sum(1 for d_reviews in reviews.values() for r in d_reviews if r.get("user_id") == user_id)
+    if total_user_reviews >= TRUSTED_REVIEWER_THRESHOLD:
+        trusted_role = interaction.guild.get_role(TRUSTED_REVIEWER_ROLE_ID)
+        if trusted_role and trusted_role not in interaction.user.roles:
+            await interaction.user.add_roles(trusted_role)
+            await interaction.followup.send(f"🎖️ Congratulations! You've earned the **@Trusted Reviewer** role for leaving {TRUSTED_REVIEWER_THRESHOLD} reviews!", ephemeral=True)
+
+    # Confirm to user
+    stars = "⭐" * rating
+    await interaction.response.send_message(f"✅ Thanks for rating **{dealer['name']}** {stars}!", ephemeral=True)
+
+    # Log to review-log channel (shows username to mods)
+    log_channel = client.get_channel(REVIEW_LOG_CHANNEL_ID)
+    if log_channel:
+        log_embed = discord.Embed(
+            title=f"New Review — {dealer['name']}",
+            color=discord.Color.dark_gold(),
+            timestamp=datetime.now(timezone.utc)
+        )
+        log_embed.add_field(name="Member", value=f"{interaction.user.mention} ({interaction.user})", inline=True)
+        log_embed.add_field(name="Rating", value=stars, inline=True)
+        if review:
+            log_embed.add_field(name="Review", value=review[:500], inline=False)
+        log_embed.set_footer(text="Visible to mods only")
+        await log_channel.send(embed=log_embed)
+
+@client.tree.command(name="suggestdealer", description="Suggest a new dealer to be added to the bot")
+@app_commands.describe(dealer_name="Name of the dealer", url="Dealer website URL", reason="Why should this dealer be added?")
+async def suggestdealer_cmd(interaction: discord.Interaction, dealer_name: str, url: str, reason: str = None):
+    suggest_channel = client.get_channel(DEALER_SUGGEST_CHANNEL_ID)
+
+    embed = discord.Embed(
+        title="📬 New Dealer Suggestion",
+        color=discord.Color.blurple(),
+        timestamp=datetime.now(timezone.utc)
+    )
+    embed.add_field(name="Dealer Name", value=dealer_name, inline=True)
+    embed.add_field(name="URL", value=url, inline=True)
+    embed.add_field(name="Suggested By", value=f"{interaction.user.mention} ({interaction.user})", inline=False)
+    if reason:
+        embed.add_field(name="Reason", value=reason, inline=False)
+    embed.add_field(name="Action", value="Use `/approvedealer` to approve or simply ignore to reject.", inline=False)
+    embed.set_footer(text="Dealer Suggestion")
+
+    if suggest_channel:
+        await suggest_channel.send(embed=embed)
+        await interaction.response.send_message(f"✅ Your suggestion for **{dealer_name}** has been sent to the mods for review!", ephemeral=True)
+    else:
+        await interaction.response.send_message("⚠️ Could not find the suggestions channel. Please contact a mod.", ephemeral=True)
+
+@client.tree.command(name="leaderboard", description="Shows top rated dealers and most active reviewers")
+async def leaderboard_cmd(interaction: discord.Interaction):
+    reviews = load_reviews()
+
+    # Top dealers by rating (min 3 reviews)
+    dealer_ratings = []
+    for dealer in get_all_dealers():
+        rating, count = get_dealer_rating(dealer["name"])
+        if rating and count >= 3:
+            dealer_ratings.append((dealer["name"], rating, count))
+    dealer_ratings.sort(key=lambda x: (x[1], x[2]), reverse=True)
+    top_dealers = dealer_ratings[:10]
+
+    # Top reviewers
+    reviewer_counts = {}
+    reviewer_names = {}
+    for dealer_reviews in reviews.values():
+        for r in dealer_reviews:
+            uid = r.get("user_id")
+            if uid:
+                reviewer_counts[uid] = reviewer_counts.get(uid, 0) + 1
+                reviewer_names[uid] = r.get("username", "Unknown")
+    top_reviewers = sorted(reviewer_counts.items(), key=lambda x: x[1], reverse=True)[:10]
+
+    embed = discord.Embed(title="🏆 The Relic Registry Leaderboard", color=discord.Color.gold(), timestamp=datetime.now(timezone.utc))
+
+    if top_dealers:
+        dealer_text = ""
+        medals = ["🥇", "🥈", "🥉"]
+        for i, (name, rating, count) in enumerate(top_dealers):
+            medal = medals[i] if i < 3 else f"**{i+1}.**"
+            dealer_text += f"{medal} **{name}** — {stars_display(rating)} ({count} reviews)\n"
+        embed.add_field(name="⭐ Top Rated Dealers", value=dealer_text, inline=False)
+    else:
+        embed.add_field(name="⭐ Top Rated Dealers", value="Not enough reviews yet — use `/ratedealer` to get started!", inline=False)
+
+    if top_reviewers:
+        reviewer_text = ""
+        medals = ["🥇", "🥈", "🥉"]
+        for i, (uid, count) in enumerate(top_reviewers):
+            medal = medals[i] if i < 3 else f"**{i+1}.**"
+            name = reviewer_names.get(uid, "Unknown")
+            reviewer_text += f"{medal} **{name}** — {count} review(s)\n"
+        embed.add_field(name="📝 Most Active Reviewers", value=reviewer_text, inline=False)
+    else:
+        embed.add_field(name="📝 Most Active Reviewers", value="No reviews yet!", inline=False)
+
+    embed.set_footer(text="The Relic Registry — Dealer Update")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+# ==================== MOD COMMANDS ====================
 
 @client.tree.command(name="rescan", description="🔒 Force an immediate check of all dealers")
 async def rescan_cmd(interaction: discord.Interaction):
     if not is_mod(interaction.user):
-        await interaction.response.send_message("🚫 You need Moderator permissions to use this command.", ephemeral=True)
+        await interaction.response.send_message("🚫 You need Moderator permissions.", ephemeral=True)
         return
     bot_state["force_rescan"] = True
-    await interaction.response.send_message("🔄 Forcing an immediate rescan of all dealers...", ephemeral=True)
+    await interaction.response.send_message("🔄 Forcing an immediate rescan...", ephemeral=True)
 
 @client.tree.command(name="pause", description="🔒 Pause automatic dealer checking")
 async def pause_cmd(interaction: discord.Interaction):
     if not is_mod(interaction.user):
-        await interaction.response.send_message("🚫 You need Moderator permissions to use this command.", ephemeral=True)
+        await interaction.response.send_message("🚫 You need Moderator permissions.", ephemeral=True)
         return
     if bot_state["paused"]:
-        await interaction.response.send_message("⚠️ Bot is already paused. Use `/resume` to turn it back on.", ephemeral=True)
+        await interaction.response.send_message("⚠️ Bot is already paused.", ephemeral=True)
     else:
         bot_state["paused"] = True
-        await interaction.response.send_message("⏸️ Bot paused — no more automatic checks until you use `/resume`.", ephemeral=True)
+        await interaction.response.send_message("⏸️ Bot paused.", ephemeral=True)
 
 @client.tree.command(name="resume", description="🔒 Resume automatic dealer checking")
 async def resume_cmd(interaction: discord.Interaction):
     if not is_mod(interaction.user):
-        await interaction.response.send_message("🚫 You need Moderator permissions to use this command.", ephemeral=True)
+        await interaction.response.send_message("🚫 You need Moderator permissions.", ephemeral=True)
         return
     if not bot_state["paused"]:
         await interaction.response.send_message("⚠️ Bot is already running.", ephemeral=True)
     else:
         bot_state["paused"] = False
-        await interaction.response.send_message("▶️ Bot resumed — automatic checks are back on!", ephemeral=True)
+        await interaction.response.send_message("▶️ Bot resumed!", ephemeral=True)
 
 @client.tree.command(name="stats", description="🔒 Shows alert counts per dealer")
 async def stats_cmd(interaction: discord.Interaction):
     if not is_mod(interaction.user):
-        await interaction.response.send_message("🚫 You need Moderator permissions to use this command.", ephemeral=True)
+        await interaction.response.send_message("🚫 You need Moderator permissions.", ephemeral=True)
         return
     stats = load_stats()
-    embed = discord.Embed(title="📊 Alert Statistics", description="Number of times each dealer has triggered an alert:", color=discord.Color.dark_gold(), timestamp=datetime.now(timezone.utc))
-    all_dealers = DEALERS + EMAIL_DEALERS
-    for dealer in all_dealers:
+    embed = discord.Embed(title="📊 Alert Statistics", color=discord.Color.dark_gold(), timestamp=datetime.now(timezone.utc))
+    for dealer in get_all_dealers():
         count = stats.get(dealer["name"], 0)
         embed.add_field(name=dealer["name"], value=f"🔔 {count} alert(s)", inline=True)
-    embed.set_footer(text="The Relic Registry — Dealer Update")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @client.tree.command(name="test", description="🔒 Send test notifications for all dealers")
 async def test_cmd(interaction: discord.Interaction):
     if not is_mod(interaction.user):
-        await interaction.response.send_message("🚫 You need Moderator permissions to use this command.", ephemeral=True)
+        await interaction.response.send_message("🚫 You need Moderator permissions.", ephemeral=True)
         return
-    await interaction.response.send_message("🧪 Running test — sending sample notifications...", ephemeral=True)
+    await interaction.response.send_message("🧪 Running test...", ephemeral=True)
     channel = client.get_channel(CHANNEL_ID)
-    all_dealers = DEALERS + EMAIL_DEALERS
-    for dealer in all_dealers:
+    for dealer in get_all_dealers():
         logo_file = os.path.join(SCRIPT_DIR, "logos", dealer["logo_file"])
         await send_alert(channel, dealer["name"], dealer["url"], logo_file, test=True)
         await asyncio.sleep(1)
@@ -620,7 +809,7 @@ async def test_cmd(interaction: discord.Interaction):
 @client.tree.command(name="promo", description="🔒 Send the server promo message manually")
 async def promo_cmd(interaction: discord.Interaction):
     if not is_mod(interaction.user):
-        await interaction.response.send_message("🚫 You need Moderator permissions to use this command.", ephemeral=True)
+        await interaction.response.send_message("🚫 You need Moderator permissions.", ephemeral=True)
         return
     channel = client.get_channel(CHANNEL_ID)
     banner_file = os.path.join(SCRIPT_DIR, "logos", "Server_Banner.png")
@@ -639,40 +828,34 @@ async def promo_cmd(interaction: discord.Interaction):
         await channel.send(file=file, embed=embed)
     else:
         await channel.send(embed=embed)
+    bot_state["last_promo"] = datetime.now(timezone.utc)
     await interaction.response.send_message("✅ Promo sent!", ephemeral=True)
 
-@client.tree.command(name="pausepromo", description="🔒 Pause the automatic 48 hour promo message")
+@client.tree.command(name="pausepromo", description="🔒 Pause the automatic 48 hour promo")
 async def pausepromo_cmd(interaction: discord.Interaction):
     if not is_mod(interaction.user):
-        await interaction.response.send_message("🚫 You need Moderator permissions to use this command.", ephemeral=True)
+        await interaction.response.send_message("🚫 You need Moderator permissions.", ephemeral=True)
         return
-    if bot_state["promo_paused"]:
-        await interaction.response.send_message("⚠️ Promo messages are already paused.", ephemeral=True)
-    else:
-        bot_state["promo_paused"] = True
-        await interaction.response.send_message("⏸️ Promo messages paused.", ephemeral=True)
+    bot_state["promo_paused"] = True
+    await interaction.response.send_message("⏸️ Promo messages paused.", ephemeral=True)
 
-@client.tree.command(name="resumepromo", description="🔒 Resume the automatic 48 hour promo message")
+@client.tree.command(name="resumepromo", description="🔒 Resume the automatic 48 hour promo")
 async def resumepromo_cmd(interaction: discord.Interaction):
     if not is_mod(interaction.user):
-        await interaction.response.send_message("🚫 You need Moderator permissions to use this command.", ephemeral=True)
+        await interaction.response.send_message("🚫 You need Moderator permissions.", ephemeral=True)
         return
-    if not bot_state["promo_paused"]:
-        await interaction.response.send_message("⚠️ Promo messages are already running.", ephemeral=True)
-    else:
-        bot_state["promo_paused"] = False
-        await interaction.response.send_message("▶️ Promo messages resumed!", ephemeral=True)
+    bot_state["promo_paused"] = False
+    await interaction.response.send_message("▶️ Promo messages resumed!", ephemeral=True)
 
 @client.tree.command(name="adddealer", description="🔒 Add a new dealer to monitor")
 @app_commands.describe(name="Dealer name", url="Dealer website URL", logo_url="Direct URL to dealer logo image")
 async def adddealer_cmd(interaction: discord.Interaction, name: str, url: str, logo_url: str = None):
     if not is_mod(interaction.user):
-        await interaction.response.send_message("🚫 You need Moderator permissions to use this command.", ephemeral=True)
+        await interaction.response.send_message("🚫 You need Moderator permissions.", ephemeral=True)
         return
     await interaction.response.defer(ephemeral=True)
     logo_filename = name.lower().replace(" ", "_").replace("'", "").replace(".", "") + ".png"
     logo_path = os.path.join(SCRIPT_DIR, "logos", logo_filename)
-
     if logo_url:
         async with aiohttp.ClientSession() as session:
             async with session.get(logo_url) as resp:
@@ -681,21 +864,9 @@ async def adddealer_cmd(interaction: discord.Interaction, name: str, url: str, l
                         f.write(await resp.read())
                 else:
                     logo_filename = None
-
-    match_keywords = [
-        url.replace("https://", "").replace("http://", "").replace("www.", "").split("/")[0],
-        name.lower()
-    ]
-
-    new_dealer = {"name": name, "match": match_keywords, "logo_file": logo_filename if logo_filename else "", "url": url}
-    EMAIL_DEALERS.append(new_dealer)
-
-    embed = discord.Embed(
-        title="✅ Dealer Added!",
-        description=f"**{name}** has been added to the email monitoring list!\n\n[Visit Site]({url})",
-        color=discord.Color.green(),
-        timestamp=datetime.now(timezone.utc)
-    )
+    match_keywords = [url.replace("https://", "").replace("http://", "").replace("www.", "").split("/")[0], name.lower()]
+    EMAIL_DEALERS.append({"name": name, "match": match_keywords, "logo_file": logo_filename or "", "url": url})
+    embed = discord.Embed(title="✅ Dealer Added!", description=f"**{name}** added to email monitoring!\n\n[Visit Site]({url})", color=discord.Color.green())
     if logo_filename and os.path.exists(logo_path):
         file = discord.File(logo_path, filename="logo.png")
         embed.set_thumbnail(url="attachment://logo.png")
@@ -703,39 +874,114 @@ async def adddealer_cmd(interaction: discord.Interaction, name: str, url: str, l
     else:
         await interaction.followup.send(embed=embed, ephemeral=True)
 
-# ==================== EVENTS ====================
+@client.tree.command(name="warningdealer", description="🔒 Flag a dealer as untrustworthy")
+@app_commands.describe(dealer_name="Name of the dealer", reason="Reason for the warning")
+
+@app_commands.choices(dealer_name=[app_commands.Choice(name=d["name"], value=d["name"]) for d in sorted(DEALERS + EMAIL_DEALERS, key=lambda x: x["name"].lower())])
+async def warningdealer_cmd(interaction: discord.Interaction, dealer_name: str, reason: str):
+    if not is_mod(interaction.user):
+        await interaction.response.send_message("🚫 You need Moderator permissions.", ephemeral=True)
+        return
+    dealer = find_dealer(dealer_name)
+    if not dealer:
+        await interaction.response.send_message(f"⚠️ Dealer '{dealer_name}' not found.", ephemeral=True)
+        return
+    warnings = load_warnings()
+    warnings[dealer["name"]] = reason
+    save_warnings(warnings)
+    await interaction.response.send_message(f"⚠️ Warning added to **{dealer['name']}**: {reason}", ephemeral=True)
+
+@client.tree.command(name="removewarning", description="🔒 Remove a warning from a dealer")
+@app_commands.describe(dealer_name="Name of the dealer")
+
+@app_commands.choices(dealer_name=[app_commands.Choice(name=d["name"], value=d["name"]) for d in sorted(DEALERS + EMAIL_DEALERS, key=lambda x: x["name"].lower())])
+async def removewarning_cmd(interaction: discord.Interaction, dealer_name: str):
+    if not is_mod(interaction.user):
+        await interaction.response.send_message("🚫 You need Moderator permissions.", ephemeral=True)
+        return
+    dealer = find_dealer(dealer_name)
+    if not dealer:
+        await interaction.response.send_message(f"⚠️ Dealer '{dealer_name}' not found.", ephemeral=True)
+        return
+    warnings = load_warnings()
+    if dealer["name"] in warnings:
+        del warnings[dealer["name"]]
+        save_warnings(warnings)
+        await interaction.response.send_message(f"✅ Warning removed from **{dealer['name']}**.", ephemeral=True)
+    else:
+        await interaction.response.send_message(f"⚠️ **{dealer['name']}** has no warning.", ephemeral=True)
+
+@client.tree.command(name="deletereview", description="🔒 Delete an abusive review")
+@app_commands.describe(dealer_name="Name of the dealer", review_index="Review number to delete (1 = most recent)")
+async def deletereview_cmd(interaction: discord.Interaction, dealer_name: str, review_index: int):
+    if not is_mod(interaction.user):
+        await interaction.response.send_message("🚫 You need Moderator permissions.", ephemeral=True)
+        return
+    dealer = find_dealer(dealer_name)
+    if not dealer:
+        await interaction.response.send_message(f"⚠️ Dealer '{dealer_name}' not found.", ephemeral=True)
+        return
+    reviews = load_reviews()
+    dealer_reviews = reviews.get(dealer["name"], [])
+    if not dealer_reviews:
+        await interaction.response.send_message(f"⚠️ No reviews found for **{dealer['name']}**.", ephemeral=True)
+        return
+    idx = len(dealer_reviews) - review_index
+    if idx < 0 or idx >= len(dealer_reviews):
+        await interaction.response.send_message(f"⚠️ Review #{review_index} not found.", ephemeral=True)
+        return
+    removed = dealer_reviews.pop(idx)
+    reviews[dealer["name"]] = dealer_reviews
+    save_reviews(reviews)
+    await interaction.response.send_message(f"✅ Deleted review #{review_index} for **{dealer['name']}** by {removed.get('username', 'Unknown')}.", ephemeral=True)
+
+@client.tree.command(name="approvedealer", description="🔒 Approve a suggested dealer and add them")
+@app_commands.describe(name="Dealer name", url="Dealer website URL", logo_url="Direct URL to dealer logo")
+async def approvedealer_cmd(interaction: discord.Interaction, name: str, url: str, logo_url: str = None):
+    if not is_mod(interaction.user):
+        await interaction.response.send_message("🚫 You need Moderator permissions.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    logo_filename = name.lower().replace(" ", "_").replace("'", "").replace(".", "") + ".png"
+    logo_path = os.path.join(SCRIPT_DIR, "logos", logo_filename)
+    if logo_url:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(logo_url) as resp:
+                if resp.status == 200:
+                    with open(logo_path, "wb") as f:
+                        f.write(await resp.read())
+    match_keywords = [url.replace("https://", "").replace("http://", "").replace("www.", "").split("/")[0], name.lower()]
+    EMAIL_DEALERS.append({"name": name, "match": match_keywords, "logo_file": logo_filename, "url": url})
+    await interaction.followup.send(f"✅ **{name}** has been approved and added to the bot!", ephemeral=True)
 
 @client.tree.command(name="nextemail", description="🔒 Shows countdown to next email check")
 async def nextemail_cmd(interaction: discord.Interaction):
     if not is_mod(interaction.user):
-        await interaction.response.send_message("🚫 You need Moderator permissions to use this command.", ephemeral=True)
+        await interaction.response.send_message("🚫 You need Moderator permissions.", ephemeral=True)
         return
     if bot_state["last_email_check"]:
-        next_check = bot_state["last_email_check"].timestamp() + EMAIL_CHECK_INTERVAL
-        ts = int(next_check)
+        next_ts = int(bot_state["last_email_check"].timestamp()) + EMAIL_CHECK_INTERVAL
         last_ts = int(bot_state["last_email_check"].timestamp())
-        msg = f"📧 **Next email check:** <t:{ts}:R> at <t:{ts}:T>\n🕐 **Last email check:** <t:{last_ts}:R>"
-        await interaction.response.send_message(msg, ephemeral=True)
+        await interaction.response.send_message(f"📧 **Next email check:** <t:{next_ts}:R>\n🕐 **Last check:** <t:{last_ts}:R>", ephemeral=True)
     else:
-        await interaction.response.send_message("⚠️ No email check has run yet since the bot started.", ephemeral=True)
+        await interaction.response.send_message("⚠️ No email check has run yet.", ephemeral=True)
 
-@client.tree.command(name="nextpromo", description="🔒 Shows countdown to next automatic promo message")
+@client.tree.command(name="nextpromo", description="🔒 Shows countdown to next automatic promo")
 async def nextpromo_cmd(interaction: discord.Interaction):
     if not is_mod(interaction.user):
-        await interaction.response.send_message("🚫 You need Moderator permissions to use this command.", ephemeral=True)
+        await interaction.response.send_message("🚫 You need Moderator permissions.", ephemeral=True)
         return
     if bot_state["promo_paused"]:
-        await interaction.response.send_message("⏸️ Promo messages are currently **paused**. Use `/resumepromo` to turn them back on.", ephemeral=True)
+        await interaction.response.send_message("⏸️ Promo is currently paused. Use `/resumepromo` to turn it back on.", ephemeral=True)
         return
     if bot_state["last_promo"]:
-        next_promo = bot_state["last_promo"].timestamp() + (48 * 3600)
-        ts = int(next_promo)
+        next_ts = int(bot_state["last_promo"].timestamp()) + (48 * 3600)
         last_ts = int(bot_state["last_promo"].timestamp())
-        msg = f"📣 **Next promo message:** <t:{ts}:R> at <t:{ts}:F>\n🕐 **Last promo sent:** <t:{last_ts}:R>"
-        await interaction.response.send_message(msg, ephemeral=True)
+        await interaction.response.send_message(f"📣 **Next promo:** <t:{next_ts}:R>\n🕐 **Last promo:** <t:{last_ts}:R>", ephemeral=True)
     else:
-        await interaction.response.send_message("📣 No promo has been sent yet since the bot started.\nFirst auto-promo will fire **48 hours** after the bot started.", ephemeral=True)
+        await interaction.response.send_message("📣 No promo sent yet. First auto-promo fires 48 hours after bot start.", ephemeral=True)
 
+# ==================== EVENTS ====================
 @client.event
 async def on_ready():
     print(f"Logged in as {client.user}")
