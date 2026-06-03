@@ -898,16 +898,19 @@ async def dealerprofile_cmd(interaction: discord.Interaction, dealer_name: str):
     app_commands.Choice(name="⭐⭐⭐⭐⭐ 5 Stars", value=5),
 ])
 async def ratedealer_cmd(interaction: discord.Interaction, dealer_name: str, rating: int, review: str = None):
+    # Defer immediately to avoid Discord timeout
+    await interaction.response.defer(ephemeral=True)
+
     dealer = find_dealer(dealer_name)
     if not dealer:
-        await interaction.response.send_message(f"⚠️ Dealer '{dealer_name}' not found. Use `/dealers` to see all dealers.", ephemeral=True)
+        await interaction.followup.send(f"⚠️ Dealer '{dealer_name}' not found. Use `/dealers` to see all dealers.", ephemeral=True)
         return
 
     user_id = str(interaction.user.id)
 
     # Check if user is blocked
     if await db_is_blocked(user_id):
-        await interaction.response.send_message("🚫 You have been restricted from leaving reviews on **The Relic Registry**. If you believe this is an error please contact a moderator at http://discord.gg/therelicregistry", ephemeral=True)
+        await interaction.followup.send("🚫 You have been restricted from leaving reviews on **The Relic Registry**. If you believe this is an error please contact a moderator at http://discord.gg/therelicregistry", ephemeral=True)
         return
 
     today = datetime.now(timezone.utc).date().isoformat()
@@ -915,14 +918,13 @@ async def ratedealer_cmd(interaction: discord.Interaction, dealer_name: str, rat
     already_today = any(str(r.get("user_id")) == user_id and r.get("date") == today for r in dealer_reviews)
 
     if already_today:
-        await interaction.response.send_message(f"⚠️ You've already reviewed **{dealer['name']}** today. Come back tomorrow!", ephemeral=True)
+        await interaction.followup.send(f"⚠️ You've already reviewed **{dealer['name']}** today. Come back tomorrow!", ephemeral=True)
         return
 
     ts = int(datetime.now(timezone.utc).timestamp())
     stars = "⭐" * rating
 
-    # Respond to Discord immediately to avoid timeout
-    await interaction.response.send_message(f"✅ Thanks for rating **{dealer['name']}** {stars}! Your review has been submitted.", ephemeral=True)
+    await interaction.followup.send(f"✅ Thanks for rating **{dealer['name']}** {stars}! Your review has been submitted.", ephemeral=True)
 
     # Do database work after responding
     review_id = await db_add_review(dealer["name"], user_id, str(interaction.user), rating, review, today, ts)
