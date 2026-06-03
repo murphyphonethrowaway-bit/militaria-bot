@@ -1,6 +1,7 @@
 import discord
 from discord import app_commands
 import asyncpg
+from aiohttp import web
 import asyncio
 import aiohttp
 import json
@@ -1059,11 +1060,49 @@ async def on_ready():
     if os.path.exists(logos_path):
         print(f"Logos found: {os.listdir(logos_path)}")
 
+async def handle_webhook(request):
+    """Receives webhook from Changedetection.io when a page changes."""
+    try:
+        dealer_name = request.query.get("dealer", "")
+        if not dealer_name:
+            return web.Response(text="Missing dealer parameter", status=400)
+
+        print(f"[Webhook] Change detected for: {dealer_name}")
+
+        dealer = find_dealer(dealer_name)
+        if not dealer:
+            print(f"[Webhook] Unknown dealer: {dealer_name}")
+            return web.Response(text="Unknown dealer", status=404)
+
+        channel = client.get_channel(CHANNEL_ID)
+        if channel:
+            logo_file = os.path.join(SCRIPT_DIR, "logos", dealer["logo_file"])
+            await db_increment_stat(dealer_name)
+            await send_alert(channel, dealer["name"], dealer["url"], logo_file)
+            print(f"[Webhook] Alert sent for {dealer_name}!")
+
+        return web.Response(text="OK", status=200)
+    except Exception as e:
+        print(f"[Webhook] Error: {e}")
+        return web.Response(text=str(e), status=500)
+
+async def start_web_server():
+    await client.wait_until_ready()
+    app = web.Application()
+    app.router.add_get("/alert", handle_webhook)
+    app.router.add_post("/alert", handle_webhook)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", 8080)
+    await site.start()
+    print("Webhook server running on port 8080!")
+
 async def main():
     async with client:
         client.loop.create_task(check_all_dealers())
         client.loop.create_task(check_email_dealers())
         client.loop.create_task(send_promo())
+        client.loop.create_task(start_web_server())
         await client.start(BOT_TOKEN)
 
 asyncio.run(main())
