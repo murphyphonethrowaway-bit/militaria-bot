@@ -2,6 +2,16 @@ import discord
 from discord import app_commands
 import asyncpg
 from aiohttp import web
+import logging
+import traceback
+
+# ==================== LOGGING SETUP ====================
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger("MilitariaBot")
 import asyncio
 import aiohttp
 import json
@@ -117,10 +127,16 @@ class MilitariaBot(discord.Client):
         self.db = None
 
     async def setup_hook(self):
-        self.db = await asyncpg.create_pool(DATABASE_URL)
-        await self.init_db()
-        await self.tree.sync()
-        print("Slash commands synced!")
+        try:
+            self.db = await asyncpg.create_pool(DATABASE_URL)
+            logger.info("Database connection pool created successfully")
+            await self.init_db()
+            await self.tree.sync()
+            logger.info("Slash commands synced!")
+        except Exception as e:
+            logger.error(f"Setup failed: {e}")
+            logger.error(traceback.format_exc())
+            raise
 
     async def init_db(self):
         async with self.db.acquire() as conn:
@@ -174,7 +190,7 @@ class MilitariaBot(discord.Client):
                     timestamp BIGINT NOT NULL
                 )
             ''')
-        print("Database initialized!")
+        logger.info("Database initialized successfully!")
 
 client = MilitariaBot()
 
@@ -448,7 +464,7 @@ async def send_alert(channel, name, url, logo_file, test=False, waf=False):
         else:
             await channel.send(content=content_msg, embed=embed)
     except Exception as e:
-        print(f"Failed to send message for {name}: {e}")
+        logger.error(f"Failed to send message for {name}: {e}\n{traceback.format_exc()}")
 
 async def check_dealer(session, dealer, seen, channel):
     name = dealer["name"]
@@ -492,7 +508,7 @@ async def check_gmail_async():
         mail.select("inbox")
         _, messages = mail.search(None, "UNSEEN")
         email_ids = messages[0].split()
-        print(f"[Gmail] Found {len(email_ids)} unread email(s).")
+        logger.info(f"[Gmail] Found {len(email_ids)} unread email(s).")
         for eid in email_ids:
             _, msg_data = mail.fetch(eid, "(RFC822)")
             msg = email.message_from_bytes(msg_data[0][1])
@@ -506,16 +522,16 @@ async def check_gmail_async():
             if isinstance(subject, bytes):
                 subject = subject.decode(errors="replace")
             subject = subject.lower()
-            print(f"[Gmail] New email from: {sender} | Subject: {subject}")
+            logger.info(f"[Gmail] New email from: {sender} | Subject: {subject}")
             for dealer in EMAIL_DEALERS:
                 for keyword in dealer["match"]:
                     if keyword.lower() in sender or keyword.lower() in subject:
-                        print(f"[Gmail] Matched dealer: {dealer['name']}")
+                        logger.info(f"[Gmail] Matched dealer: {dealer['name']}")
                         triggered.append(dealer)
                         break
         mail.logout()
     except Exception as e:
-        print(f"[Gmail] Error checking email: {e}")
+        logger.error(f"[Gmail] Error checking email: {e}\n{traceback.format_exc()}")
     return triggered
 
 # ==================== BACKGROUND TASKS ====================
@@ -525,13 +541,13 @@ async def check_all_dealers():
     if not channel:
         print("ERROR: Could not find channel.")
         return
-    print(f"Bot ready! Monitoring {len(DEALERS)} web dealers + {len(EMAIL_DEALERS)} email dealers.")
+    logger.info(f"Bot ready! Monitoring {len(DEALERS)} web dealers + {len(EMAIL_DEALERS)} email dealers.")
     while not client.is_closed():
         if bot_state["paused"] and not bot_state["force_rescan"]:
             await asyncio.sleep(30)
             continue
         bot_state["force_rescan"] = False
-        print(f"\n--- Checking dealers at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---")
+        logger.info(f"--- Checking dealers at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---")
         bot_state["last_check"] = datetime.now(timezone.utc)
         seen = load_seen()
         async with aiohttp.ClientSession() as session:
@@ -539,7 +555,7 @@ async def check_all_dealers():
                 await check_dealer(session, dealer, seen, channel)
                 await asyncio.sleep(2)
         save_seen(seen)
-        print(f"--- Done. Next check in {CHECK_INTERVAL//60} minutes. ---")
+        logger.info(f"--- Done. Next check in {CHECK_INTERVAL//60} minutes. ---")
         await asyncio.sleep(CHECK_INTERVAL)
 
 async def check_email_dealers():
@@ -547,7 +563,7 @@ async def check_email_dealers():
     channel = client.get_channel(CHANNEL_ID)
     if not channel:
         return
-    print(f"Email checker ready! Checking every {EMAIL_CHECK_INTERVAL} seconds.")
+    logger.info(f"Email checker ready! Checking every {EMAIL_CHECK_INTERVAL} seconds.")
     while not client.is_closed():
         if bot_state["paused"]:
             await asyncio.sleep(30)
@@ -912,50 +928,57 @@ async def ratedealer_cmd(interaction: discord.Interaction, dealer_name: str, rat
         return
 
     ts = int(datetime.now(timezone.utc).timestamp())
+    stars = "⭐" * rating
+
+    # Respond to Discord immediately to avoid timeout
+    await interaction.response.send_message(f"✅ Thanks for rating **{dealer['name']}** {stars}! Your review has been submitted.", ephemeral=True)
+
+    # Do database work after responding
     review_id = await db_add_review(dealer["name"], user_id, str(interaction.user), rating, review, today, ts)
 
     # Check for Trusted Reviewer role
-    all_reviews = await db_get_all_reviews(status="approved")
-    total_user_reviews = sum(1 for d_reviews in all_reviews.values() for r in d_reviews if str(r.get("user_id")) == user_id)
-    if total_user_reviews >= TRUSTED_REVIEWER_THRESHOLD:
-        trusted_role = interaction.guild.get_role(TRUSTED_REVIEWER_ROLE_ID)
-        if trusted_role and trusted_role not in interaction.user.roles:
-            await interaction.user.add_roles(trusted_role)
-            await interaction.followup.send(f"🎖️ Congratulations! You've earned the **@Trusted Reviewer** role for leaving {TRUSTED_REVIEWER_THRESHOLD} reviews!", ephemeral=True)
-
-    # Confirm to user
-    stars = "⭐" * rating
-    await interaction.response.send_message(f"✅ Thanks for rating **{dealer['name']}** {stars}!", ephemeral=True)
+    try:
+        async with client.db.acquire() as conn:
+            total_user_reviews = await conn.fetchval("SELECT COUNT(*) FROM reviews WHERE user_id=$1 AND status='approved'", user_id)
+        if total_user_reviews >= TRUSTED_REVIEWER_THRESHOLD:
+            trusted_role = interaction.guild.get_role(TRUSTED_REVIEWER_ROLE_ID)
+            if trusted_role and trusted_role not in interaction.user.roles:
+                await interaction.user.add_roles(trusted_role)
+                await interaction.followup.send(f"🎖️ Congratulations! You've earned the **@Trusted Reviewer** role!", ephemeral=True)
+    except Exception as e:
+        logger.error(f"Trusted reviewer check error: {e}")
 
     # Log to review-log channel with buttons
-    log_channel = client.get_channel(REVIEW_LOG_CHANNEL_ID)
-    if log_channel:
-        # Get reviewer stats
-        stats = await db_get_reviewer_stats(user_id)
-        account_created = interaction.user.created_at
-        account_age = (datetime.now(timezone.utc) - account_created).days
-        years = account_age // 365
-        months = (account_age % 365) // 30
-        age_str = f"{years}y {months}m" if years > 0 else f"{months}m"
+    try:
+        log_channel = client.get_channel(REVIEW_LOG_CHANNEL_ID)
+        if log_channel:
+            stats = await db_get_reviewer_stats(user_id)
+            account_created = interaction.user.created_at
+            account_age = (datetime.now(timezone.utc) - account_created).days
+            years = account_age // 365
+            months = (account_age % 365) // 30
+            age_str = f"{years}y {months}m" if years > 0 else f"{months}m"
 
-        log_embed = discord.Embed(
-            title=f"📝 Pending Review — {dealer['name']}",
-            color=discord.Color.orange(),
-            timestamp=datetime.now(timezone.utc)
-        )
-        log_embed.add_field(name="Member", value=f"{interaction.user.mention}\n({interaction.user})", inline=True)
-        log_embed.add_field(name="Rating", value=stars, inline=True)
-        log_embed.add_field(name="Account Age", value=age_str, inline=True)
-        log_embed.add_field(name="Server", value=interaction.guild.name if interaction.guild else "DM", inline=True)
-        reviews_val = f"✅ {stats['approved']} approved\n❌ {stats['declined']} declined\n⏳ {stats['pending']} pending"
-        log_embed.add_field(name="Reviews", value=reviews_val, inline=True)
-        log_embed.add_field(name="Warnings", value=f"⚠️ {stats['warnings']} warning(s)", inline=True)
-        if review:
-            log_embed.add_field(name="Full Review", value=review[:500], inline=False)
-        log_embed.set_footer(text=f"Review ID: {review_id} | Use buttons to moderate")
+            log_embed = discord.Embed(
+                title=f"📝 Pending Review — {dealer['name']}",
+                color=discord.Color.orange(),
+                timestamp=datetime.now(timezone.utc)
+            )
+            log_embed.add_field(name="Member", value=f"{interaction.user.mention} ({interaction.user})", inline=True)
+            log_embed.add_field(name="Rating", value=stars, inline=True)
+            log_embed.add_field(name="Account Age", value=age_str, inline=True)
+            log_embed.add_field(name="Server", value=interaction.guild.name if interaction.guild else "DM", inline=True)
+            reviews_val = f"✅ {stats['approved']} approved | ❌ {stats['declined']} declined | ⏳ {stats['pending']} pending"
+            log_embed.add_field(name="Reviews", value=reviews_val, inline=True)
+            log_embed.add_field(name="Warnings", value=f"⚠️ {stats['warnings']} warning(s)", inline=True)
+            if review:
+                log_embed.add_field(name="Full Review", value=review[:500], inline=False)
+            log_embed.set_footer(text=f"Review ID: {review_id} | Use buttons to moderate")
 
-        view = ReviewModerationView(review_id, user_id, str(interaction.user), dealer["name"])
-        await log_channel.send(embed=log_embed, view=view)
+            view = ReviewModerationView(review_id, user_id, str(interaction.user), dealer["name"])
+            await log_channel.send(embed=log_embed, view=view)
+    except Exception as e:
+        logger.error(f"Review log error: {e}\n{traceback.format_exc()}")
 
 @client.tree.command(name="suggestdealer", description="Suggest a new dealer to be added to the bot")
 @app_commands.describe(dealer_name="Name of the dealer", url="Dealer website URL", reason="Why should this dealer be added?")
@@ -1304,12 +1327,30 @@ async def nextpromo_cmd(interaction: discord.Interaction):
 
 # ==================== EVENTS ====================
 @client.event
+async def on_error(event, *args, **kwargs):
+    logger.error(f"Discord error in event '{event}': {traceback.format_exc()}")
+
+@client.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    logger.error(f"Slash command error in '{interaction.command.name if interaction.command else 'unknown'}': {error}")
+    logger.error(traceback.format_exc())
+    try:
+        if not interaction.response.is_done():
+            await interaction.response.send_message(f"⚠️ An error occurred. Please try again or contact a mod.", ephemeral=True)
+        else:
+            await interaction.followup.send(f"⚠️ An error occurred. Please try again or contact a mod.", ephemeral=True)
+    except:
+        pass
+
+@client.event
 async def on_ready():
-    print(f"Logged in as {client.user}")
-    print(f"SCRIPT_DIR: {SCRIPT_DIR}")
+    logger.info(f"Logged in as {client.user}")
+    logger.info(f"SCRIPT_DIR: {SCRIPT_DIR}")
     logos_path = os.path.join(SCRIPT_DIR, "logos")
     if os.path.exists(logos_path):
-        print(f"Logos found: {os.listdir(logos_path)}")
+        logger.info(f"Logos found: {os.listdir(logos_path)}")
+    else:
+        logger.warning(f"Logos folder NOT found at {logos_path}!")
 
 async def send_griffin_combined():
     """Sends a combined Griffin Militaria alert after 5 minute buffer."""
@@ -1372,7 +1413,7 @@ async def handle_webhook(request):
         if not dealer_name:
             return web.Response(text="Missing dealer parameter", status=400)
 
-        print(f"[Webhook] Change detected for: {dealer_name} — {page_name}")
+        logger.info(f"[Webhook] Change detected for: {dealer_name} — {page_name}")
 
         # Special handling for Griffin Militaria — buffer changes
         if dealer_name == "Griffin Militaria":
@@ -1384,7 +1425,7 @@ async def handle_webhook(request):
 
         dealer = find_dealer(dealer_name)
         if not dealer:
-            print(f"[Webhook] Unknown dealer: {dealer_name}")
+            logger.warning(f"[Webhook] Unknown dealer: {dealer_name}")
             return web.Response(text="Unknown dealer", status=404)
 
         channel = client.get_channel(CHANNEL_ID)
@@ -1417,11 +1458,11 @@ async def handle_webhook(request):
                 await channel.send(file=file, embed=embed)
             else:
                 await channel.send(embed=embed)
-            print(f"[Webhook] Alert sent for {dealer_name}!")
+            logger.info(f"[Webhook] Alert sent for {dealer_name}!")
 
         return web.Response(text="OK", status=200)
     except Exception as e:
-        print(f"[Webhook] Error: {e}")
+        logger.error(f"[Webhook] Error: {e}\n{traceback.format_exc()}")
         return web.Response(text=str(e), status=500)
 
 async def start_web_server():
@@ -1433,7 +1474,7 @@ async def start_web_server():
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", 8080)
     await site.start()
-    print("Webhook server running on port 8080!")
+    logger.info("Webhook server running on port 8080!")
 
 async def main():
     async with client:
