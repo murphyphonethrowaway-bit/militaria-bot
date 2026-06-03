@@ -197,6 +197,56 @@ client = MilitariaBot()
 # ==================== FILE PATHS (still used for seen_items) ====================
 SEEN_FILE = "seen_items.json"
 
+# Griffin Militaria page title to URL mapping
+GRIFFIN_PAGES = {
+    "cloth insignia": "https://griffinmilitaria.com/product-category/united-states/world-war-ii/cloth-insignia/",
+    "chevrons": "https://griffinmilitaria.com/product-category/united-states/world-war-ii/chevrons/",
+    "crest": "https://griffinmilitaria.com/product-category/united-states/world-war-ii/crest-dis/",
+    "headgear": "https://griffinmilitaria.com/product-category/united-states/world-war-ii/headgear/",
+    "medals and ribbons": "https://griffinmilitaria.com/product-category/united-states/world-war-ii/medals-and-ribbons/",
+    "metal insignia": "https://griffinmilitaria.com/product-category/united-states/world-war-ii/metal-insignia/",
+    "navy rates": "https://griffinmilitaria.com/product-category/united-states/world-war-ii/navy-rates/",
+    "posters": "https://griffinmilitaria.com/product-category/united-states/world-war-ii/posters/",
+    "sweetheart": "https://griffinmilitaria.com/product-category/united-states/world-war-ii/sweetheart-homefront/",
+    "uniforms": "https://griffinmilitaria.com/product-category/united-states/world-war-ii/uniforms/",
+    "united states paper": "https://griffinmilitaria.com/product-category/united-states/world-war-ii/paper/",
+    "wings": "https://griffinmilitaria.com/product-category/united-states/world-war-ii/wings/",
+    "wwi": "https://griffinmilitaria.com/product-category/united-states/world-war-i/",
+    "dog tags": "https://griffinmilitaria.com/product-category/united-states/world-war-i/dog-tags/",
+    "field gear": "https://griffinmilitaria.com/product-category/united-states/world-war-i/field-gear/",
+    "patches": "https://griffinmilitaria.com/product-category/united-states/world-war-i/patches/",
+    "cold war": "https://griffinmilitaria.com/product-category/united-states/cold-war-steins/",
+    "pre-wwi": "https://griffinmilitaria.com/product-category/united-states/pre-wwi/",
+    "accoutrements": "https://griffinmilitaria.com/product-category/united-states/revolutionary-war-to-civil-war/accoutrements/",
+    "edged weapons": "https://griffinmilitaria.com/product-category/united-states/revolutionary-war-to-civil-war/edged-weapons/",
+    "civil war": "https://griffinmilitaria.com/product-category/united-states/civil-war/veterans/",
+    "japanese": "https://griffinmilitaria.com/product-category/japan/",
+    "german photos": "https://griffinmilitaria.com/product-category/military-photographs/german/",
+    "american photos": "https://griffinmilitaria.com/product-category/military-photographs/american/",
+    "other countries photos": "https://griffinmilitaria.com/product-category/military-photographs/other-countries/",
+    "vietnam": "https://griffinmilitaria.com/product-category/vietnam-war-era/",
+    "other countries": "https://griffinmilitaria.com/product-category/other-countries/",
+    "belts": "https://griffinmilitaria.com/product-category/germany/world-war-ii/belts-buckles/",
+    "documents": "https://griffinmilitaria.com/product-category/germany/world-war-ii/documents-photos/",
+    "flags": "https://griffinmilitaria.com/product-category/germany/world-war-ii/flags-banners/",
+    "medals": "https://griffinmilitaria.com/product-category/germany/world-war-ii/medals-badges/",
+    "ribbon bars": "https://griffinmilitaria.com/product-category/germany/world-war-ii/ribbon-bars/",
+    "stickpins": "https://griffinmilitaria.com/product-category/germany/world-war-ii/stickpins/",
+    "steins": "https://griffinmilitaria.com/product-category/germany/world-war-ii/third-reich-steins/",
+    "tinnies": "https://griffinmilitaria.com/product-category/germany/world-war-ii/tinnies/",
+    "imperial": "https://griffinmilitaria.com/product-category/germany/world-war-i/imperial-steins/",
+}
+
+def lookup_griffin_url(title):
+    """Try to match a Changedetection.io watch title to a Griffin page URL."""
+    if not title:
+        return "https://griffinmilitaria.com/"
+    title_lower = title.lower()
+    for keyword, url in GRIFFIN_PAGES.items():
+        if keyword in title_lower:
+            return url
+    return "https://griffinmilitaria.com/"
+
 bot_state = {
     "paused": False,
     "last_check": None,
@@ -1435,7 +1485,14 @@ async def handle_webhook(request):
 
         # Special handling for Griffin Militaria — buffer changes
         if dealer_name == "Griffin Militaria":
-            bot_state["griffin_buffer"].append((page_name or dealer_name, page_url or "https://griffinmilitaria.com/"))
+            # Get title from request headers (Changedetection.io sends watch title there)
+            watch_title = request.headers.get("Title", "") or request.headers.get("X-Title", "")
+            # Look up the URL from the title if we don't have it
+            if not page_url or "griffinmilitaria.com/" == page_url or "%7B" in page_url:
+                page_url = lookup_griffin_url(watch_title)
+                logger.info(f"[Griffin] Looked up URL from title '{watch_title}': {page_url}")
+            display_name = watch_title.replace(" – Griffin Militaria", "").replace(" - Griffin Militaria", "").strip() or page_name or "New Items"
+            bot_state["griffin_buffer"].append((display_name, page_url))
             if bot_state["griffin_timer"] is None:
                 bot_state["griffin_timer"] = asyncio.create_task(send_griffin_combined())
                 print(f"[Griffin] Buffer started — waiting 5 minutes for more changes...")
