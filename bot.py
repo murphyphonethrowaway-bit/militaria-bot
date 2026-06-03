@@ -900,6 +900,7 @@ async def dealerprofile_cmd(interaction: discord.Interaction, dealer_name: str):
 async def ratedealer_cmd(interaction: discord.Interaction, dealer_name: str, rating: int, review: str = None):
     # Defer immediately to avoid Discord timeout
     await interaction.response.defer(ephemeral=True)
+    logger.info(f"[ratedealer] Called by {interaction.user} for dealer='{dealer_name}' rating={rating} review='{review}'")
 
     dealer = find_dealer(dealer_name)
     if not dealer:
