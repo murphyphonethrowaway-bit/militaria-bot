@@ -1407,15 +1407,26 @@ async def handle_webhook(request):
         page_name = request.query.get("page", "")
         page_url = request.query.get("url", "")
 
-        # Also try to get URL from request body (Changedetection.io sends it there)
+        # Also try to get URL from request body or title header
         if not page_url or "%7B" in page_url:
             try:
-                body = await request.text()
-                if body and body.startswith("http"):
-                    page_url = body.strip()
-                    logger.info(f"[Webhook] Got URL from body: {page_url}")
-            except:
-                pass
+                # Check title header (Changedetection.io sends watch_url there)
+                title = request.headers.get("Title", "") or request.headers.get("X-Title", "")
+                if title and title.startswith("http"):
+                    page_url = title.strip()
+                    logger.info(f"[Webhook] Got URL from title header: {page_url}")
+                else:
+                    # Try request body
+                    body = await request.text()
+                    if body:
+                        # Extract first URL from body
+                        import re
+                        urls = re.findall(r'https?://[^\s<>"]+', body)
+                        if urls:
+                            page_url = urls[0].strip()
+                            logger.info(f"[Webhook] Got URL from body: {page_url}")
+            except Exception as e:
+                logger.error(f"[Webhook] Error extracting URL: {e}")
 
         if not dealer_name:
             return web.Response(text="Missing dealer parameter", status=400)
