@@ -340,16 +340,7 @@ async def db_get_all_stats():
         rows = await conn.fetch("SELECT dealer_name, alert_count FROM dealer_stats")
         return {r["dealer_name"]: r["alert_count"] for r in rows}
 
-async def db_get_all_reviews():
-    async with client.db.acquire() as conn:
-        rows = await conn.fetch("SELECT * FROM reviews ORDER BY timestamp ASC")
-        result = {}
-        for r in rows:
-            d = dict(r)
-            if d["dealer_name"] not in result:
-                result[d["dealer_name"]] = []
-            result[d["dealer_name"]].append(d)
-        return result
+
 
 def is_mod(member):
     return member.guild_permissions.administrator or member.guild_permissions.manage_guild
