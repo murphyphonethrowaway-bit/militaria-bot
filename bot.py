@@ -360,32 +360,9 @@ def get_all_dealers():
     return DEALERS + EMAIL_DEALERS
 
 async def dealer_autocomplete(interaction: discord.Interaction, current: str):
-    all_dealers = get_all_dealers()
-
-    if current:
-        # If typing, filter by name match
-        filtered = [d for d in all_dealers if current.lower() in d["name"].lower()]
-        return [app_commands.Choice(name=d["name"], value=d["name"]) for d in sorted(filtered, key=lambda x: x["name"].lower())][:25]
-    else:
-        # If not typing, show top 25 rated dealers
-        rated = []
-        unrated = []
-        for d in all_dealers:
-            try:
-                async with client.db.acquire() as conn:
-                    rows = await conn.fetch("SELECT rating FROM reviews WHERE dealer_name=$1 AND status='approved'", d["name"])
-                if rows:
-                    avg = sum(r["rating"] for r in rows) / len(rows)
-                    rated.append((d["name"], avg, len(rows)))
-                else:
-                    unrated.append(d["name"])
-            except:
-                unrated.append(d["name"])
-        
-        # Sort by rating descending
-        rated.sort(key=lambda x: (x[1], x[2]), reverse=True)
-        top_names = [r[0] for r in rated] + sorted(unrated)
-        return [app_commands.Choice(name=n, value=n) for n in top_names][:25]
+    all_dealers = sorted(get_all_dealers(), key=lambda x: x["name"].lower())
+    filtered = [d for d in all_dealers if current.lower() in d["name"].lower()]
+    return [app_commands.Choice(name=d["name"], value=d["name"]) for d in filtered][:25]
 
 def find_dealer(name):
     name_lower = name.lower()
