@@ -272,10 +272,11 @@ async def db_get_all_reviews(status='approved'):
 
 async def db_add_review(dealer_name, user_id, username, rating, review, date, timestamp):
     async with client.db.acquire() as conn:
-        await conn.execute(
-            "INSERT INTO reviews (dealer_name, user_id, username, rating, review, date, timestamp) VALUES ($1,$2,$3,$4,$5,$6,$7)",
+        row = await conn.fetchrow(
+            "INSERT INTO reviews (dealer_name, user_id, username, rating, review, date, timestamp) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id",
             dealer_name, user_id, username, rating, review, date, timestamp
         )
+        return row["id"]
 
 async def db_delete_review(review_id):
     async with client.db.acquire() as conn:
@@ -911,7 +912,7 @@ async def ratedealer_cmd(interaction: discord.Interaction, dealer_name: str, rat
         return
 
     ts = int(datetime.now(timezone.utc).timestamp())
-    await db_add_review(dealer["name"], user_id, str(interaction.user), rating, review, today, ts)
+    review_id = await db_add_review(dealer["name"], user_id, str(interaction.user), rating, review, today, ts)
 
     # Check for Trusted Reviewer role
     all_reviews = await db_get_all_reviews(status="approved")
@@ -936,8 +937,6 @@ async def ratedealer_cmd(interaction: discord.Interaction, dealer_name: str, rat
         years = account_age // 365
         months = (account_age % 365) // 30
         age_str = f"{years}y {months}m" if years > 0 else f"{months}m"
-
-        review_id = (await db_get_reviews(dealer["name"], status='all'))[-1]["id"]
 
         log_embed = discord.Embed(
             title=f"📝 Pending Review — {dealer['name']}",
