@@ -1412,7 +1412,7 @@ async def send_griffin_combined():
     bot_state["griffin_buffer"] = []
     bot_state["griffin_timer"] = None
 
-    logo_file = os.path.join(SCRIPT_DIR, "logos", "griffinmilitaria.png")
+    logo_file = os.path.join(SCRIPT_DIR, "logos", "Griffin_Militaria.png")
     warning = await db_get_warning("Griffin Militaria")
 
     description = "New items have been found on the following Griffin Militaria pages:\n\n"
@@ -1453,9 +1453,10 @@ async def send_griffin_combined():
 async def handle_webhook(request):
     """Receives webhook from Changedetection.io when a page changes."""
     try:
+        from urllib.parse import unquote
         dealer_name = request.query.get("dealer", "")
         page_name = request.query.get("page", "")
-        page_url = request.query.get("url", "")
+        page_url = unquote(request.query.get("url", ""))
 
         # Also try to get URL from request body or title header
         if not page_url or "%7B" in page_url:
@@ -1491,7 +1492,16 @@ async def handle_webhook(request):
             if not page_url or "griffinmilitaria.com/" == page_url or "%7B" in page_url:
                 page_url = lookup_griffin_url(watch_title)
                 logger.info(f"[Griffin] Looked up URL from title '{watch_title}': {page_url}")
-            display_name = watch_title.replace(" – Griffin Militaria", "").replace(" - Griffin Militaria", "").strip() or page_name or "New Items"
+            # Extract readable name from URL path
+            if page_url and page_url != "https://griffinmilitaria.com/":
+                path_parts = page_url.rstrip("/").split("/")
+                url_name = path_parts[-1].replace("-", " ").replace("_", " ").title()
+                # Clean up common prefixes
+                for prefix in ["Us Wwii ", "Us Wwi ", "Germany Wwii ", "Germany Wwi ", "Japanese ", "Vietnam War "]:
+                    url_name = url_name.replace(prefix, "")
+                display_name = url_name
+            else:
+                display_name = watch_title.replace(" – Griffin Militaria", "").replace(" - Griffin Militaria", "").strip() or page_name or "New Items"
             bot_state["griffin_buffer"].append((display_name, page_url))
             if bot_state["griffin_timer"] is None:
                 bot_state["griffin_timer"] = asyncio.create_task(send_griffin_combined())
