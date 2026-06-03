@@ -133,8 +133,12 @@ class MilitariaBot(discord.Client):
                     rating INTEGER NOT NULL,
                     review TEXT,
                     date TEXT NOT NULL,
-                    timestamp BIGINT NOT NULL
+                    timestamp BIGINT NOT NULL,
+                    status TEXT DEFAULT 'pending'
                 )
+            ''')
+            await conn.execute('''
+                ALTER TABLE reviews ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'pending'
             ''')
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS warnings (
@@ -151,6 +155,23 @@ class MilitariaBot(discord.Client):
                 CREATE TABLE IF NOT EXISTS dealer_stats (
                     dealer_name TEXT PRIMARY KEY,
                     alert_count INTEGER DEFAULT 0
+                )
+            ''')
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS blocked_reviewers (
+                    user_id TEXT PRIMARY KEY,
+                    username TEXT NOT NULL,
+                    reason TEXT,
+                    timestamp BIGINT NOT NULL
+                )
+            ''')
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS reviewer_warnings (
+                    id SERIAL PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    username TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    timestamp BIGINT NOT NULL
                 )
             ''')
         print("Database initialized!")
@@ -186,10 +207,68 @@ def load_seen(): return load_json(SEEN_FILE, {})
 def save_seen(d): save_json(SEEN_FILE, d)
 
 # ==================== DATABASE FUNCTIONS ====================
-async def db_get_reviews(dealer_name):
+async def db_get_reviews(dealer_name, status='approved'):
     async with client.db.acquire() as conn:
-        rows = await conn.fetch("SELECT * FROM reviews WHERE dealer_name=$1 ORDER BY timestamp ASC", dealer_name)
+        if status == 'all':
+            rows = await conn.fetch("SELECT * FROM reviews WHERE dealer_name=$1 ORDER BY timestamp ASC", dealer_name)
+        else:
+            rows = await conn.fetch("SELECT * FROM reviews WHERE dealer_name=$1 AND status=$2 ORDER BY timestamp ASC", dealer_name, status)
         return [dict(r) for r in rows]
+
+async def db_approve_review(review_id):
+    async with client.db.acquire() as conn:
+        await conn.execute("UPDATE reviews SET status='approved' WHERE id=$1", review_id)
+
+async def db_decline_review(review_id):
+    async with client.db.acquire() as conn:
+        await conn.execute("UPDATE reviews SET status='declined' WHERE id=$1", review_id)
+
+async def db_is_blocked(user_id):
+    async with client.db.acquire() as conn:
+        row = await conn.fetchrow("SELECT 1 FROM blocked_reviewers WHERE user_id=$1", str(user_id))
+        return row is not None
+
+async def db_block_reviewer(user_id, username, reason):
+    async with client.db.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO blocked_reviewers (user_id, username, reason, timestamp) VALUES ($1,$2,$3,$4) ON CONFLICT (user_id) DO UPDATE SET reason=$3",
+            str(user_id), username, reason, int(datetime.now(timezone.utc).timestamp())
+        )
+
+async def db_unblock_reviewer(user_id):
+    async with client.db.acquire() as conn:
+        await conn.execute("DELETE FROM blocked_reviewers WHERE user_id=$1", str(user_id))
+
+async def db_add_reviewer_warning(user_id, username, reason):
+    async with client.db.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO reviewer_warnings (user_id, username, reason, timestamp) VALUES ($1,$2,$3,$4)",
+            str(user_id), username, reason, int(datetime.now(timezone.utc).timestamp())
+        )
+
+async def db_get_reviewer_stats(user_id):
+    async with client.db.acquire() as conn:
+        total = await conn.fetchval("SELECT COUNT(*) FROM reviews WHERE user_id=$1", str(user_id))
+        approved = await conn.fetchval("SELECT COUNT(*) FROM reviews WHERE user_id=$1 AND status='approved'", str(user_id))
+        declined = await conn.fetchval("SELECT COUNT(*) FROM reviews WHERE user_id=$1 AND status='declined'", str(user_id))
+        pending = await conn.fetchval("SELECT COUNT(*) FROM reviews WHERE user_id=$1 AND status='pending'", str(user_id))
+        warnings = await conn.fetchval("SELECT COUNT(*) FROM reviewer_warnings WHERE user_id=$1", str(user_id))
+        blocked = await db_is_blocked(user_id)
+        return {"total": total, "approved": approved, "declined": declined, "pending": pending, "warnings": warnings, "blocked": blocked}
+
+async def db_get_all_reviews(status='approved'):
+    async with client.db.acquire() as conn:
+        if status == 'all':
+            rows = await conn.fetch("SELECT * FROM reviews ORDER BY timestamp ASC")
+        else:
+            rows = await conn.fetch("SELECT * FROM reviews WHERE status=$1 ORDER BY timestamp ASC", status)
+        result = {}
+        for r in rows:
+            d = dict(r)
+            if d["dealer_name"] not in result:
+                result[d["dealer_name"]] = []
+            result[d["dealer_name"]].append(d)
+        return result
 
 async def db_add_review(dealer_name, user_id, username, rating, review, date, timestamp):
     async with client.db.acquire() as conn:
@@ -281,12 +360,32 @@ def get_all_dealers():
     return DEALERS + EMAIL_DEALERS
 
 async def dealer_autocomplete(interaction: discord.Interaction, current: str):
-    all_dealers = sorted(get_all_dealers(), key=lambda x: x["name"].lower())
-    return [
-        app_commands.Choice(name=d["name"], value=d["name"])
-        for d in all_dealers
-        if current.lower() in d["name"].lower()
-    ][:25]
+    all_dealers = get_all_dealers()
+
+    if current:
+        # If typing, filter by name match
+        filtered = [d for d in all_dealers if current.lower() in d["name"].lower()]
+        return [app_commands.Choice(name=d["name"], value=d["name"]) for d in sorted(filtered, key=lambda x: x["name"].lower())][:25]
+    else:
+        # If not typing, show top 25 rated dealers
+        rated = []
+        unrated = []
+        for d in all_dealers:
+            try:
+                async with client.db.acquire() as conn:
+                    rows = await conn.fetch("SELECT rating FROM reviews WHERE dealer_name=$1 AND status='approved'", d["name"])
+                if rows:
+                    avg = sum(r["rating"] for r in rows) / len(rows)
+                    rated.append((d["name"], avg, len(rows)))
+                else:
+                    unrated.append(d["name"])
+            except:
+                unrated.append(d["name"])
+        
+        # Sort by rating descending
+        rated.sort(key=lambda x: (x[1], x[2]), reverse=True)
+        top_names = [r[0] for r in rated] + sorted(unrated)
+        return [app_commands.Choice(name=n, value=n) for n in top_names][:25]
 
 def find_dealer(name):
     name_lower = name.lower()
@@ -515,6 +614,109 @@ async def send_promo():
         except Exception as e:
             print(f"Failed to send promo: {e}")
 
+# ==================== REVIEW MODERATION BUTTONS ====================
+
+class ReviewModerationView(discord.ui.View):
+    def __init__(self, review_id, user_id, username, dealer_name):
+        super().__init__(timeout=None)
+        self.review_id = review_id
+        self.user_id = user_id
+        self.username = username
+        self.dealer_name = dealer_name
+
+    @discord.ui.button(label="Approve", emoji="✅", style=discord.ButtonStyle.success)
+    async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not is_mod(interaction.user):
+            await interaction.response.send_message("🚫 You need Moderator permissions.", ephemeral=True)
+            return
+        await db_approve_review(self.review_id)
+        embed = interaction.message.embeds[0]
+        embed.color = discord.Color.green()
+        embed.title = embed.title.replace("📝 Pending", "✅ Approved")
+        embed.set_footer(text=f"Approved by {interaction.user} | Review ID: {self.review_id}")
+        for item in self.children:
+            item.disabled = True
+        await interaction.message.edit(embed=embed, view=self)
+        await interaction.response.send_message(f"✅ Review approved for **{self.dealer_name}**!", ephemeral=True)
+
+    @discord.ui.button(label="Decline", emoji="❌", style=discord.ButtonStyle.danger)
+    async def decline(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not is_mod(interaction.user):
+            await interaction.response.send_message("🚫 You need Moderator permissions.", ephemeral=True)
+            return
+        await db_decline_review(self.review_id)
+        embed = interaction.message.embeds[0]
+        embed.color = discord.Color.red()
+        embed.title = embed.title.replace("📝 Pending", "❌ Declined")
+        embed.set_footer(text=f"Declined by {interaction.user} | Review ID: {self.review_id}")
+        for item in self.children:
+            item.disabled = True
+        await interaction.message.edit(embed=embed, view=self)
+        await interaction.response.send_message(f"❌ Review declined for **{self.dealer_name}**.", ephemeral=True)
+
+    @discord.ui.button(label="Warn", emoji="⚠️", style=discord.ButtonStyle.secondary)
+    async def warn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not is_mod(interaction.user):
+            await interaction.response.send_message("🚫 You need Moderator permissions.", ephemeral=True)
+            return
+        modal = WarnModal(self.user_id, self.username)
+        await interaction.response.send_modal(modal)
+
+    @discord.ui.button(label="Block", emoji="🚫", style=discord.ButtonStyle.danger)
+    async def block(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not is_mod(interaction.user):
+            await interaction.response.send_message("🚫 You need Moderator permissions.", ephemeral=True)
+            return
+        modal = BlockModal(self.user_id, self.username)
+        await interaction.response.send_modal(modal)
+
+class WarnModal(discord.ui.Modal, title="Warn Reviewer"):
+    reason = discord.ui.TextInput(
+        label="Warning Message",
+        placeholder="Enter the warning message to send to the user...",
+        style=discord.TextStyle.paragraph,
+        max_length=500
+    )
+
+    def __init__(self, user_id, username):
+        super().__init__()
+        self.user_id = user_id
+        self.username = username
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await db_add_reviewer_warning(self.user_id, self.username, str(self.reason))
+        # Try to DM the user
+        try:
+            user = await interaction.client.fetch_user(int(self.user_id))
+            if user:
+                dm_embed = discord.Embed(
+                    title="⚠️ Review Warning",
+                    description=f"You have received a warning from **{interaction.guild.name}** regarding a review you submitted:\n\n{self.reason}",
+                    color=discord.Color.orange(),
+                    timestamp=datetime.now(timezone.utc)
+                )
+                await user.send(embed=dm_embed)
+                await interaction.response.send_message(f"⚠️ Warning sent to **{self.username}** via DM!", ephemeral=True)
+        except:
+            await interaction.response.send_message(f"⚠️ Warning logged but could not DM **{self.username}** (DMs may be disabled).", ephemeral=True)
+
+class BlockModal(discord.ui.Modal, title="Block Reviewer"):
+    reason = discord.ui.TextInput(
+        label="Reason for blocking",
+        placeholder="Enter the reason for blocking this user...",
+        style=discord.TextStyle.paragraph,
+        max_length=500
+    )
+
+    def __init__(self, user_id, username):
+        super().__init__()
+        self.user_id = user_id
+        self.username = username
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await db_block_reviewer(self.user_id, self.username, str(self.reason))
+        await interaction.response.send_message(f"🚫 **{self.username}** has been blocked from leaving reviews.", ephemeral=True)
+
 # ==================== SLASH COMMANDS ====================
 
 @client.tree.command(name="help", description="Shows all available bot commands")
@@ -533,6 +735,8 @@ async def help_cmd(interaction: discord.Interaction):
     embed.add_field(name="/promo & /pausepromo & /resumepromo", value="Send/pause/resume promo", inline=True)
     embed.add_field(name="/adddealer & /approvedealer", value="Add/approve a dealer", inline=True)
     embed.add_field(name="/warningdealer & /removewarning", value="Add/remove warning", inline=True)
+    embed.add_field(name="/blockreviewer & /unblockreviewer", value="Block/unblock reviewer", inline=True)
+    embed.add_field(name="/reviewerstats", value="View reviewer stats", inline=True)
     embed.add_field(name="/deletereview & /nextemail & /nextpromo", value="Delete review / Countdowns", inline=True)
     embed.set_footer(text="🔒 = Mod only")
     await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -714,9 +918,15 @@ async def ratedealer_cmd(interaction: discord.Interaction, dealer_name: str, rat
         await interaction.response.send_message(f"⚠️ Dealer '{dealer_name}' not found. Use `/dealers` to see all dealers.", ephemeral=True)
         return
 
-    today = datetime.now(timezone.utc).date().isoformat()
     user_id = str(interaction.user.id)
-    dealer_reviews = await db_get_reviews(dealer["name"])
+
+    # Check if user is blocked
+    if await db_is_blocked(user_id):
+        await interaction.response.send_message("🚫 You have been restricted from leaving reviews on **The Relic Registry**. If you believe this is an error please contact a moderator at http://discord.gg/therelicregistry", ephemeral=True)
+        return
+
+    today = datetime.now(timezone.utc).date().isoformat()
+    dealer_reviews = await db_get_reviews(dealer["name"], status='all')
     already_today = any(str(r.get("user_id")) == user_id and r.get("date") == today for r in dealer_reviews)
 
     if already_today:
@@ -727,7 +937,7 @@ async def ratedealer_cmd(interaction: discord.Interaction, dealer_name: str, rat
     await db_add_review(dealer["name"], user_id, str(interaction.user), rating, review, today, ts)
 
     # Check for Trusted Reviewer role
-    all_reviews = await db_get_all_reviews()
+    all_reviews = await db_get_all_reviews(status="approved")
     total_user_reviews = sum(1 for d_reviews in all_reviews.values() for r in d_reviews if str(r.get("user_id")) == user_id)
     if total_user_reviews >= TRUSTED_REVIEWER_THRESHOLD:
         trusted_role = interaction.guild.get_role(TRUSTED_REVIEWER_ROLE_ID)
@@ -739,20 +949,37 @@ async def ratedealer_cmd(interaction: discord.Interaction, dealer_name: str, rat
     stars = "⭐" * rating
     await interaction.response.send_message(f"✅ Thanks for rating **{dealer['name']}** {stars}!", ephemeral=True)
 
-    # Log to review-log channel (shows username to mods)
+    # Log to review-log channel with buttons
     log_channel = client.get_channel(REVIEW_LOG_CHANNEL_ID)
     if log_channel:
+        # Get reviewer stats
+        stats = await db_get_reviewer_stats(user_id)
+        account_created = interaction.user.created_at
+        account_age = (datetime.now(timezone.utc) - account_created).days
+        years = account_age // 365
+        months = (account_age % 365) // 30
+        age_str = f"{years}y {months}m" if years > 0 else f"{months}m"
+
+        review_id = (await db_get_reviews(dealer["name"], status='all'))[-1]["id"]
+
         log_embed = discord.Embed(
-            title=f"New Review — {dealer['name']}",
-            color=discord.Color.dark_gold(),
+            title=f"📝 Pending Review — {dealer['name']}",
+            color=discord.Color.orange(),
             timestamp=datetime.now(timezone.utc)
         )
-        log_embed.add_field(name="Member", value=f"{interaction.user.mention} ({interaction.user})", inline=True)
+        log_embed.add_field(name="Member", value=f"{interaction.user.mention}\n({interaction.user})", inline=True)
         log_embed.add_field(name="Rating", value=stars, inline=True)
+        log_embed.add_field(name="Account Age", value=age_str, inline=True)
+        log_embed.add_field(name="Server", value=interaction.guild.name if interaction.guild else "DM", inline=True)
+        reviews_val = f"✅ {stats['approved']} approved\n❌ {stats['declined']} declined\n⏳ {stats['pending']} pending"
+        log_embed.add_field(name="Reviews", value=reviews_val, inline=True)
+        log_embed.add_field(name="Warnings", value=f"⚠️ {stats['warnings']} warning(s)", inline=True)
         if review:
-            log_embed.add_field(name="Review", value=review[:500], inline=False)
-        log_embed.set_footer(text="Visible to mods only")
-        await log_channel.send(embed=log_embed)
+            log_embed.add_field(name="Full Review", value=review[:500], inline=False)
+        log_embed.set_footer(text=f"Review ID: {review_id} | Use buttons to moderate")
+
+        view = ReviewModerationView(review_id, user_id, str(interaction.user), dealer["name"])
+        await log_channel.send(embed=log_embed, view=view)
 
 @client.tree.command(name="suggestdealer", description="Suggest a new dealer to be added to the bot")
 @app_commands.describe(dealer_name="Name of the dealer", url="Dealer website URL", reason="Why should this dealer be added?")
@@ -780,7 +1007,7 @@ async def suggestdealer_cmd(interaction: discord.Interaction, dealer_name: str, 
 
 @client.tree.command(name="leaderboard", description="Shows top rated dealers and most active reviewers")
 async def leaderboard_cmd(interaction: discord.Interaction):
-    all_reviews = await db_get_all_reviews()
+    all_reviews = await db_get_all_reviews(status="approved")
 
     # Top dealers by rating (min 3 reviews)
     dealer_ratings = []
@@ -1026,6 +1253,51 @@ async def approvedealer_cmd(interaction: discord.Interaction, name: str, url: st
     match_keywords = [url.replace("https://", "").replace("http://", "").replace("www.", "").split("/")[0], name.lower()]
     EMAIL_DEALERS.append({"name": name, "match": match_keywords, "logo_file": logo_filename, "url": url})
     await interaction.followup.send(f"✅ **{name}** has been approved and added to the bot!", ephemeral=True)
+
+@client.tree.command(name="reviewerstats", description="🔒 Shows review stats for a specific member")
+@app_commands.describe(member="The member to look up")
+async def reviewerstats_cmd(interaction: discord.Interaction, member: discord.Member):
+    if not is_mod(interaction.user):
+        await interaction.response.send_message("🚫 You need Moderator permissions.", ephemeral=True)
+        return
+    stats = await db_get_reviewer_stats(str(member.id))
+    account_age = (datetime.now(timezone.utc) - member.created_at).days
+    years = account_age // 365
+    months = (account_age % 365) // 30
+    age_str = f"{years}y {months}m" if years > 0 else f"{months}m"
+    embed = discord.Embed(
+        title=f"📊 Reviewer Stats — {member}",
+        color=discord.Color.red() if stats["blocked"] else discord.Color.dark_gold(),
+        timestamp=datetime.now(timezone.utc)
+    )
+    embed.set_thumbnail(url=member.display_avatar.url)
+    embed.add_field(name="Account Age", value=age_str, inline=True)
+    embed.add_field(name="Status", value="🚫 Blocked" if stats["blocked"] else "✅ Active", inline=True)
+    embed.add_field(name="Total Reviews", value=str(stats["total"]), inline=True)
+    embed.add_field(name="✅ Approved", value=str(stats["approved"]), inline=True)
+    embed.add_field(name="❌ Declined", value=str(stats["declined"]), inline=True)
+    embed.add_field(name="⏳ Pending", value=str(stats["pending"]), inline=True)
+    embed.add_field(name="⚠️ Warnings", value=str(stats["warnings"]), inline=True)
+    embed.set_footer(text="The Relic Registry — Dealer Update")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@client.tree.command(name="blockreviewer", description="🔒 Block a member from leaving reviews")
+@app_commands.describe(member="The member to block", reason="Reason for blocking")
+async def blockreviewer_cmd(interaction: discord.Interaction, member: discord.Member, reason: str):
+    if not is_mod(interaction.user):
+        await interaction.response.send_message("🚫 You need Moderator permissions.", ephemeral=True)
+        return
+    await db_block_reviewer(str(member.id), str(member), reason)
+    await interaction.response.send_message(f"🚫 **{member}** has been blocked from leaving reviews.", ephemeral=True)
+
+@client.tree.command(name="unblockreviewer", description="🔒 Unblock a member from leaving reviews")
+@app_commands.describe(member="The member to unblock")
+async def unblockreviewer_cmd(interaction: discord.Interaction, member: discord.Member):
+    if not is_mod(interaction.user):
+        await interaction.response.send_message("🚫 You need Moderator permissions.", ephemeral=True)
+        return
+    await db_unblock_reviewer(str(member.id))
+    await interaction.response.send_message(f"✅ **{member}** has been unblocked and can leave reviews again.", ephemeral=True)
 
 @client.tree.command(name="nextemail", description="🔒 Shows countdown to next email check")
 async def nextemail_cmd(interaction: discord.Interaction):
