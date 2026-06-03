@@ -97,6 +97,7 @@ EMAIL_DEALERS = [
     {"name": "Combat Relics", "match": ["combat-relics.com", "combat relics"], "logo_file": "Combat_relics.png", "url": "https://www.combat-relics.com/"},
     {"name": "Tiger Militaria", "match": ["tigermilitaria.com", "tiger militaria"], "logo_file": "TigerMilitaria.png", "url": "https://tigermilitaria.com/shop?showPerPage=24"},
     {"name": "WAF Estate", "match": ["wehrmacht-awards.com", "waf estate", "e-stand", "estand", "militaria e-stand"], "logo_file": "waf.png", "url": "https://www.wehrmacht-awards.com/forums/forum/the-militaria-e-stand", "waf": True},
+    {"name": "Griffin Militaria", "match": ["griffinmilitaria.com", "griffin militaria"], "logo_file": "Griffin_Militaria.png", "url": "https://griffinmilitaria.com/"},
     {"name": "EA Militaria", "match": ["ea-militaria.com", "ea militaria"], "logo_file": "eamilitaria.png", "url": "https://www.ea-militaria.com/new-items"},
     {"name": "Militaria Plaza", "match": ["militariaplaza.nl", "militaria plaza"], "logo_file": "Militaria_Plaza.png", "url": "https://militariaplaza.nl/new"},
     {"name": "The Collector's Guild", "match": ["germanmilitaria.com", "collector's guild", "collectors guild"], "logo_file": "germanmilitaria.png", "url": "https://www.germanmilitaria.com/Advanced.html"},
@@ -166,6 +167,8 @@ bot_state = {
     "promo_paused": False,
     "last_email_check": None,
     "last_promo": None,
+    "griffin_buffer": [],
+    "griffin_timer": None,
 }
 
 # ==================== DATA FUNCTIONS ====================
@@ -1060,14 +1063,76 @@ async def on_ready():
     if os.path.exists(logos_path):
         print(f"Logos found: {os.listdir(logos_path)}")
 
+async def send_griffin_combined():
+    """Sends a combined Griffin Militaria alert after 5 minute buffer."""
+    await asyncio.sleep(300)  # Wait 5 minutes to collect all changes
+    if not bot_state["griffin_buffer"]:
+        return
+    channel = client.get_channel(CHANNEL_ID)
+    if not channel:
+        return
+
+    pages = bot_state["griffin_buffer"].copy()
+    bot_state["griffin_buffer"] = []
+    bot_state["griffin_timer"] = None
+
+    logo_file = os.path.join(SCRIPT_DIR, "logos", "griffinmilitaria.png")
+    warning = await db_get_warning("Griffin Militaria")
+
+    description = "New items have been found on the following Griffin Militaria pages:\n\n"
+    for page_name, page_url in pages:
+        description += f"• [**{page_name}**]({page_url})\n"
+
+    if warning:
+        description = f"⚠️ **WARNING: {warning}**\n\n" + description
+
+    color = discord.Color.red() if warning else discord.Color.dark_gold()
+    embed = discord.Embed(
+        title="🆕 New Items at Griffin Militaria!",
+        description=description,
+        color=color,
+        timestamp=datetime.now(timezone.utc)
+    )
+
+    rating, review_count = await get_dealer_rating("Griffin Militaria")
+    embed.add_field(name="Rating", value=stars_display(rating), inline=True)
+    embed.add_field(name="Total Reviews", value=f"📝 {review_count}", inline=True)
+    embed.set_footer(text="The Relic Registry — Dealer Update")
+
+    file = None
+    if os.path.exists(logo_file):
+        file = discord.File(logo_file, filename="logo.png")
+        embed.set_thumbnail(url="attachment://logo.png")
+
+    try:
+        if file:
+            await channel.send(file=file, embed=embed)
+        else:
+            await channel.send(embed=embed)
+        await db_increment_stat("Griffin Militaria")
+        print(f"[Griffin] Combined alert sent for {len(pages)} pages!")
+    except Exception as e:
+        print(f"[Griffin] Failed to send combined alert: {e}")
+
 async def handle_webhook(request):
     """Receives webhook from Changedetection.io when a page changes."""
     try:
         dealer_name = request.query.get("dealer", "")
+        page_name = request.query.get("page", "")
+        page_url = request.query.get("url", "")
+
         if not dealer_name:
             return web.Response(text="Missing dealer parameter", status=400)
 
-        print(f"[Webhook] Change detected for: {dealer_name}")
+        print(f"[Webhook] Change detected for: {dealer_name} — {page_name}")
+
+        # Special handling for Griffin Militaria — buffer changes
+        if dealer_name == "Griffin Militaria":
+            bot_state["griffin_buffer"].append((page_name or dealer_name, page_url or "https://griffinmilitaria.com/"))
+            if bot_state["griffin_timer"] is None:
+                bot_state["griffin_timer"] = asyncio.create_task(send_griffin_combined())
+                print(f"[Griffin] Buffer started — waiting 5 minutes for more changes...")
+            return web.Response(text="OK", status=200)
 
         dealer = find_dealer(dealer_name)
         if not dealer:
@@ -1076,9 +1141,34 @@ async def handle_webhook(request):
 
         channel = client.get_channel(CHANNEL_ID)
         if channel:
+            # Use specific page URL if provided, otherwise use dealer default
+            alert_url = page_url if page_url else dealer["url"]
             logo_file = os.path.join(SCRIPT_DIR, "logos", dealer["logo_file"])
             await db_increment_stat(dealer_name)
-            await send_alert(channel, dealer["name"], dealer["url"], logo_file)
+
+            warning = await db_get_warning(dealer["name"])
+            dealer_reviews = await db_get_reviews(dealer["name"])
+            rating, review_count = get_dealer_rating_sync(dealer_reviews)
+
+            color = discord.Color.red() if warning else discord.Color.dark_gold()
+            desc = f"New items have been added to [{dealer['name']}]({alert_url})\n\n[**Click here to view new items \u2192**]({alert_url})"
+            if warning:
+                desc = f"⚠️ **WARNING: {warning}**\n\n" + desc
+
+            embed = discord.Embed(title=f"🆕 New Items at {dealer['name']}!", description=desc, color=color, timestamp=datetime.now(timezone.utc))
+            embed.add_field(name="Rating", value=stars_display(rating), inline=True)
+            embed.add_field(name="Total Reviews", value=f"📝 {review_count}", inline=True)
+            embed.set_footer(text="The Relic Registry — Dealer Update")
+
+            file = None
+            if os.path.exists(logo_file):
+                file = discord.File(logo_file, filename="logo.png")
+                embed.set_thumbnail(url="attachment://logo.png")
+
+            if file:
+                await channel.send(file=file, embed=embed)
+            else:
+                await channel.send(embed=embed)
             print(f"[Webhook] Alert sent for {dealer_name}!")
 
         return web.Response(text="OK", status=200)
