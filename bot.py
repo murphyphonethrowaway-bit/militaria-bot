@@ -640,6 +640,120 @@ async def check_all_dealers():
         logger.info(f"--- Done. Next check in {CHECK_INTERVAL//60} minutes. ---")
         await asyncio.sleep(CHECK_INTERVAL)
 
+# ==================== WAF EMAIL PARSER ====================
+
+BUMP_KEYWORDS = ["up", "bump", "still available", "still for sale", "ttt", "to the top", "glws", "price reduced", "price drop", "make offer", "reduced"]
+
+def parse_waf_email(subject, body):
+    """Parse a WAF email and extract item title, prices and check if it's a bump."""
+    import re
+
+    # Extract item title from subject: "X has made a new post under TITLE"
+    title_match = re.search(r"has made a new post under\\s+(.+)", subject, re.IGNORECASE)
+    item_title = title_match.group(1).strip() if title_match else subject
+
+    # Extract poster name
+    poster_match = re.search(r"^(.+?)\\s+has made a new post", subject, re.IGNORECASE)
+    poster = poster_match.group(1).strip() if poster_match else "Unknown"
+
+    # Extract forum URL
+    url_match = re.search(r"https?://www\.wehrmacht-awards\.com/forums/node/\d+", body)
+    forum_url = url_match.group(0) if url_match else ""
+
+    # Check if it's a bump
+    body_clean = body.strip().lower()
+    # Remove the standard email wrapper to get just the message
+    msg_match = re.search(r"\*{5,}(.+?)\*{5,}", body, re.DOTALL)
+    msg_body = msg_match.group(1).strip() if msg_match else body_clean
+    
+    is_bump = any(keyword == msg_body.lower().strip() for keyword in BUMP_KEYWORDS) or               len(msg_body.strip()) < 10 and any(keyword in msg_body.lower() for keyword in BUMP_KEYWORDS)
+
+    # Extract prices (numbers followed by EUR, USD, $, €)
+    prices = re.findall(r"[\$€]?\s*\d+(?:[.,]\d+)?\s*(?:EUR|USD|euro|dollars?|\$|€)?", body, re.IGNORECASE)
+    # Clean up prices
+    clean_prices = []
+    for p in prices:
+        p = p.strip()
+        if p and any(c.isdigit() for c in p):
+            clean_prices.append(p.upper().replace("EURO", "EUR").replace("DOLLARS", "USD"))
+    # Remove duplicates and very short matches
+    clean_prices = list(dict.fromkeys([p for p in clean_prices if len(p) > 2]))[:5]
+
+    # Match category to Discord role
+    matched_role_id = None
+    title_lower = item_title.lower()
+    body_lower = body.lower()
+    search_text = title_lower + " " + body_lower
+
+    for cat in WAF_CATEGORIES:
+        if cat["name"] == "All WAF Updates":
+            continue
+        for keyword in cat["keywords"]:
+            if keyword.lower() in search_text:
+                matched_role_id = cat["role_id"]
+                break
+        if matched_role_id:
+            break
+
+    # Default to All WAF Updates if no match
+    if not matched_role_id:
+        matched_role_id = WAF_CATEGORIES[0]["role_id"]  # All WAF Updates
+
+    return {
+        "item_title": item_title,
+        "poster": poster,
+        "forum_url": forum_url,
+        "is_bump": is_bump,
+        "prices": clean_prices,
+        "role_id": matched_role_id,
+    }
+
+async def send_waf_alert(channel, parsed, guild):
+    """Send a formatted WAF Estate alert to members with the correct role."""
+    if parsed["is_bump"]:
+        logger.info(f"[WAF] Skipping bump for: {parsed['item_title']}")
+        # Check if anyone is watching this URL for price alerts
+        # TODO: watchlist DMs for bumps
+        return
+
+    role = guild.get_role(parsed["role_id"]) if guild else None
+    waf_role = guild.get_role(WAF_ROLE_ID) if guild else None
+
+    flag = "🎖️"
+    price_str = " • ".join(parsed["prices"]) if parsed["prices"] else ""
+
+    description = f"**{parsed['poster']}** is offering a new item in the E-Stand."
+    if price_str:
+        description += f"\n\n💰 **{price_str}**"
+    if parsed["forum_url"]:
+        description += f"\n\n[**View Listing →**]({parsed['forum_url']})"
+
+    embed = discord.Embed(
+        title=f"{flag} {parsed['item_title']}",
+        description=description,
+        color=discord.Color.dark_gold(),
+        timestamp=datetime.now(timezone.utc)
+    )
+    embed.set_footer(text="WAF Estate — The Relic Registry")
+
+    logo_file = os.path.join(SCRIPT_DIR, "logos", "waf.png")
+    file = None
+    if os.path.exists(logo_file):
+        file = discord.File(logo_file, filename="logo.png")
+        embed.set_thumbnail(url="attachment://logo.png")
+
+    # Ping the correct category role
+    content_msg = f"<@&{parsed['role_id']}>" if role else None
+
+    try:
+        if file:
+            await channel.send(content=content_msg, file=file, embed=embed)
+        else:
+            await channel.send(content=content_msg, embed=embed)
+        logger.info(f"[WAF] Alert sent for: {parsed['item_title']} | Price: {price_str} | Role: {role.name if role else 'Unknown'}")
+    except Exception as e:
+        logger.error(f"[WAF] Failed to send alert: {e}")
+
 async def check_email_dealers():
     await client.wait_until_ready()
     channel = client.get_channel(CHANNEL_ID)
@@ -652,11 +766,17 @@ async def check_email_dealers():
             continue
         bot_state["last_email_check"] = datetime.now(timezone.utc)
         triggered = await check_gmail_async()
-        for dealer in triggered:
-            logo_file = os.path.join(SCRIPT_DIR, "logos", dealer["logo_file"])
+        for dealer, subject, body in triggered:
             await db_increment_stat(dealer["name"])
             is_waf = dealer.get("waf", False)
-            await send_alert(channel, dealer["name"], dealer["url"], logo_file, waf=is_waf)
+            if is_waf:
+                # Use WAF parser for WAF Estate emails
+                parsed = parse_waf_email(subject, body)
+                guild = client.guilds[0] if client.guilds else None
+                await send_waf_alert(channel, parsed, guild)
+            else:
+                logo_file = os.path.join(SCRIPT_DIR, "logos", dealer["logo_file"])
+                await send_alert(channel, dealer["name"], dealer["url"], logo_file)
         await asyncio.sleep(EMAIL_CHECK_INTERVAL)
 
 async def send_promo():
