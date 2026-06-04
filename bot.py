@@ -479,7 +479,9 @@ async def send_alert(channel, name, url, logo_file, test=False, waf=False):
     dealer_reviews = await db_get_reviews(name)
     rating, review_count = get_dealer_rating_sync(dealer_reviews)
 
-    title = f"🧪 TEST — {name}" if test else f"🆕 New Items at {name}!"
+    dealer_info = find_dealer(name)
+    flag = dealer_info.get("flag", "🌐") if dealer_info else "🌐"
+    title = f"🧪 TEST — {name}" if test else f"🆕 {flag} New Items at {name}!"
     description = f"This is a test notification for [{name}]({url})\n\n[**Click here to view items →**]({url})" if test else f"New items have been added to [{name}]({url})\n\n[**Click here to view new items →**]({url})"
 
     if warning and not test:
@@ -1425,7 +1427,7 @@ async def send_griffin_combined():
 
     color = discord.Color.red() if warning else discord.Color.dark_gold()
     embed = discord.Embed(
-        title="🆕 New Items at Griffin Militaria!",
+        title="🆕 🇺🇸 New Items at Griffin Militaria!",
         description=description,
         color=color,
         timestamp=datetime.now(timezone.utc)
@@ -1530,7 +1532,8 @@ async def handle_webhook(request):
             if warning:
                 desc = f"⚠️ **WARNING: {warning}**\n\n" + desc
 
-            embed = discord.Embed(title=f"🆕 New Items at {dealer['name']}!", description=desc, color=color, timestamp=datetime.now(timezone.utc))
+            dealer_flag = dealer.get("flag", "🌐")
+            embed = discord.Embed(title=f"🆕 {dealer_flag} New Items at {dealer['name']}!", description=desc, color=color, timestamp=datetime.now(timezone.utc))
             embed.add_field(name="Rating", value=stars_display(rating), inline=True)
             embed.add_field(name="Total Reviews", value=f"📝 {review_count}", inline=True)
             embed.set_footer(text="The Relic Registry — Dealer Update")
