@@ -127,6 +127,9 @@ EMAIL_DEALERS = [
     {"name": "Marna Militaria", "flag": "🇳🇱", "match": ["marnamilitaria.com", "marna militaria"], "logo_file": "Marna_militaria.png", "url": "https://marnamilitaria.com/shop.php"},
     {"name": "CS Militaria", "flag": "🇬🇧", "match": ["csmilitaria.co.uk", "cs militaria"], "logo_file": "cs_militaria.png", "url": "https://csmilitaria.co.uk/shop.php"},
     {"name": "Chase Militaria", "flag": "🇬🇧", "match": ["chasemilitaria.com", "chase militaria"], "logo_file": "chase_militaria.png", "url": "https://chasemilitaria.com/shop.php"},
+    {"name": "WorldWar 2 Collectibles", "flag": "🇬🇧", "match": ["worldwarcollectibles.com", "worldwar2collectibles.com", "world war 2 collectibles", "worldwar 2 collectibles"], "logo_file": "Worldwar2collectibles.png", "url": "https://www.worldwarcollectibles.com/shop.php"},
+    {"name": "E-Medals", "flag": "🇨🇦", "match": ["emedals.com", "e-medals", "emedals"], "logo_file": "e_medals.png", "url": "https://www.emedals.com/collections/newly-listed"},
+    {"name": "Espenlaub Militaria", "flag": "🇪🇪", "match": ["aboutww2militaria.com", "espenlaub militaria", "espenlaub"], "logo_file": "espenlaub_militaria.png", "url": "https://aboutww2militaria.com/new-items.html"},
 ]
 
 # ==================== BOT SETUP ====================
