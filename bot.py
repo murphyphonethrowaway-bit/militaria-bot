@@ -121,6 +121,8 @@ EMAIL_DEALERS = [
     {"name": "ThirdReich Militaria", "flag": "🇮🇹", "match": ["thirdreich-militaria.com", "thirdreich militaria", "third reich militaria"], "logo_file": "thirdreich_militaria.png", "url": "https://www.thirdreich-militaria.com/"},
     {"name": "Richter Historica", "flag": "🇩🇪", "match": ["richter-historica.de", "richter historica"], "logo_file": "Richter_Historica.png", "url": "https://richter-historica.de/en/10-militaria"},
     {"name": "Military Antiques Toronto", "flag": "🇨🇦", "match": ["militaryantiquestoronto.com", "military antiques toronto"], "logo_file": "Military_Antiques_Toronto.png", "url": "https://militaryantiquestoronto.com/new-items/"},
+    {"name": "Giel's Militaria", "flag": "🇧🇪", "match": ["gielsmilitaria.com", "giel's militaria", "giels militaria"], "logo_file": "giels_militaria.png", "url": "https://www.gielsmilitaria.com/"},
+    {"name": "SMG War Relics", "flag": "🇺🇸", "match": ["war-relics.com", "smg war relics", "smg militaria"], "logo_file": "smg_war_relics.png", "url": "https://war-relics.com/shop/"},
 ]
 
 # ==================== BOT SETUP ====================
@@ -1912,9 +1914,18 @@ async def handle_webhook(request):
         logger.error(f"[Webhook] Error: {e}\n{traceback.format_exc()}")
         return web.Response(text=str(e), status=500)
 
+async def handle_guide(request):
+    guide_path = os.path.join(SCRIPT_DIR, "guide.html")
+    if os.path.exists(guide_path):
+        with open(guide_path, "r") as f:
+            return web.Response(text=f.read(), content_type="text/html")
+    return web.Response(text="Guide not found", status=404)
+
 async def start_web_server():
     await client.wait_until_ready()
     app = web.Application()
+    app.router.add_get("/", handle_guide)
+    app.router.add_get("/guide", handle_guide)
     app.router.add_get("/alert", handle_webhook)
     app.router.add_post("/alert", handle_webhook)
     runner = web.AppRunner(app)
