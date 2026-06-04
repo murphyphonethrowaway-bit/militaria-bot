@@ -113,6 +113,7 @@ EMAIL_DEALERS = [
     {"name": "The Collector's Guild", "flag": "🇺🇸", "match": ["germanmilitaria.com", "collector's guild", "collectors guild"], "logo_file": "germanmilitaria.png", "url": "https://www.germanmilitaria.com/Advanced.html"},
     {"name": "General Assault Militaria", "flag": "🇺🇸", "match": ["generalassaultmilitaria.com", "general assault militaria", "gam"], "logo_file": "gam.png", "url": "https://www.generalassaultmilitaria.com/"},
     {"name": "Bevo Militaria", "flag": "🇩🇪", "match": ["bevo-militaria.com", "bevo militaria"], "logo_file": "Bevo_Militaria.png", "url": "https://bevo-militaria.com/shop/"},
+    {"name": "Time Traveler Militaria", "flag": "🇺🇸", "match": ["ttmilitaria.com", "time traveler militaria", "timetraveler militaria"], "logo_file": "Time_traveler_militaria.png", "url": "https://www.ttmilitaria.com/"},
 ]
 
 # ==================== BOT SETUP ====================
