@@ -117,6 +117,7 @@ EMAIL_DEALERS = [
     {"name": "The Canadian Soldier", "flag": "🇨🇦", "match": ["thecanadiansoldier.com", "canadian soldier"], "logo_file": "the_canadian_soldier.png", "url": "https://thecanadiansoldier.com/en-us/collections/newly-listed"},
     {"name": "Wehrmacht Militaria", "flag": "🇺🇸", "match": ["wehrmacht-militaria.com", "Wehrmacht militaria"], "logo_file": "Wehrmacht_Militaria.png", "url": "https://wehrmacht-militaria.com/shop"},
     {"name": "ThirdReich Militaria", "flag": "🇮🇹", "match": ["thirdreich-militaria.com", "thirdreich militaria", "third reich militaria"], "logo_file": "thirdreich_militaria.png", "url": "https://www.thirdreich-militaria.com/"},
+    {"name": "Richter Historica", "flag": "🇩🇪", "match": ["richter-historica.de", "richter historica"], "logo_file": "Richter_Historica.png", "url": "https://richter-historica.de/en/10-militaria"},
 ]
 
 # ==================== BOT SETUP ====================
