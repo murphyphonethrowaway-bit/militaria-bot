@@ -194,6 +194,15 @@ class MilitariaBot(discord.Client):
                     timestamp BIGINT NOT NULL
                 )
             ''')
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS dealer_follows (
+                    id SERIAL PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    dealer_name TEXT NOT NULL,
+                    timestamp BIGINT NOT NULL,
+                    UNIQUE(user_id, dealer_name)
+                )
+            ''')
         logger.info("Database initialized successfully!")
 
 client = MilitariaBot()
@@ -315,6 +324,32 @@ async def db_add_reviewer_warning(user_id, username, reason):
             "INSERT INTO reviewer_warnings (user_id, username, reason, timestamp) VALUES ($1,$2,$3,$4)",
             str(user_id), username, reason, int(datetime.now(timezone.utc).timestamp())
         )
+
+async def db_follow_dealer(user_id, dealer_name):
+    async with client.db.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO dealer_follows (user_id, dealer_name, timestamp) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING",
+            str(user_id), dealer_name, int(datetime.now(timezone.utc).timestamp())
+        )
+
+async def db_unfollow_dealer(user_id, dealer_name):
+    async with client.db.acquire() as conn:
+        await conn.execute("DELETE FROM dealer_follows WHERE user_id=$1 AND dealer_name=$2", str(user_id), dealer_name)
+
+async def db_is_following(user_id, dealer_name):
+    async with client.db.acquire() as conn:
+        row = await conn.fetchrow("SELECT 1 FROM dealer_follows WHERE user_id=$1 AND dealer_name=$2", str(user_id), dealer_name)
+        return row is not None
+
+async def db_get_follows(user_id):
+    async with client.db.acquire() as conn:
+        rows = await conn.fetch("SELECT dealer_name FROM dealer_follows WHERE user_id=$1 ORDER BY timestamp ASC", str(user_id))
+        return [r["dealer_name"] for r in rows]
+
+async def db_get_dealer_followers(dealer_name):
+    async with client.db.acquire() as conn:
+        rows = await conn.fetch("SELECT user_id FROM dealer_follows WHERE dealer_name=$1", dealer_name)
+        return [r["user_id"] for r in rows]
 
 async def db_get_reviewer_stats(user_id):
     async with client.db.acquire() as conn:
@@ -655,6 +690,31 @@ async def send_promo():
         except Exception as e:
             print(f"Failed to send promo: {e}")
 
+# ==================== FOLLOW DEALER BUTTONS ====================
+
+class FollowDealerView(discord.ui.View):
+    def __init__(self, dealer_name):
+        super().__init__(timeout=None)
+        self.dealer_name = dealer_name
+
+    @discord.ui.button(label="Follow Dealer", emoji="🔔", style=discord.ButtonStyle.secondary)
+    async def follow(self, interaction: discord.Interaction, button: discord.ui.Button):
+        user_id = str(interaction.user.id)
+        if await db_is_following(user_id, self.dealer_name):
+            await interaction.response.send_message(f"⚠️ You are already following **{self.dealer_name}**!", ephemeral=True)
+            return
+        await db_follow_dealer(user_id, self.dealer_name)
+        await interaction.response.send_message(f"🔔 You are now following **{self.dealer_name}**! You'll receive a DM whenever they have new items.", ephemeral=True)
+
+    @discord.ui.button(label="Unfollow Dealer", emoji="🔕", style=discord.ButtonStyle.secondary)
+    async def unfollow(self, interaction: discord.Interaction, button: discord.ui.Button):
+        user_id = str(interaction.user.id)
+        if not await db_is_following(user_id, self.dealer_name):
+            await interaction.response.send_message(f"⚠️ You are not following **{self.dealer_name}**.", ephemeral=True)
+            return
+        await db_unfollow_dealer(user_id, self.dealer_name)
+        await interaction.response.send_message(f"🔕 You have unfollowed **{self.dealer_name}**.", ephemeral=True)
+
 # ==================== REVIEW MODERATION BUTTONS ====================
 
 class ReviewModerationView(discord.ui.View):
@@ -769,6 +829,7 @@ async def help_cmd(interaction: discord.Interaction):
     embed.add_field(name="/dealerprofile & /ratedealer", value="View profile / Rate dealer", inline=True)
     embed.add_field(name="/suggestdealer & /leaderboard", value="Suggest dealer / Leaderboard", inline=True)
     embed.add_field(name="/joinwaf & /leavewaf", value="Subscribe/unsubscribe WAF alerts", inline=True)
+    embed.add_field(name="/following", value="See dealers you are following", inline=True)
     embed.add_field(name="/myroles", value="Your WAF subscriptions", inline=True)
     embed.add_field(name="🔒 Mod Commands", value="​", inline=False)
     embed.add_field(name="/rescan & /pause & /resume", value="Force check / Pause / Resume", inline=True)
@@ -1351,6 +1412,26 @@ async def unblockreviewer_cmd(interaction: discord.Interaction, member: discord.
         return
     await db_unblock_reviewer(str(member.id))
     await interaction.response.send_message(f"✅ **{member}** has been unblocked and can leave reviews again.", ephemeral=True)
+
+@client.tree.command(name="following", description="Shows all dealers you are currently following")
+async def following_cmd(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    follows = await db_get_follows(str(interaction.user.id))
+    if not follows:
+        await interaction.followup.send("🔕 You are not following any dealers yet. Use the 🔔 button on a dealer notification or `/dealerprofile` to follow a dealer!", ephemeral=True)
+        return
+    embed = discord.Embed(
+        title="🔔 Your Followed Dealers",
+        color=discord.Color.dark_gold(),
+        timestamp=datetime.now(timezone.utc)
+    )
+    for dealer_name in follows:
+        dealer = find_dealer(dealer_name)
+        flag = dealer.get("flag", "🌐") if dealer else "🌐"
+        url = dealer.get("url", "") if dealer else ""
+        embed.add_field(name=f"{flag} {dealer_name}", value=f"[Visit Site]({url})" if url else "No URL", inline=True)
+    embed.set_footer(text="The Relic Registry — Dealer Update")
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 @client.tree.command(name="nextemail", description="🔒 Shows countdown to next email check")
 async def nextemail_cmd(interaction: discord.Interaction):
