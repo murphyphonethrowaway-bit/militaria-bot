@@ -1248,10 +1248,11 @@ async def dealerprofile_cmd(interaction: discord.Interaction, dealer_name: str):
         file = discord.File(logo_file, filename="logo.png")
         embed.set_thumbnail(url="attachment://logo.png")
 
+    follow_view = FollowDealerView(dealer["name"])
     if file:
-        await interaction.response.send_message(file=file, embed=embed, ephemeral=True)
+        await interaction.response.send_message(file=file, embed=embed, view=follow_view, ephemeral=True)
     else:
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.response.send_message(embed=embed, view=follow_view, ephemeral=True)
 
 @client.tree.command(name="ratedealer", description="Rate a dealer 1-5 stars with an optional review")
 @app_commands.describe(dealer_name="Name of the dealer", rating="Rating from 1 to 5 stars", review="Optional written review")
