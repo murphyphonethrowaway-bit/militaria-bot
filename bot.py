@@ -748,17 +748,16 @@ async def send_waf_alert(channel, parsed, guild):
     role = guild.get_role(parsed["role_id"]) if guild else None
     waf_role = guild.get_role(WAF_ROLE_ID) if guild else None
 
-    flag = "🎖️"
-    price_str = " • ".join(parsed["prices"]) if parsed["prices"] else ""
+    price_str = " | ".join(parsed["prices"]) if parsed["prices"] else ""
 
-    description = f"**{parsed['poster']}** is offering a new item in the E-Stand."
+    description = f"**Category:** {parsed['category']}\n"
     if price_str:
-        description += f"\n\n💰 **{price_str}**"
+        description += f"\n💰 **{price_str}**\n"
     if parsed["forum_url"]:
-        description += f"\n\n[**View Listing →**]({parsed['forum_url']})"
+        description += f"\n[**View Listing →**]({parsed['forum_url']})"
 
     embed = discord.Embed(
-        title=f"{flag} {parsed['item_title']}",
+        title=f"🎖️ {parsed['item_title']}",
         description=description,
         color=discord.Color.dark_gold(),
         timestamp=datetime.now(timezone.utc)
