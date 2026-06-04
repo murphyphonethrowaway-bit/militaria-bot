@@ -329,6 +329,46 @@ async def db_add_reviewer_warning(user_id, username, reason):
             str(user_id), username, reason, int(datetime.now(timezone.utc).timestamp())
         )
 
+# ==================== WAF WATCHLIST DB FUNCTIONS ====================
+
+async def db_watch_item(user_id, forum_url, item_title, price=""):
+    async with client.db.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO waf_watchlist (user_id, forum_url, item_title, last_price, date_added) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (user_id, forum_url) DO NOTHING",
+            str(user_id), forum_url, item_title, price, int(datetime.now(timezone.utc).timestamp())
+        )
+
+async def db_unwatch_item(user_id, forum_url):
+    async with client.db.acquire() as conn:
+        await conn.execute("DELETE FROM waf_watchlist WHERE user_id=$1 AND forum_url=$2", str(user_id), forum_url)
+
+async def db_get_watchlist(user_id):
+    async with client.db.acquire() as conn:
+        rows = await conn.fetch("SELECT * FROM waf_watchlist WHERE user_id=$1 ORDER BY date_added DESC", str(user_id))
+        return [dict(r) for r in rows]
+
+async def db_get_item_watchers(forum_url):
+    async with client.db.acquire() as conn:
+        rows = await conn.fetch("SELECT user_id, last_price FROM waf_watchlist WHERE forum_url=$1", forum_url)
+        return [dict(r) for r in rows]
+
+async def db_update_watch_price(user_id, forum_url, new_price):
+    async with client.db.acquire() as conn:
+        await conn.execute("UPDATE waf_watchlist SET last_price=$1 WHERE user_id=$2 AND forum_url=$3", new_price, str(user_id), forum_url)
+
+async def db_is_watching(user_id, forum_url):
+    async with client.db.acquire() as conn:
+        row = await conn.fetchrow("SELECT 1 FROM waf_watchlist WHERE user_id=$1 AND forum_url=$2", str(user_id), forum_url)
+        return row is not None
+
+async def db_cleanup_watchlist():
+    cutoff = int(datetime.now(timezone.utc).timestamp()) - (90 * 24 * 3600)
+    async with client.db.acquire() as conn:
+        deleted = await conn.fetchval("SELECT COUNT(*) FROM waf_watchlist WHERE date_added < $1", cutoff)
+        await conn.execute("DELETE FROM waf_watchlist WHERE date_added < $1", cutoff)
+        if deleted:
+            logger.info(f"[Watchlist] Cleaned up {deleted} expired watchlist entries")
+
 async def db_follow_dealer(user_id, dealer_name):
     async with client.db.acquire() as conn:
         await conn.execute(
@@ -773,14 +813,46 @@ async def send_waf_alert(channel, parsed, guild):
     # Ping the correct category role
     content_msg = f"<@&{parsed['role_id']}>" if role else None
 
+    watch_view = WatchItemView(parsed["forum_url"], parsed["item_title"], price_str) if parsed["forum_url"] else None
+
     try:
         if file:
-            await channel.send(content=content_msg, file=file, embed=embed)
+            await channel.send(content=content_msg, file=file, embed=embed, view=watch_view)
         else:
-            await channel.send(content=content_msg, embed=embed)
+            await channel.send(content=content_msg, embed=embed, view=watch_view)
         logger.info(f"[WAF] Alert sent for: {parsed['item_title']} | Price: {price_str} | Role: {role.name if role else 'Unknown'}")
     except Exception as e:
         logger.error(f"[WAF] Failed to send alert: {e}")
+
+    # DM watchers if this is a bump with price update
+    if parsed["forum_url"]:
+        watchers = await db_get_item_watchers(parsed["forum_url"])
+        for watcher in watchers:
+            uid = watcher["user_id"]
+            old_price = watcher["last_price"]
+            new_price = price_str
+            # Only DM if price changed or bump keywords found
+            price_changed = new_price and old_price and new_price != old_price
+            has_offer = any(k in parsed.get("msg_body", "").lower() for k in ["make offer", "price reduced", "reduced"])
+            if price_changed or has_offer:
+                try:
+                    user = await client.fetch_user(int(uid))
+                    dm_embed = discord.Embed(
+                        title=f"🔔 Update: {parsed['item_title']}",
+                        color=discord.Color.dark_gold(),
+                        timestamp=datetime.now(timezone.utc)
+                    )
+                    if price_changed:
+                        dm_embed.add_field(name="Price Update", value=f"~~{old_price}~~ → **{new_price}**", inline=False)
+                    if has_offer:
+                        dm_embed.add_field(name="Note", value="Seller may accept offers!", inline=False)
+                    if parsed["forum_url"]:
+                        dm_embed.add_field(name="Listing", value=f"[View on WAF]({parsed['forum_url']})", inline=False)
+                    dm_embed.set_footer(text="WAF Watchlist — The Relic Registry")
+                    await user.send(embed=dm_embed)
+                    await db_update_watch_price(uid, parsed["forum_url"], new_price)
+                except Exception as e:
+                    logger.error(f"[Watchlist] Failed to DM watcher {uid}: {e}")
 
 async def check_email_dealers():
     await client.wait_until_ready()
@@ -837,6 +909,33 @@ async def send_promo():
             print("Promo message sent!")
         except Exception as e:
             print(f"Failed to send promo: {e}")
+
+# ==================== WAF WATCH ITEM BUTTONS ====================
+
+class WatchItemView(discord.ui.View):
+    def __init__(self, forum_url, item_title, price=""):
+        super().__init__(timeout=None)
+        self.forum_url = forum_url
+        self.item_title = item_title
+        self.price = price
+
+    @discord.ui.button(label="Watch Item", emoji="🔔", style=discord.ButtonStyle.secondary)
+    async def watch(self, interaction: discord.Interaction, button: discord.ui.Button):
+        user_id = str(interaction.user.id)
+        if await db_is_watching(user_id, self.forum_url):
+            await interaction.response.send_message(f"⚠️ You are already watching **{self.item_title}**!", ephemeral=True)
+            return
+        await db_watch_item(user_id, self.forum_url, self.item_title, self.price)
+        await interaction.response.send_message(f"🔔 You are now watching **{self.item_title}**! You will be notified of any price changes or updates.", ephemeral=True)
+
+    @discord.ui.button(label="Unwatch", emoji="🔕", style=discord.ButtonStyle.secondary)
+    async def unwatch(self, interaction: discord.Interaction, button: discord.ui.Button):
+        user_id = str(interaction.user.id)
+        if not await db_is_watching(user_id, self.forum_url):
+            await interaction.response.send_message(f"⚠️ You are not watching **{self.item_title}**.", ephemeral=True)
+            return
+        await db_unwatch_item(user_id, self.forum_url)
+        await interaction.response.send_message(f"🔕 You have stopped watching **{self.item_title}**.", ephemeral=True)
 
 # ==================== FOLLOW DEALER BUTTONS ====================
 
@@ -1581,6 +1680,30 @@ async def following_cmd(interaction: discord.Interaction):
     embed.set_footer(text="The Relic Registry — Dealer Update")
     await interaction.followup.send(embed=embed, ephemeral=True)
 
+@client.tree.command(name="mywatchlist", description="Shows all WAF items you are watching")
+async def mywatchlist_cmd(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    watchlist = await db_get_watchlist(str(interaction.user.id))
+    if not watchlist:
+        await interaction.followup.send("🔕 You are not watching any WAF items. Click the 🔔 **Watch Item** button on any WAF alert to start!", ephemeral=True)
+        return
+    embed = discord.Embed(
+        title="🔔 Your WAF Watchlist",
+        color=discord.Color.dark_gold(),
+        timestamp=datetime.now(timezone.utc)
+    )
+    for item in watchlist[:25]:
+        added = datetime.fromtimestamp(item["date_added"], tz=timezone.utc).strftime("%b %d, %Y")
+        price_info = f" — {item['last_price']}" if item["last_price"] else ""
+        url_text = f"[View Listing]({item['forum_url']})" if item["forum_url"] else "No link"
+        embed.add_field(
+            name=item["item_title"][:50],
+            value=f"{url_text}{price_info}\nAdded: {added}",
+            inline=False
+        )
+    embed.set_footer(text="Watchlist entries expire after 90 days — The Relic Registry")
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
 @client.tree.command(name="nextemail", description="🔒 Shows countdown to next email check")
 async def nextemail_cmd(interaction: discord.Interaction):
     if not is_mod(interaction.user):
@@ -1798,12 +1921,19 @@ async def start_web_server():
     await site.start()
     logger.info("Webhook server running on port 8080!")
 
+async def daily_cleanup():
+    await client.wait_until_ready()
+    while not client.is_closed():
+        await asyncio.sleep(24 * 3600)
+        await db_cleanup_watchlist()
+
 async def main():
     async with client:
         client.loop.create_task(check_all_dealers())
         client.loop.create_task(check_email_dealers())
         client.loop.create_task(send_promo())
         client.loop.create_task(start_web_server())
+        client.loop.create_task(daily_cleanup())
         await client.start(BOT_TOKEN)
 
 asyncio.run(main())
