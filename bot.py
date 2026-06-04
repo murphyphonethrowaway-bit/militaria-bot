@@ -76,7 +76,6 @@ WAF_CATEGORIES = [
 
 # ==================== DEALER CONFIG ====================
 DEALERS = [
-    {"name": "Time Traveler Militaria", "flag": "🇺🇸", "logo_file": "Time_traveler_militaria.png", "url": "https://www.ttmilitaria.com/"},
     {"name": "Weitze Militaria", "flag": "🇩🇪", "url": "https://www.weitze.com/neuheiten.html", "logo_file": "weitze.png", "item_selector": "a[href*='/militaria/']", "base_url": "https://www.weitze.com"},
     {"name": "Linda Mae Militaria", "flag": "🇺🇸", "url": "https://lindamaemilitaria.com/", "logo_file": "lindamae.png", "item_selector": ".product a", "base_url": "https://lindamaemilitaria.com"},
 ]
@@ -770,6 +769,7 @@ def parse_waf_email(subject, body):
 
     return {
         "item_title": item_title,
+        "category": category,
         "poster": poster,
         "forum_url": forum_url,
         "is_bump": is_bump,
