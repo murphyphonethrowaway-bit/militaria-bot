@@ -7,11 +7,14 @@ import traceback
 
 # ==================== LOGGING SETUP ====================
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 logger = logging.getLogger("MilitariaBot")
+# Keep discord and aiohttp at INFO to avoid spam
+logging.getLogger("discord").setLevel(logging.INFO)
+logging.getLogger("aiohttp").setLevel(logging.INFO)
 import asyncio
 import aiohttp
 import json
@@ -596,7 +599,9 @@ async def check_gmail_async():
             _, msg_data = mail.fetch(eid, "(RFC822)")
             msg = email.message_from_bytes(msg_data[0][1])
             msg_id = msg.get("Message-ID", str(eid))
+            logger.debug(f"[Gmail] Checking msg_id: {msg_id}")
             if await db_is_email_seen(msg_id):
+                logger.info(f"[Gmail] Skipping already seen email: {msg_id}")
                 continue
             await db_mark_email_seen(msg_id)
             sender = msg.get("From", "").lower()
@@ -605,13 +610,31 @@ async def check_gmail_async():
             if isinstance(subject, bytes):
                 subject = subject.decode(errors="replace")
             subject = subject.lower()
+            # Extract body
+            body = ""
+            if msg.is_multipart():
+                for part in msg.walk():
+                    if part.get_content_type() == "text/plain":
+                        body = part.get_payload(decode=True).decode(errors="replace")
+                        break
+            else:
+                payload = msg.get_payload(decode=True)
+                if payload:
+                    body = payload.decode(errors="replace")
             logger.info(f"[Gmail] New email from: {sender} | Subject: {subject}")
+            logger.debug(f"[Gmail] Body preview: {body[:100]}")
+            matched = False
             for dealer in EMAIL_DEALERS:
                 for keyword in dealer["match"]:
                     if keyword.lower() in sender or keyword.lower() in subject:
                         logger.info(f"[Gmail] Matched dealer: {dealer['name']}")
-                        triggered.append(dealer)
+                        triggered.append((dealer, subject, body))
+                        matched = True
                         break
+                if matched:
+                    break
+            if not matched:
+                logger.info(f"[Gmail] No dealer matched for: {subject}")
         mail.logout()
     except Exception as e:
         logger.error(f"[Gmail] Error checking email: {e}\n{traceback.format_exc()}")
