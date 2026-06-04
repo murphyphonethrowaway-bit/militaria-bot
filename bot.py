@@ -76,6 +76,7 @@ WAF_CATEGORIES = [
 
 # ==================== DEALER CONFIG ====================
 DEALERS = [
+    {"name": "Time Traveler Militaria", "flag": "🇺🇸", "logo_file": "Time_traveler_militaria.png", "url": "https://www.ttmilitaria.com/"},
     {"name": "Weitze Militaria", "flag": "🇩🇪", "url": "https://www.weitze.com/neuheiten.html", "logo_file": "weitze.png", "item_selector": "a[href*='/militaria/']", "base_url": "https://www.weitze.com"},
     {"name": "Linda Mae Militaria", "flag": "🇺🇸", "url": "https://lindamaemilitaria.com/", "logo_file": "lindamae.png", "item_selector": ".product a", "base_url": "https://lindamaemilitaria.com"},
 ]
@@ -116,7 +117,6 @@ EMAIL_DEALERS = [
     {"name": "The Collector's Guild", "flag": "🇺🇸", "match": ["germanmilitaria.com", "collector's guild", "collectors guild"], "logo_file": "germanmilitaria.png", "url": "https://www.germanmilitaria.com/Advanced.html"},
     {"name": "General Assault Militaria", "flag": "🇺🇸", "match": ["generalassaultmilitaria.com", "general assault militaria", "gam"], "logo_file": "gam.png", "url": "https://www.generalassaultmilitaria.com/"},
     {"name": "Bevo Militaria", "flag": "🇩🇪", "match": ["bevo-militaria.com", "bevo militaria"], "logo_file": "Bevo_Militaria.png", "url": "https://bevo-militaria.com/shop/"},
-    {"name": "Time Traveler Militaria", "flag": "🇺🇸", "match": ["ttmilitaria.com", "time traveler militaria", "timetraveler militaria"], "logo_file": "Time_traveler_militaria.png", "url": "https://www.ttmilitaria.com/"},
     {"name": "The Canadian Soldier", "flag": "🇨🇦", "match": ["thecanadiansoldier.com", "canadian soldier"], "logo_file": "the_canadian_soldier.png", "url": "https://thecanadiansoldier.com/en-us/collections/newly-listed"},
     {"name": "Wehrmacht Militaria", "flag": "🇺🇸", "match": ["wehrmacht-militaria.com", "Wehrmacht militaria"], "logo_file": "Wehrmacht_Militaria.png", "url": "https://wehrmacht-militaria.com/shop"},
     {"name": "ThirdReich Militaria", "flag": "🇮🇹", "match": ["thirdreich-militaria.com", "thirdreich militaria", "third reich militaria"], "logo_file": "thirdreich_militaria.png", "url": "https://www.thirdreich-militaria.com/"},
