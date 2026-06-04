@@ -123,6 +123,10 @@ EMAIL_DEALERS = [
     {"name": "Military Antiques Toronto", "flag": "🇨🇦", "match": ["militaryantiquestoronto.com", "military antiques toronto"], "logo_file": "Military_Antiques_Toronto.png", "url": "https://militaryantiquestoronto.com/new-items/"},
     {"name": "Giel's Militaria", "flag": "🇧🇪", "match": ["gielsmilitaria.com", "giel's militaria", "giels militaria"], "logo_file": "giels_militaria.png", "url": "https://www.gielsmilitaria.com/"},
     {"name": "SMG War Relics", "flag": "🇺🇸", "match": ["war-relics.com", "smg war relics", "smg militaria"], "logo_file": "smg_war_relics.png", "url": "https://war-relics.com/shop/"},
+    {"name": "Hanna's Militaria", "flag": "🇺🇸", "match": ["hannasmilitaria.com", "hanna's militaria", "hannas militaria"], "logo_file": "hannas_militaria.png", "url": "https://hannasmilitaria.com/newly-listed/"},
+    {"name": "Marna Militaria", "flag": "🇳🇱", "match": ["marnamilitaria.com", "marna militaria"], "logo_file": "Marna_militaria.png", "url": "https://marnamilitaria.com/shop.php"},
+    {"name": "CS Militaria", "flag": "🇬🇧", "match": ["csmilitaria.co.uk", "cs militaria"], "logo_file": "cs_militaria.png", "url": "https://csmilitaria.co.uk/shop.php"},
+    {"name": "Chase Militaria", "flag": "🇬🇧", "match": ["chasemilitaria.com", "chase militaria"], "logo_file": "chase_militaria.png", "url": "https://chasemilitaria.com/shop.php"},
 ]
 
 # ==================== BOT SETUP ====================
