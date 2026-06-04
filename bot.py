@@ -73,46 +73,46 @@ WAF_CATEGORIES = [
 
 # ==================== DEALER CONFIG ====================
 DEALERS = [
-    {"name": "Weitze Militaria", "url": "https://www.weitze.com/neuheiten.html", "logo_file": "weitze.png", "item_selector": "a[href*='/militaria/']", "base_url": "https://www.weitze.com"},
-    {"name": "Linda Mae Militaria", "url": "https://lindamaemilitaria.com/", "logo_file": "lindamae.png", "item_selector": ".product a", "base_url": "https://lindamaemilitaria.com"},
+    {"name": "Weitze Militaria", "flag": "🇩🇪", "url": "https://www.weitze.com/neuheiten.html", "logo_file": "weitze.png", "item_selector": "a[href*='/militaria/']", "base_url": "https://www.weitze.com"},
+    {"name": "Linda Mae Militaria", "flag": "🇺🇸", "url": "https://lindamaemilitaria.com/", "logo_file": "lindamae.png", "item_selector": ".product a", "base_url": "https://lindamaemilitaria.com"},
 ]
 
 EMAIL_DEALERS = [
-    {"name": "The Ruptured Duck", "match": ["therupturedduck.com", "ruptured duck"], "logo_file": "ruptured_duck.png", "url": "https://www.therupturedduck.com/collections/recently-added-items"},
-    {"name": "War's End Shop", "match": ["warsendshop.com", "war's end", "wars end"], "logo_file": "warsend.png", "url": "https://www.warsendshop.com/collections/new-items"},
-    {"name": "Lakeside Trader", "match": ["lakesidetrader.com", "lakeside trader"], "logo_file": "lakeside.png", "url": "https://www.lakesidetrader.com/recently-added-items/"},
-    {"name": "Dutch Militaria", "match": ["dutchmilitaria.com", "dutch militaria"], "logo_file": "dutch_militaria.png", "url": "https://dutchmilitaria.com/"},
-    {"name": "Militaria Sales", "match": ["militariasales.com", "militaria sales"], "logo_file": "militaria_sales.png", "url": "https://www.militariasales.com/new-item/"},
-    {"name": "Military Collectibles", "match": ["militarycollectibles.com", "military collectibles"], "logo_file": "military_collectibles.png", "url": "https://militarycollectibles.com/shop?s=n"},
-    {"name": "Military Collectors HQ", "match": ["militarycollectorshq.com", "military collectors hq"], "logo_file": "militarycollectorshq.png", "url": "https://militarycollectorshq.com/store-catalog"},
-    {"name": "Soviet Orders", "match": ["sovietorders.com", "soviet orders"], "logo_file": "Soviet_Orders.png", "url": "https://sovietorders.com/new-in-store/"},
-    {"name": "Empire's Past", "match": ["empirespast.com", "empire's past", "empires past"], "logo_file": "Empire_past.png", "url": "https://empirespast.com/newly-listed/"},
-    {"name": "1944 Militaria", "match": ["1944militaria.com", "1944 militaria"], "logo_file": "1944militaria.png", "url": "https://www.1944militaria.com/New_Original_Items_s/1900.htm"},
-    {"name": "International Military Antiques", "match": ["ima-usa.com", "international military antiques", "ima usa"], "logo_file": "ima.png", "url": "https://www.ima-usa.com/collections/new-arrivals"},
-    {"name": "Wolfgang Historica", "match": ["wolfganghistorica.com", "wolfgang historica"], "logo_file": "wolfgang_historica.png", "url": "https://wolfganghistorica.com/"},
-    {"name": "Enemy Militaria", "match": ["enemymilitaria.com", "enemy militaria"], "logo_file": "Enemy_Militaria.png", "url": "https://enemymilitaria.com/"},
-    {"name": "Hiscoll Military Antiques", "match": ["hiscoll.com", "hiscoll military antiques", "hiscoll"], "logo_file": "hiscoll.png", "url": "https://hiscoll.com/shop"},
-    {"name": "Relics of the Reich", "match": ["relicsofthereich.com", "relics of the reich"], "logo_file": "relicsofthereich.png", "url": "https://www.relicsofthereich.com/home"},
-    {"name": "Epic Artifacts", "match": ["epicartifacts.com", "epic artifacts"], "logo_file": "Epic_artifacts.png", "url": "https://epicartifacts.com/newly-listed/"},
-    {"name": "RG Militaria", "match": ["rg-militaria.com", "rg militaria"], "logo_file": "rgmilitaria.png", "url": "https://www.rg-militaria.com/new-items-nieuwe-items"},
-    {"name": "Military Antiques Stockholm", "match": ["military-antiques-stockholm.com", "military antiques stockholm"], "logo_file": "Military_Antiques_Stockholm.png", "url": "https://www.military-antiques-stockholm.com/shop/"},
-    {"name": "Oorlogsspullen", "match": ["oorlogsspullen.nl", "oorlogsspullen"], "logo_file": "Oorlogspullen.png", "url": "https://oorlogsspullen.nl/product-categorie/new/"},
-    {"name": "Wittmann Antique Militaria", "match": ["wwiidaggers.com", "wittmann antique militaria", "wittmann"], "logo_file": "wam.png", "url": "https://www.wwiidaggers.com/updates.htm"},
-    {"name": "RBNr Militaria", "match": ["rbnr.it", "rbnr militaria", "rbnr"], "logo_file": "RBNR.png", "url": "https://en.rbnr.it/collections/all"},
-    {"name": "Iraqi Militaria", "match": ["iraqimilitaria.com", "iraqi militaria"], "logo_file": "iraqi_militaria.png", "url": "https://www.iraqimilitaria.com/"},
-    {"name": "Danzig Militaria", "match": ["danzigmilitaria.com", "danzig militaria"], "logo_file": "Danzig_Militaria.png", "url": "https://danzigmilitaria.com/shop/"},
-    {"name": "FJM44", "match": ["fjm44.com", "fjm44", "fjm 44"], "logo_file": "fjm44.png", "url": "https://fjm44.com/product-category/militaria/"},
-    {"name": "Kurland", "match": ["kurland-docs.com", "kurland"], "logo_file": "kurland.png", "url": "https://www.kurland-docs.com/shop.php"},
-    {"name": "Queen City Militaria", "match": ["queencitymilitaria.com", "queen city militaria"], "logo_file": "queen_city_militaria.png", "url": "https://www.queencitymilitaria.com/"},
-    {"name": "Combat Relics", "match": ["combat-relics.com", "combat relics"], "logo_file": "Combat_relics.png", "url": "https://www.combat-relics.com/"},
-    {"name": "Tiger Militaria", "match": ["tigermilitaria.com", "tiger militaria"], "logo_file": "TigerMilitaria.png", "url": "https://tigermilitaria.com/shop?showPerPage=24"},
-    {"name": "WAF Estate", "match": ["wehrmacht-awards.com", "waf estate", "e-stand", "estand", "militaria e-stand"], "logo_file": "waf.png", "url": "https://www.wehrmacht-awards.com/forums/forum/the-militaria-e-stand", "waf": True},
-    {"name": "Griffin Militaria", "match": ["griffinmilitaria.com", "griffin militaria"], "logo_file": "Griffin_Militaria.png", "url": "https://griffinmilitaria.com/"},
-    {"name": "EA Militaria", "match": ["ea-militaria.com", "ea militaria"], "logo_file": "eamilitaria.png", "url": "https://www.ea-militaria.com/new-items"},
-    {"name": "Militaria Plaza", "match": ["militariaplaza.nl", "militaria plaza"], "logo_file": "Militaria_Plaza.png", "url": "https://militariaplaza.nl/new"},
-    {"name": "The Collector's Guild", "match": ["germanmilitaria.com", "collector's guild", "collectors guild"], "logo_file": "germanmilitaria.png", "url": "https://www.germanmilitaria.com/Advanced.html"},
-    {"name": "General Assault Militaria", "match": ["generalassaultmilitaria.com", "general assault militaria", "gam"], "logo_file": "gam.png", "url": "https://www.generalassaultmilitaria.com/"},
-    {"name": "Bevo Militaria", "match": ["bevo-militaria.com", "bevo militaria"], "logo_file": "Bevo_Militaria.png", "url": "https://bevo-militaria.com/shop/"},
+    {"name": "The Ruptured Duck", "flag": "🇺🇸", "match": ["therupturedduck.com", "ruptured duck"], "logo_file": "ruptured_duck.png", "url": "https://www.therupturedduck.com/collections/recently-added-items"},
+    {"name": "War's End Shop", "flag": "🇺🇸", "match": ["warsendshop.com", "war's end", "wars end"], "logo_file": "warsend.png", "url": "https://www.warsendshop.com/collections/new-items"},
+    {"name": "Lakeside Trader", "flag": "🇺🇸", "match": ["lakesidetrader.com", "lakeside trader"], "logo_file": "lakeside.png", "url": "https://www.lakesidetrader.com/recently-added-items/"},
+    {"name": "Dutch Militaria", "flag": "🇳🇱", "match": ["dutchmilitaria.com", "dutch militaria"], "logo_file": "dutch_militaria.png", "url": "https://dutchmilitaria.com/"},
+    {"name": "Militaria Sales", "flag": "🇺🇸", "match": ["militariasales.com", "militaria sales"], "logo_file": "militaria_sales.png", "url": "https://www.militariasales.com/new-item/"},
+    {"name": "Military Collectibles", "flag": "🇺🇸", "match": ["militarycollectibles.com", "military collectibles"], "logo_file": "military_collectibles.png", "url": "https://militarycollectibles.com/shop?s=n"},
+    {"name": "Military Collectors HQ", "flag": "🇺🇸", "match": ["militarycollectorshq.com", "military collectors hq"], "logo_file": "militarycollectorshq.png", "url": "https://militarycollectorshq.com/store-catalog"},
+    {"name": "Soviet Orders", "flag": "🇺🇸", "match": ["sovietorders.com", "soviet orders"], "logo_file": "Soviet_Orders.png", "url": "https://sovietorders.com/new-in-store/"},
+    {"name": "Empire's Past", "flag": "🇺🇸", "match": ["empirespast.com", "empire's past", "empires past"], "logo_file": "Empire_past.png", "url": "https://empirespast.com/newly-listed/"},
+    {"name": "1944 Militaria", "flag": "🇺🇸", "match": ["1944militaria.com", "1944 militaria"], "logo_file": "1944militaria.png", "url": "https://www.1944militaria.com/New_Original_Items_s/1900.htm"},
+    {"name": "International Military Antiques", "flag": "🇺🇸", "match": ["ima-usa.com", "international military antiques", "ima usa"], "logo_file": "ima.png", "url": "https://www.ima-usa.com/collections/new-arrivals"},
+    {"name": "Wolfgang Historica", "flag": "🇩🇪", "match": ["wolfganghistorica.com", "wolfgang historica"], "logo_file": "wolfgang_historica.png", "url": "https://wolfganghistorica.com/"},
+    {"name": "Enemy Militaria", "flag": "🇺🇸", "match": ["enemymilitaria.com", "enemy militaria"], "logo_file": "Enemy_Militaria.png", "url": "https://enemymilitaria.com/"},
+    {"name": "Hiscoll Military Antiques", "flag": "🇬🇧", "match": ["hiscoll.com", "hiscoll military antiques", "hiscoll"], "logo_file": "hiscoll.png", "url": "https://hiscoll.com/shop"},
+    {"name": "Relics of the Reich", "flag": "🇺🇸", "match": ["relicsofthereich.com", "relics of the reich"], "logo_file": "relicsofthereich.png", "url": "https://www.relicsofthereich.com/home"},
+    {"name": "Epic Artifacts", "flag": "🇺🇸", "match": ["epicartifacts.com", "epic artifacts"], "logo_file": "Epic_artifacts.png", "url": "https://epicartifacts.com/newly-listed/"},
+    {"name": "RG Militaria", "flag": "🇳🇱", "match": ["rg-militaria.com", "rg militaria"], "logo_file": "rgmilitaria.png", "url": "https://www.rg-militaria.com/new-items-nieuwe-items"},
+    {"name": "Military Antiques Stockholm", "flag": "🇸🇪", "match": ["military-antiques-stockholm.com", "military antiques stockholm"], "logo_file": "Military_Antiques_Stockholm.png", "url": "https://www.military-antiques-stockholm.com/shop/"},
+    {"name": "Oorlogsspullen", "flag": "🇳🇱", "match": ["oorlogsspullen.nl", "oorlogsspullen"], "logo_file": "Oorlogspullen.png", "url": "https://oorlogsspullen.nl/product-categorie/new/"},
+    {"name": "Wittmann Antique Militaria", "flag": "🇩🇪", "match": ["wwiidaggers.com", "wittmann antique militaria", "wittmann"], "logo_file": "wam.png", "url": "https://www.wwiidaggers.com/updates.htm"},
+    {"name": "RBNr Militaria", "flag": "🇩🇪", "match": ["rbnr.it", "rbnr militaria", "rbnr"], "logo_file": "RBNR.png", "url": "https://en.rbnr.it/collections/all"},
+    {"name": "Iraqi Militaria", "flag": "🇺🇸", "match": ["iraqimilitaria.com", "iraqi militaria"], "logo_file": "iraqi_militaria.png", "url": "https://www.iraqimilitaria.com/"},
+    {"name": "Danzig Militaria", "flag": "🇵🇱", "match": ["danzigmilitaria.com", "danzig militaria"], "logo_file": "Danzig_Militaria.png", "url": "https://danzigmilitaria.com/shop/"},
+    {"name": "FJM44", "flag": "🇫🇷", "match": ["fjm44.com", "fjm44", "fjm 44"], "logo_file": "fjm44.png", "url": "https://fjm44.com/product-category/militaria/"},
+    {"name": "Kurland", "flag": "🇩🇪", "match": ["kurland-docs.com", "kurland"], "logo_file": "kurland.png", "url": "https://www.kurland-docs.com/shop.php"},
+    {"name": "Queen City Militaria", "flag": "🇺🇸", "match": ["queencitymilitaria.com", "queen city militaria"], "logo_file": "queen_city_militaria.png", "url": "https://www.queencitymilitaria.com/"},
+    {"name": "Combat Relics", "flag": "🇺🇸", "match": ["combat-relics.com", "combat relics"], "logo_file": "Combat_relics.png", "url": "https://www.combat-relics.com/"},
+    {"name": "Tiger Militaria", "flag": "🇬🇧", "match": ["tigermilitaria.com", "tiger militaria"], "logo_file": "TigerMilitaria.png", "url": "https://tigermilitaria.com/shop?showPerPage=24"},
+    {"name": "WAF Estate", "flag": "🇺🇸", "match": ["wehrmacht-awards.com", "waf estate", "e-stand", "estand", "militaria e-stand"], "logo_file": "waf.png", "url": "https://www.wehrmacht-awards.com/forums/forum/the-militaria-e-stand", "waf": True},
+    {"name": "Griffin Militaria", "flag": "🇺🇸", "match": ["griffinmilitaria.com", "griffin militaria"], "logo_file": "Griffin_Militaria.png", "url": "https://griffinmilitaria.com/"},
+    {"name": "EA Militaria", "flag": "🇨🇿", "match": ["ea-militaria.com", "ea militaria"], "logo_file": "eamilitaria.png", "url": "https://www.ea-militaria.com/new-items"},
+    {"name": "Militaria Plaza", "flag": "🇳🇱", "match": ["militariaplaza.nl", "militaria plaza"], "logo_file": "Militaria_Plaza.png", "url": "https://militariaplaza.nl/new"},
+    {"name": "The Collector's Guild", "flag": "🇺🇸", "match": ["germanmilitaria.com", "collector's guild", "collectors guild"], "logo_file": "germanmilitaria.png", "url": "https://www.germanmilitaria.com/Advanced.html"},
+    {"name": "General Assault Militaria", "flag": "🇺🇸", "match": ["generalassaultmilitaria.com", "general assault militaria", "gam"], "logo_file": "gam.png", "url": "https://www.generalassaultmilitaria.com/"},
+    {"name": "Bevo Militaria", "flag": "🇩🇪", "match": ["bevo-militaria.com", "bevo militaria"], "logo_file": "Bevo_Militaria.png", "url": "https://bevo-militaria.com/shop/"},
 ]
 
 # ==================== BOT SETUP ====================
@@ -902,7 +902,8 @@ async def dealerprofile_cmd(interaction: discord.Interaction, dealer_name: str):
     logo_file = os.path.join(SCRIPT_DIR, "logos", dealer["logo_file"])
 
     color = discord.Color.red() if warning else discord.Color.dark_gold()
-    embed = discord.Embed(title=f"🏪 {dealer['name']}", color=color, timestamp=datetime.now(timezone.utc))
+    flag = dealer.get("flag", "🌐")
+    embed = discord.Embed(title=f"{flag} {dealer['name']}", color=color, timestamp=datetime.now(timezone.utc))
 
     if warning:
         embed.add_field(name="⚠️ WARNING", value=f"```{warning}```", inline=False)
