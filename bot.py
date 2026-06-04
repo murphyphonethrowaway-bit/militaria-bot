@@ -648,12 +648,17 @@ def parse_waf_email(subject, body):
     """Parse a WAF email and extract item title, prices and check if it's a bump."""
     import re
 
-    # Extract item title from subject: "X has made a new post under TITLE"
-    title_match = re.search(r"has made a new post under\\s+(.+)", subject, re.IGNORECASE)
-    item_title = title_match.group(1).strip() if title_match else subject
+    # Try format 1: body contains "X has made a new post under TITLE"
+    title_match = re.search("has made a new post under (.+)", body, re.IGNORECASE)
+    poster_match = re.search("([^ ]+) has made a new post", body, re.IGNORECASE)
 
-    # Extract poster name
-    poster_match = re.search(r"^(.+?)\\s+has made a new post", subject, re.IGNORECASE)
+    if title_match:
+        item_title = title_match.group(1).strip()
+    else:
+        # Try format 2: subject "a new post in your forum channel subscription: CATEGORY"
+        sub_match = re.search("subscription: (.+)", subject, re.IGNORECASE)
+        item_title = sub_match.group(1).strip().title() if sub_match else subject
+
     poster = poster_match.group(1).strip() if poster_match else "Unknown"
 
     # Extract forum URL
