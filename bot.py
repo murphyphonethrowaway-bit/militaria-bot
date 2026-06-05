@@ -132,6 +132,9 @@ EMAIL_DEALERS = [
     {"name": "E-Medals", "flag": "🇨🇦", "match": ["emedals.com", "e-medals", "emedals"], "logo_file": "e_medals.png", "url": "https://www.emedals.com/collections/newly-listed"},
     {"name": "Espenlaub Militaria", "flag": "🇪🇪", "match": ["aboutww2militaria.com", "espenlaub militaria", "espenlaub"], "logo_file": "espenlaub_militaria.png", "url": "https://aboutww2militaria.com/new-items.html"},
     {"name": "US Militaria Forum", "flag": "🇺🇸", "match": ["usmilitariaforum.com", "us militaria forum", "usmf", "u.s. militaria forum"], "logo_file": "usmf.png", "url": "https://www.usmilitariaforum.com/forums/", "usmf": True},
+    {"name": "VIP Militaria", "flag": "🇩🇪", "match": ["vip-militaria.de", "vip militaria"], "logo_file": "vip_militaria.png", "url": "https://www.vip-militaria.de/NEU-im-Shop/"},
+    {"name": "Summer Vacation Militaria", "flag": "🇺🇸", "match": [], "logo_file": "summer_vacation_militaria.png", "url": "https://www.svmilitaria.com/NewItems.htm"},
+    {"name": "Clements Militaria", "flag": "🇳🇱", "match": ["clementsm@emailer500.com", "clements militaria", "clementsmilitaria.com"], "logo_file": "clements_militaria.png", "url": "https://clementsmilitaria.com/shop.php"},
 ]
 
 USMF_CHANNEL_ID = 1512557138172706967  # #usmf-updates channel
@@ -299,6 +302,7 @@ bot_state = {
     "griffin_buffer": [],
     "griffin_timer": None,
     "dealer_cooldowns": {},
+    "waf_notification_count": 0,
 }
 
 # ==================== DATA FUNCTIONS ====================
@@ -624,11 +628,12 @@ async def send_alert(channel, name, url, logo_file, test=False, waf=False):
 
     content_msg = f"<@&{WAF_ROLE_ID}> New WAF Estate listing!" if waf and not test else None
 
+    follow_view = FollowDealerView(name)
     try:
         if file:
-            await channel.send(content=content_msg, file=file, embed=embed)
+            await channel.send(content=content_msg, file=file, embed=embed, view=follow_view)
         else:
-            await channel.send(content=content_msg, embed=embed)
+            await channel.send(content=content_msg, embed=embed, view=follow_view)
     except Exception as e:
         logger.error(f"Failed to send message for {name}: {e}\n{traceback.format_exc()}")
 
@@ -746,7 +751,7 @@ async def check_all_dealers():
 
 # ==================== WAF EMAIL PARSER ====================
 
-BUMP_KEYWORDS = ["up", "bump", "still available", "still for sale", "ttt", "to the top", "glws", "price reduced", "price drop", "make offer", "reduced"]
+BUMP_KEYWORDS = ["up", "bump", "still available", "still for sale", "ttt", "btt", "to the top", "glws", "price reduced", "price drop", "make offer", "reduced"]
 
 def parse_waf_email(subject, body):
     """Parse a WAF email and extract item title, prices and check if it's a bump."""
@@ -975,6 +980,22 @@ async def send_waf_alert(channel, parsed, guild):
         else:
             await channel.send(content=content_msg, embed=embed, view=watch_view)
         logger.info(f"[WAF] Alert sent for: {parsed['item_title']} | Price: {price_str} | Role: {role.name if role else 'Unknown'}")
+        # Every 25 WAF notifications, send a Militaria Alert ad
+        bot_state["waf_notification_count"] += 1
+        if bot_state["waf_notification_count"] % 25 == 0:
+            try:
+                ad_embed = discord.Embed(
+                    title="🔍 Looking for something specific?",
+                    description="**Want custom alerts for items you're looking for?**\n\nSign up for **Militaria Alert** and get notified the moment your target item hits the market.\n\n💰 Only **$1/month**",
+                    color=discord.Color.green(),
+                    timestamp=datetime.now(timezone.utc)
+                )
+                ad_embed.set_footer(text="The Relic Registry — Sponsored")
+                buy_view = MilitariaAlertAdView()
+                await channel.send(embed=ad_embed, view=buy_view)
+                logger.info("[WAF] Militaria Alert ad sent.")
+            except Exception as ad_err:
+                logger.error(f"[WAF] Failed to send ad: {ad_err}")
     except Exception as e:
         logger.error(f"[WAF] Failed to send alert: {e}")
 
@@ -1052,6 +1073,7 @@ async def send_promo():
     channel = client.get_channel(CHANNEL_ID)
     if not channel:
         return
+    bot_state["last_promo"] = datetime.now(timezone.utc)  # Set at startup so /nextpromo works
     while not client.is_closed():
         await asyncio.sleep(48 * 3600)
         if bot_state["promo_paused"]:
@@ -1078,6 +1100,18 @@ async def send_promo():
         except Exception as e:
             print(f"Failed to send promo: {e}")
 
+# ==================== MILITARIA ALERT AD BUTTON ====================
+
+class MilitariaAlertAdView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(discord.ui.Button(
+            label="Buy Now — $1/month",
+            emoji="🛒",
+            style=discord.ButtonStyle.link,
+            url="https://www.militariaalert.com"
+        ))
+
 # ==================== WAF WATCH ITEM BUTTONS ====================
 
 class WatchItemView(discord.ui.View):
@@ -1089,21 +1123,35 @@ class WatchItemView(discord.ui.View):
 
     @discord.ui.button(label="Watch Item", emoji="🔔", style=discord.ButtonStyle.secondary)
     async def watch(self, interaction: discord.Interaction, button: discord.ui.Button):
-        user_id = str(interaction.user.id)
-        if await db_is_watching(user_id, self.forum_url):
-            await interaction.response.send_message(f"⚠️ You are already watching **{self.item_title}**!", ephemeral=True)
-            return
-        await db_watch_item(user_id, self.forum_url, self.item_title, self.price)
-        await interaction.response.send_message(f"🔔 You are now watching **{self.item_title}**! You will be notified of any price changes or updates.", ephemeral=True)
+        try:
+            user_id = str(interaction.user.id)
+            if await db_is_watching(user_id, self.forum_url):
+                await interaction.response.send_message(f"⚠️ You are already watching **{self.item_title}**!", ephemeral=True)
+                return
+            await db_watch_item(user_id, self.forum_url, self.item_title, self.price)
+            await interaction.response.send_message(f"🔔 You are now watching **{self.item_title}**! You will be notified of any price changes or updates.", ephemeral=True)
+        except Exception as e:
+            logger.error(f"[WatchItem] Watch button error: {e}\n{traceback.format_exc()}")
+            try:
+                await interaction.response.send_message("⚠️ Something went wrong. Please try again.", ephemeral=True)
+            except:
+                pass
 
     @discord.ui.button(label="Unwatch", emoji="🔕", style=discord.ButtonStyle.secondary)
     async def unwatch(self, interaction: discord.Interaction, button: discord.ui.Button):
-        user_id = str(interaction.user.id)
-        if not await db_is_watching(user_id, self.forum_url):
-            await interaction.response.send_message(f"⚠️ You are not watching **{self.item_title}**.", ephemeral=True)
-            return
-        await db_unwatch_item(user_id, self.forum_url)
-        await interaction.response.send_message(f"🔕 You have stopped watching **{self.item_title}**.", ephemeral=True)
+        try:
+            user_id = str(interaction.user.id)
+            if not await db_is_watching(user_id, self.forum_url):
+                await interaction.response.send_message(f"⚠️ You are not watching **{self.item_title}**.", ephemeral=True)
+                return
+            await db_unwatch_item(user_id, self.forum_url)
+            await interaction.response.send_message(f"🔕 You have stopped watching **{self.item_title}**.", ephemeral=True)
+        except Exception as e:
+            logger.error(f"[WatchItem] Unwatch button error: {e}\n{traceback.format_exc()}")
+            try:
+                await interaction.response.send_message("⚠️ Something went wrong. Please try again.", ephemeral=True)
+            except:
+                pass
 
     @discord.ui.button(label="Send to DM", emoji="📬", style=discord.ButtonStyle.secondary)
     async def send_to_dm(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1111,18 +1159,21 @@ class WatchItemView(discord.ui.View):
             price_line = f"\n💰 **{self.price}**" if self.price else ""
             dm_embed = discord.Embed(
                 title=f"📌 Bookmarked: {self.item_title}",
-                description=f"You saved this WAF listing for later.{price_line}\n\n[**View Listing →**]({self.forum_url})",
+                description=f"You saved this listing for later.{price_line}\n\n[**View Listing →**]({self.forum_url})",
                 color=discord.Color.dark_gold(),
                 timestamp=datetime.now(timezone.utc)
             )
-            dm_embed.set_footer(text="WAF Bookmark — The Relic Registry")
+            dm_embed.set_footer(text="Bookmark — The Relic Registry")
             await interaction.user.send(embed=dm_embed)
             await interaction.response.send_message(f"📬 **{self.item_title}** has been sent to your DMs!", ephemeral=True)
         except discord.Forbidden:
-            await interaction.response.send_message("⚠️ I couldn't DM you — please enable DMs from server members in your privacy settings.", ephemeral=True)
+            await interaction.response.send_message("⚠️ I couldn't DM you — please enable DMs from server members in Discord privacy settings.", ephemeral=True)
         except Exception as e:
-            logger.error(f"[WAF] DM bookmark failed: {e}")
-            await interaction.response.send_message("⚠️ Something went wrong sending the DM.", ephemeral=True)
+            logger.error(f"[WatchItem] DM bookmark failed: {e}\n{traceback.format_exc()}")
+            try:
+                await interaction.response.send_message("⚠️ Something went wrong sending the DM.", ephemeral=True)
+            except:
+                pass
 
 # ==================== FOLLOW DEALER BUTTONS ====================
 
