@@ -43,7 +43,7 @@ DATABASE_URL = os.environ.get('DATABASE_URL') or os.environ.get('DB_URL')
 GMAIL_USER = "relicregistrybot@gmail.com"
 GMAIL_APP_PASSWORD = "tyvm uvfb jkxv ptvy"
 OUTLOOK_USER = "relicregistrybot@hotmail.com"
-OUTLOOK_PASSWORD = "NSDAP1933$"
+OUTLOOK_PASSWORD = "HSZBN-772CX-YRKG8-N2UNF-QYKXW"
 
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
