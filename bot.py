@@ -42,6 +42,8 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DATABASE_URL = os.environ.get('DATABASE_URL') or os.environ.get('DB_URL')
 GMAIL_USER = "relicregistrybot@gmail.com"
 GMAIL_APP_PASSWORD = "tyvm uvfb jkxv ptvy"
+OUTLOOK_USER = "relicregistrybot@hotmail.com"
+OUTLOOK_PASSWORD = "NSDAP1933$"
 
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
@@ -131,6 +133,14 @@ EMAIL_DEALERS = [
     {"name": "WorldWar 2 Collectibles", "flag": "🇬🇧", "match": ["worldwarcollectibles.com", "worldwar2collectibles.com", "world war 2 collectibles", "worldwar 2 collectibles"], "logo_file": "Worldwar2collectibles.png", "url": "https://www.worldwarcollectibles.com/shop.php"},
     {"name": "E-Medals", "flag": "🇨🇦", "match": ["emedals.com", "e-medals", "emedals"], "logo_file": "e_medals.png", "url": "https://www.emedals.com/collections/newly-listed"},
     {"name": "Espenlaub Militaria", "flag": "🇪🇪", "match": ["aboutww2militaria.com", "espenlaub militaria", "espenlaub"], "logo_file": "espenlaub_militaria.png", "url": "https://aboutww2militaria.com/new-items.html"},
+]
+
+USMF_CHANNEL_ID = 1512557138172706967  # #usmf-updates channel
+
+# ==================== OUTLOOK DEALER CONFIG ====================
+# Dealers matched against emails arriving in the Outlook inbox
+OUTLOOK_DEALERS = [
+    {"name": "US Militaria Forum", "flag": "🇺🇸", "match": ["usmilitariaforum.com", "us militaria forum", "usmf"], "logo_file": "usmf.png", "url": "https://www.usmilitariaforum.com/forums/", "usmf": True},
 ]
 
 # ==================== BOT SETUP ====================
@@ -701,6 +711,59 @@ async def check_gmail_async():
         logger.error(f"[Gmail] Error checking email: {e}\n{traceback.format_exc()}")
     return triggered
 
+async def check_outlook_async():
+    triggered = []
+    try:
+        mail = imaplib.IMAP4_SSL("imap-mail.outlook.com")
+        mail.login(OUTLOOK_USER, OUTLOOK_PASSWORD)
+        mail.select("inbox")
+        _, messages = mail.search(None, "UNSEEN")
+        email_ids = messages[0].split()
+        logger.info(f"[Outlook] Found {len(email_ids)} unread email(s).")
+        for eid in email_ids:
+            _, msg_data = mail.fetch(eid, "(RFC822)")
+            msg = email.message_from_bytes(msg_data[0][1])
+            msg_id = msg.get("Message-ID", str(eid))
+            logger.debug(f"[Outlook] Checking msg_id: {msg_id}")
+            if await db_is_email_seen(msg_id):
+                logger.info(f"[Outlook] Skipping already seen email: {msg_id}")
+                continue
+            await db_mark_email_seen(msg_id)
+            sender = msg.get("From", "").lower()
+            subject_raw = msg.get("Subject", "")
+            subject = decode_header(subject_raw)[0][0]
+            if isinstance(subject, bytes):
+                subject = subject.decode(errors="replace")
+            subject = subject.lower()
+            body = ""
+            if msg.is_multipart():
+                for part in msg.walk():
+                    if part.get_content_type() == "text/plain":
+                        body = part.get_payload(decode=True).decode(errors="replace")
+                        break
+            else:
+                payload = msg.get_payload(decode=True)
+                if payload:
+                    body = payload.decode(errors="replace")
+            logger.info(f"[Outlook] New email from: {sender} | Subject: {subject}")
+            logger.debug(f"[Outlook] Body preview: {body[:100]}")
+            matched = False
+            for dealer in OUTLOOK_DEALERS:
+                for keyword in dealer["match"]:
+                    if keyword.lower() in sender or keyword.lower() in subject:
+                        logger.info(f"[Outlook] Matched dealer: {dealer['name']}")
+                        triggered.append((dealer, subject, body))
+                        matched = True
+                        break
+                if matched:
+                    break
+            if not matched:
+                logger.info(f"[Outlook] No dealer matched for: {subject}")
+        mail.logout()
+    except Exception as e:
+        logger.error(f"[Outlook] Error checking email: {e}\n{traceback.format_exc()}")
+    return triggered
+
 # ==================== BACKGROUND TASKS ====================
 async def check_all_dealers():
     await client.wait_until_ready()
@@ -823,6 +886,91 @@ def parse_waf_email(subject, body):
         "msg_body": msg_body_clean,
     }
 
+# ==================== USMF EMAIL PARSER ====================
+# NOTE: parse_usmf_email will be properly built once a sample USMF email is received.
+
+def parse_usmf_email(subject, body):
+    """Parse a USMF forum notification email."""
+    import re
+
+    # Title comes from the subject line directly
+    item_title = subject.strip()
+
+    # Extract forum/category — "Posted in CATEGORY"
+    category_match = re.search(r"Posted in (.+)", body, re.IGNORECASE)
+    category = category_match.group(1).strip() if category_match else ""
+
+    # Extract price from body
+    price_pattern = r"(?:[\$€£]\s*\d{2,6}(?:[.,]\d{2})?|\d{2,6}(?:[.,]\d{2})?\s*(?:EUR|USD|GBP))"
+    raw_prices = re.findall(price_pattern, body, re.IGNORECASE)
+    clean_prices = []
+    seen_prices = set()
+    for p in raw_prices:
+        p = p.strip().upper()
+        if p not in seen_prices:
+            seen_prices.add(p)
+            clean_prices.append(p)
+    clean_prices = clean_prices[:3]
+    price_str = " | ".join(clean_prices) if clean_prices else ""
+
+    # Extract the actual topic URL from inside the redirect URL
+    # Format: ...&url=https://www.usmilitariaforum.com/forums/index.php?/topic/XXXXX/...
+    topic_url = ""
+    url_match = re.search(r'https?://www\.usmilitariaforum\.com/forums/index\.php\?/topic/[^\s&"]+', body)
+    if url_match:
+        topic_url = url_match.group(0).strip()
+    else:
+        # Fallback: grab any USMF URL
+        fallback = re.search(r"https?://www\.usmilitariaforum\.com/\S+", body)
+        topic_url = fallback.group(0).strip() if fallback else ""
+
+    logger.debug(f"[USMF] Parsed: title='{item_title}' | category='{category}' | price='{price_str}' | url='{topic_url}'")
+
+    return {
+        "item_title": item_title,
+        "category": category,
+        "price_str": price_str,
+        "forum_url": topic_url,
+    }
+
+async def send_usmf_alert(channel, parsed):
+    """Send a USMF forum alert to the USMF channel."""
+    if not channel:
+        logger.error("[USMF] Channel not found!")
+        return
+
+    # Build description
+    description = f"**{parsed['item_title']}**\n"
+    if parsed.get("category"):
+        description += f"\n📂 {parsed['category']}\n"
+    if parsed.get("price_str"):
+        description += f"\n💰 **{parsed['price_str']}**\n"
+    if parsed.get("forum_url"):
+        description += f"\n[**View Thread →**]({parsed['forum_url']})"
+
+    embed = discord.Embed(
+        title="🇺🇸 New USMF Listing",
+        description=description,
+        color=discord.Color.dark_blue(),
+        timestamp=datetime.now(timezone.utc)
+    )
+    embed.set_footer(text="US Militaria Forum — The Relic Registry")
+
+    logo_file = os.path.join(SCRIPT_DIR, "logos", "usmf.png")
+    file = None
+    if os.path.exists(logo_file):
+        file = discord.File(logo_file, filename="logo.png")
+        embed.set_thumbnail(url="attachment://logo.png")
+
+    try:
+        if file:
+            await channel.send(file=file, embed=embed)
+        else:
+            await channel.send(embed=embed)
+        logger.info(f"[USMF] Alert sent for: {parsed['item_title']}")
+    except Exception as e:
+        logger.error(f"[USMF] Failed to send alert: {e}")
+
 async def send_waf_alert(channel, parsed, guild):
     """Send a formatted WAF Estate alert to members with the correct role."""
     if parsed["is_bump"]:
@@ -841,7 +989,7 @@ async def send_waf_alert(channel, parsed, guild):
             break
 
     # Embed: category as title, item name in description
-    description = f"**{cat_emoji} {parsed['item_title']}**\n"
+    description = f"**{parsed['item_title']}**\n"
     if price_str:
         description += f"\n💰 **{price_str}**\n"
     if parsed["forum_url"]:
@@ -915,6 +1063,8 @@ async def check_email_dealers():
             await asyncio.sleep(30)
             continue
         bot_state["last_email_check"] = datetime.now(timezone.utc)
+
+        # Check Gmail
         triggered = await check_gmail_async()
         for dealer, subject, body in triggered:
             await db_increment_stat(dealer["name"])
@@ -930,6 +1080,23 @@ async def check_email_dealers():
             else:
                 logo_file = os.path.join(SCRIPT_DIR, "logos", dealer["logo_file"])
                 await send_alert(channel, dealer["name"], dealer["url"], logo_file)
+
+        # Check Outlook
+        outlook_triggered = await check_outlook_async()
+        for dealer, subject, body in outlook_triggered:
+            await db_increment_stat(dealer["name"])
+            is_usmf = dealer.get("usmf", False)
+            if is_usmf:
+                try:
+                    parsed = parse_usmf_email(subject, body)
+                    usmf_channel = client.get_channel(USMF_CHANNEL_ID)
+                    await send_usmf_alert(usmf_channel, parsed)
+                except Exception as e:
+                    logger.error(f"[USMF] Error processing email '{subject}': {e}\n{traceback.format_exc()}")
+            else:
+                logo_file = os.path.join(SCRIPT_DIR, "logos", dealer["logo_file"])
+                await send_alert(channel, dealer["name"], dealer["url"], logo_file)
+
         await asyncio.sleep(EMAIL_CHECK_INTERVAL)
 
 async def send_promo():
