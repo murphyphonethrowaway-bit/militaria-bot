@@ -29,6 +29,7 @@ from datetime import datetime, timezone, timedelta
 # ==================== CONFIGURATION ====================
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHANNEL_ID = 1510653092721590323
+WAF_CHANNEL_ID = 1512532164871196864  # #waf-updates — role-gated channel
 WAF_ROLE_ID = 1511101033349124318
 DEALER_SUGGEST_CHANNEL_ID = 1511487755266556034  # #dealer-reviews channel
 REVIEW_LOG_CHANNEL_ID = 1511487836220817561  # #review-log channel
@@ -53,25 +54,25 @@ USER_AGENTS = [
 ]
 
 WAF_CATEGORIES = [
-    {"name": "All WAF Updates", "role_id": 1511112093774905386, "keywords": []},
-    {"name": "1957 Medals & Decorations", "role_id": 1511112215544201367, "keywords": ["1957", "medal", "decoration"]},
-    {"name": "Medals, Badges & Awards", "role_id": 1511112409451073828, "keywords": ["medal", "badge", "award", "cross", "iron cross"]},
-    {"name": "Photos & Paper Items", "role_id": 1511112501792739388, "keywords": ["photo", "paper", "document", "postcard", "soldbuch"]},
-    {"name": "Uniforms", "role_id": 1511112564824866897, "keywords": ["uniform", "tunic", "jacket", "trousers", "coat"]},
-    {"name": "Flags, Banners & Pennants", "role_id": 1511112671963906068, "keywords": ["flag", "banner", "pennant", "standard"]},
-    {"name": "Equipment/Field Gear & Dog Tags", "role_id": 1511112754491297922, "keywords": ["equipment", "field gear", "footwear", "boot", "dog tag", "canteen"]},
-    {"name": "Optics", "role_id": 1511112866495729706, "keywords": ["optic", "binocular", "scope", "telescope"]},
-    {"name": "Cloth Headgear", "role_id": 1511112942358368307, "keywords": ["cloth", "headgear", "cap", "visor", "field cap"]},
-    {"name": "German Helmets", "role_id": 1511113046167130293, "keywords": ["helmet", "stahlhelm", "M35", "M40", "M42"]},
-    {"name": "Belts & Buckles", "role_id": 1511113224869773393, "keywords": ["belt", "buckle", "brocade"]},
-    {"name": "Edged Weapons", "role_id": 1511113345816854529, "keywords": ["dagger", "sword", "bayonet", "knife", "blade"]},
-    {"name": "Firearms & Ordnance", "role_id": 1511113443501932838, "keywords": ["firearm", "pistol", "rifle", "gun", "luger", "p38"]},
-    {"name": "Imperial Militaria", "role_id": 1511113528046653520, "keywords": ["imperial", "ww1", "1914", "1918", "pickelhaube"]},
-    {"name": "Freikorps / Weimar Period", "role_id": 1511113644015095839, "keywords": ["freikorps", "weimar"]},
-    {"name": "U.S. & British Militaria", "role_id": 1511113709328662648, "keywords": ["american", "british", "allied", "usa", "uk"]},
-    {"name": "International Militaria", "role_id": 1511113776923938869, "keywords": ["international", "italian", "japanese", "soviet", "french"]},
-    {"name": "Books & Media", "role_id": 1511118900488569015, "keywords": ["book", "media", "magazine", "manual"]},
-    {"name": "Misc. Third Reich Items", "role_id": 1511119017807581347, "keywords": ["misc", "third reich", "nsdap"]},
+    {"name": "All WAF Updates", "emoji": "🎖️", "role_id": 1511112093774905386, "keywords": []},
+    {"name": "1957 Medals & Decorations", "emoji": "🎖️", "role_id": 1511112215544201367, "keywords": ["1957", "medal", "decoration"]},
+    {"name": "Medals, Badges & Awards", "emoji": "🏅", "role_id": 1511112409451073828, "keywords": ["medal", "badge", "award", "cross", "iron cross"]},
+    {"name": "Photos & Paper Items", "emoji": "📷", "role_id": 1511112501792739388, "keywords": ["photo", "paper", "document", "postcard", "soldbuch"]},
+    {"name": "Uniforms", "emoji": "🪖", "role_id": 1511112564824866897, "keywords": ["uniform", "tunic", "jacket", "trousers", "coat"]},
+    {"name": "Flags, Banners & Pennants", "emoji": "🚩", "role_id": 1511112671963906068, "keywords": ["flag", "banner", "pennant", "standard"]},
+    {"name": "Equipment/Field Gear & Dog Tags", "emoji": "🎒", "role_id": 1511112754491297922, "keywords": ["equipment", "field gear", "footwear", "boot", "dog tag", "canteen"]},
+    {"name": "Optics", "emoji": "🔭", "role_id": 1511112866495729706, "keywords": ["optic", "binocular", "scope", "telescope"]},
+    {"name": "Cloth Headgear", "emoji": "🪖", "role_id": 1511112942358368307, "keywords": ["cloth", "headgear", "cap", "visor", "field cap"]},
+    {"name": "German Helmets", "emoji": "⛑️", "role_id": 1511113046167130293, "keywords": ["helmet", "stahlhelm", "M35", "M40", "M42"]},
+    {"name": "Belts & Buckles", "emoji": "🪢", "role_id": 1511113224869773393, "keywords": ["belt", "buckle", "brocade"]},
+    {"name": "Edged Weapons", "emoji": "🗡️", "role_id": 1511113345816854529, "keywords": ["dagger", "sword", "bayonet", "knife", "blade"]},
+    {"name": "Firearms & Ordnance", "emoji": "🔫", "role_id": 1511113443501932838, "keywords": ["firearm", "pistol", "rifle", "gun", "luger", "p38"]},
+    {"name": "Imperial Militaria", "emoji": "👑", "role_id": 1511113528046653520, "keywords": ["imperial", "ww1", "1914", "1918", "pickelhaube"]},
+    {"name": "Freikorps / Weimar Period", "emoji": "📜", "role_id": 1511113644015095839, "keywords": ["freikorps", "weimar"]},
+    {"name": "U.S. & British Militaria", "emoji": "🦅", "role_id": 1511113709328662648, "keywords": ["american", "british", "allied", "usa", "uk"]},
+    {"name": "International Militaria", "emoji": "🌍", "role_id": 1511113776923938869, "keywords": ["international", "italian", "japanese", "soviet", "french"]},
+    {"name": "Books & Media", "emoji": "📚", "role_id": 1511118900488569015, "keywords": ["book", "media", "magazine", "manual"]},
+    {"name": "Misc. Third Reich Items", "emoji": "📦", "role_id": 1511119017807581347, "keywords": ["misc", "third reich", "nsdap"]},
 ]
 
 # ==================== DEALER CONFIG ====================
@@ -214,6 +215,17 @@ class MilitariaBot(discord.Client):
                     dealer_name TEXT NOT NULL,
                     timestamp BIGINT NOT NULL,
                     UNIQUE(user_id, dealer_name)
+                )
+            ''')
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS waf_watchlist (
+                    id SERIAL PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    forum_url TEXT NOT NULL,
+                    item_title TEXT NOT NULL,
+                    last_price TEXT DEFAULT '',
+                    date_added BIGINT NOT NULL,
+                    UNIQUE(user_id, forum_url)
                 )
             ''')
         logger.info("Database initialized successfully!")
@@ -721,69 +733,84 @@ def parse_waf_email(subject, body):
     """Parse a WAF email and extract item title, prices and check if it's a bump."""
     import re
 
-    # Try format 1: body contains "X has made a new post under TITLE"
-    title_match = re.search("has made a new post under (.+)", body, re.IGNORECASE)
-    poster_match = re.search("([^ ]+) has made a new post", body, re.IGNORECASE)
+    # Extract item title — line immediately after "has made a new post under"
+    title_match = re.search(r"has made a new post under\s*\n+(.+)", body, re.IGNORECASE)
+    item_title = title_match.group(1).strip() if title_match else subject.strip()
 
-    if title_match:
-        item_title = title_match.group(1).strip()
-    else:
-        # Try format 2: subject "a new post in your forum channel subscription: CATEGORY"
-        sub_match = re.search("subscription: (.+)", subject, re.IGNORECASE)
-        item_title = sub_match.group(1).strip().title() if sub_match else subject
-
+    # Extract poster name
+    poster_match = re.search(r"Dear ZiM,\s*\n+(\S+)\s+has made a new post", body, re.IGNORECASE)
     poster = poster_match.group(1).strip() if poster_match else "Unknown"
 
     # Extract forum URL
     url_match = re.search(r"https?://www\.wehrmacht-awards\.com/forums/node/\d+", body)
-    forum_url = url_match.group(0) if url_match else ""
+    forum_url = url_match.group(0).strip() if url_match else ""
 
-    # Check if it's a bump
-    body_clean = body.strip().lower()
-    # Remove the standard email wrapper to get just the message
-    msg_match = re.search(r"\*{5,}(.+?)\*{5,}", body, re.DOTALL)
-    msg_body = msg_match.group(1).strip() if msg_match else body_clean
+    # Extract message body between *** delimiters
+    msg_match = re.search(r"\*{3,}(.+?)\*{3,}", body, re.DOTALL)
+    msg_body = msg_match.group(1).strip() if msg_match else ""
 
-    is_bump = any(keyword == msg_body.lower().strip() for keyword in BUMP_KEYWORDS) or \
-              len(msg_body.strip()) < 10 and any(keyword in msg_body.lower() for keyword in BUMP_KEYWORDS)
+    # Strip BBCode-like tags from msg_body
+    msg_body_clean = re.sub(r"\[/?[A-Z]+[^\]]*\]", "", msg_body, flags=re.IGNORECASE).strip()
 
-    # Extract prices (numbers followed by EUR, USD, $, €)
-    prices = re.findall(r"[\$€]?\s*\d+(?:[.,]\d+)?\s*(?:EUR|USD|euro|dollars?|\$|€)?", body, re.IGNORECASE)
-    # Clean up prices
+    # Check if it's a bump — only look inside the actual message body
+    is_bump = False
+    if msg_body_clean:
+        msg_lower = msg_body_clean.lower().strip()
+        is_bump = (
+            any(keyword == msg_lower for keyword in BUMP_KEYWORDS) or
+            (len(msg_lower) < 15 and any(keyword in msg_lower for keyword in BUMP_KEYWORDS))
+        )
+
+    # Extract prices from message body only (avoids grabbing node IDs from URLs)
+    price_pattern = r"(?:[\$\u20ac\xa3]\s*\d{2,6}(?:[.,]\d{2})?|\d{2,6}(?:[.,]\d{2})?\s*(?:EUR|USD|GBP))"
+    raw_prices = re.findall(price_pattern, msg_body_clean, re.IGNORECASE)
     clean_prices = []
-    for p in prices:
-        p = p.strip()
-        if p and any(c.isdigit() for c in p):
-            clean_prices.append(p.upper().replace("EURO", "EUR").replace("DOLLARS", "USD"))
-    # Remove duplicates and very short matches
-    clean_prices = list(dict.fromkeys([p for p in clean_prices if len(p) > 2]))[:5]
+    seen_prices = set()
+    for p in raw_prices:
+        p = p.strip().upper().replace("EURO", "EUR").replace("DOLLARS", "USD")
+        if p not in seen_prices:
+            seen_prices.add(p)
+            clean_prices.append(p)
+    clean_prices = clean_prices[:5]
 
-    # Match category to Discord role
+    # Determine category from the email subject line
+    # Subject format: "A new post in your Forum Channel subscription: CATEGORY NAME"
+    subject_cat_match = re.search(r"subscription:\s*(.+)", subject, re.IGNORECASE)
+    subject_category = subject_cat_match.group(1).strip().lower() if subject_cat_match else ""
+
+    # Match subject category to a WAF role by name first
     matched_role_id = None
-    title_lower = item_title.lower()
-    body_lower = body.lower()
-    search_text = title_lower + " " + body_lower
-
     for cat in WAF_CATEGORIES:
         if cat["name"] == "All WAF Updates":
             continue
-        for keyword in cat["keywords"]:
-            if keyword.lower() in search_text:
-                matched_role_id = cat["role_id"]
-                break
-        if matched_role_id:
+        if subject_category and cat["name"].lower() == subject_category:
+            matched_role_id = cat["role_id"]
             break
 
-    # Default to All WAF Updates if no match
+    # Fall back to keyword matching against subject category string
     if not matched_role_id:
-        matched_role_id = WAF_CATEGORIES[0]["role_id"]  # All WAF Updates
+        for cat in WAF_CATEGORIES:
+            if cat["name"] == "All WAF Updates":
+                continue
+            for keyword in cat["keywords"]:
+                if keyword.lower() in subject_category:
+                    matched_role_id = cat["role_id"]
+                    break
+            if matched_role_id:
+                break
 
-    # ==================== FIX: Resolve category name from role ID ====================
+    # Default to All WAF Updates
+    if not matched_role_id:
+        matched_role_id = WAF_CATEGORIES[0]["role_id"]
+
+    # Resolve category display name from role ID
     category_name = "General"
     for cat in WAF_CATEGORIES:
         if cat["role_id"] == matched_role_id:
             category_name = cat["name"]
             break
+
+    logger.debug(f"[WAF] Parsed: title='{item_title}' | category='{category_name}' | poster='{poster}' | url='{forum_url}' | prices={clean_prices} | bump={is_bump}")
 
     return {
         "item_title": item_title,
@@ -793,29 +820,35 @@ def parse_waf_email(subject, body):
         "is_bump": is_bump,
         "prices": clean_prices,
         "role_id": matched_role_id,
+        "msg_body": msg_body_clean,
     }
 
 async def send_waf_alert(channel, parsed, guild):
     """Send a formatted WAF Estate alert to members with the correct role."""
     if parsed["is_bump"]:
         logger.info(f"[WAF] Skipping bump for: {parsed['item_title']}")
-        # Check if anyone is watching this URL for price alerts
-        # TODO: watchlist DMs for bumps
         return
 
     role = guild.get_role(parsed["role_id"]) if guild else None
-    waf_role = guild.get_role(WAF_ROLE_ID) if guild else None
 
     price_str = " | ".join(parsed["prices"]) if parsed["prices"] else ""
 
-    description = f"**Category:** {parsed['category']}\n"
+    # Look up emoji for this category
+    cat_emoji = "🎖️"
+    for cat in WAF_CATEGORIES:
+        if cat["role_id"] == parsed["role_id"]:
+            cat_emoji = cat.get("emoji", "🎖️")
+            break
+
+    # Embed: category as title, item name in description
+    description = f"**{cat_emoji} {parsed['item_title']}**\n"
     if price_str:
         description += f"\n💰 **{price_str}**\n"
     if parsed["forum_url"]:
         description += f"\n[**View Listing →**]({parsed['forum_url']})"
 
     embed = discord.Embed(
-        title=f"🎖️ {parsed['item_title']}",
+        title=f"{cat_emoji} {parsed['category']}",
         description=description,
         color=discord.Color.dark_gold(),
         timestamp=datetime.now(timezone.utc)
@@ -828,7 +861,6 @@ async def send_waf_alert(channel, parsed, guild):
         file = discord.File(logo_file, filename="logo.png")
         embed.set_thumbnail(url="attachment://logo.png")
 
-    # Ping the correct category role
     content_msg = f"<@&{parsed['role_id']}>" if role else None
 
     watch_view = WatchItemView(parsed["forum_url"], parsed["item_title"], price_str) if parsed["forum_url"] else None
@@ -888,11 +920,11 @@ async def check_email_dealers():
             await db_increment_stat(dealer["name"])
             is_waf = dealer.get("waf", False)
             if is_waf:
-                # ==================== FIX: Wrap WAF processing in try/except ====================
                 try:
                     parsed = parse_waf_email(subject, body)
                     guild = client.guilds[0] if client.guilds else None
-                    await send_waf_alert(channel, parsed, guild)
+                    waf_channel = client.get_channel(WAF_CHANNEL_ID)
+                    await send_waf_alert(waf_channel, parsed, guild)
                 except Exception as e:
                     logger.error(f"[WAF] Error processing email '{subject}': {e}\n{traceback.format_exc()}")
             else:
@@ -957,6 +989,25 @@ class WatchItemView(discord.ui.View):
             return
         await db_unwatch_item(user_id, self.forum_url)
         await interaction.response.send_message(f"🔕 You have stopped watching **{self.item_title}**.", ephemeral=True)
+
+    @discord.ui.button(label="Send to DM", emoji="📬", style=discord.ButtonStyle.secondary)
+    async def send_to_dm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            price_line = f"\n💰 **{self.price}**" if self.price else ""
+            dm_embed = discord.Embed(
+                title=f"📌 Bookmarked: {self.item_title}",
+                description=f"You saved this WAF listing for later.{price_line}\n\n[**View Listing →**]({self.forum_url})",
+                color=discord.Color.dark_gold(),
+                timestamp=datetime.now(timezone.utc)
+            )
+            dm_embed.set_footer(text="WAF Bookmark — The Relic Registry")
+            await interaction.user.send(embed=dm_embed)
+            await interaction.response.send_message(f"📬 **{self.item_title}** has been sent to your DMs!", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.response.send_message("⚠️ I couldn't DM you — please enable DMs from server members in your privacy settings.", ephemeral=True)
+        except Exception as e:
+            logger.error(f"[WAF] DM bookmark failed: {e}")
+            await interaction.response.send_message("⚠️ Something went wrong sending the DM.", ephemeral=True)
 
 # ==================== FOLLOW DEALER BUTTONS ====================
 
