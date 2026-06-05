@@ -1996,6 +1996,11 @@ async def on_ready():
         logger.info(f"Logos found: {os.listdir(logos_path)}")
     else:
         logger.warning(f"Logos folder NOT found at {logos_path}!")
+    # Re-register persistent views so buttons work after bot restarts
+    client.add_view(WatchItemView("placeholder", "placeholder", ""))
+    client.add_view(FollowDealerView("placeholder"))
+    client.add_view(MilitariaAlertAdView())
+    logger.info("Persistent views registered.")
 
 async def send_griffin_combined():
     """Sends a combined Griffin Militaria alert after 5 minute buffer."""
