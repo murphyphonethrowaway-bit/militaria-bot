@@ -1812,13 +1812,38 @@ async def send_griffin_combined():
 
     try:
         if file:
-            await channel.send(file=file, embed=embed)
+            await channel.send(file=file, embed=embed, view=FollowDealerView("Griffin Militaria"))
         else:
-            await channel.send(embed=embed)
+            await channel.send(embed=embed, view=FollowDealerView("Griffin Militaria"))
         await db_increment_stat("Griffin Militaria")
-        print(f"[Griffin] Combined alert sent for {len(pages)} pages!")
+        logger.info(f"[Griffin] Combined alert sent for {len(pages)} pages!")
     except Exception as e:
-        print(f"[Griffin] Failed to send combined alert: {e}")
+        logger.error(f"[Griffin] Failed to send combined alert: {e}")
+
+    # DM followers
+    try:
+        followers = await db_get_dealer_followers("Griffin Militaria")
+        for follower_id in followers:
+            try:
+                user = await client.fetch_user(int(follower_id))
+                if user:
+                    dm_embed = discord.Embed(
+                        title="🆕 🇺🇸 New Items at Griffin Militaria!",
+                        description=description,
+                        color=discord.Color.dark_gold(),
+                        timestamp=datetime.now(timezone.utc)
+                    )
+                    dm_embed.set_footer(text="You are following Griffin Militaria — The Relic Registry")
+                    if os.path.exists(logo_file):
+                        dm_file = discord.File(logo_file, filename="logo.png")
+                        dm_embed.set_thumbnail(url="attachment://logo.png")
+                        await user.send(file=dm_file, embed=dm_embed)
+                    else:
+                        await user.send(embed=dm_embed)
+            except Exception as e:
+                logger.error(f"[Griffin] Failed to DM follower {follower_id}: {e}")
+    except Exception as e:
+        logger.error(f"[Griffin] Failed to send DMs to followers: {e}")
 
 async def handle_webhook(request):
     """Receives webhook from Changedetection.io when a page changes."""
