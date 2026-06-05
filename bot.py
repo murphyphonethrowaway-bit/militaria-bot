@@ -743,8 +743,9 @@ def parse_waf_email(subject, body):
     # Remove the standard email wrapper to get just the message
     msg_match = re.search(r"\*{5,}(.+?)\*{5,}", body, re.DOTALL)
     msg_body = msg_match.group(1).strip() if msg_match else body_clean
-    
-    is_bump = any(keyword == msg_body.lower().strip() for keyword in BUMP_KEYWORDS) or               len(msg_body.strip()) < 10 and any(keyword in msg_body.lower() for keyword in BUMP_KEYWORDS)
+
+    is_bump = any(keyword == msg_body.lower().strip() for keyword in BUMP_KEYWORDS) or \
+              len(msg_body.strip()) < 10 and any(keyword in msg_body.lower() for keyword in BUMP_KEYWORDS)
 
     # Extract prices (numbers followed by EUR, USD, $, €)
     prices = re.findall(r"[\$€]?\s*\d+(?:[.,]\d+)?\s*(?:EUR|USD|euro|dollars?|\$|€)?", body, re.IGNORECASE)
@@ -777,9 +778,16 @@ def parse_waf_email(subject, body):
     if not matched_role_id:
         matched_role_id = WAF_CATEGORIES[0]["role_id"]  # All WAF Updates
 
+    # ==================== FIX: Resolve category name from role ID ====================
+    category_name = "General"
+    for cat in WAF_CATEGORIES:
+        if cat["role_id"] == matched_role_id:
+            category_name = cat["name"]
+            break
+
     return {
         "item_title": item_title,
-        "category": category,
+        "category": category_name,
         "poster": poster,
         "forum_url": forum_url,
         "is_bump": is_bump,
@@ -880,10 +888,13 @@ async def check_email_dealers():
             await db_increment_stat(dealer["name"])
             is_waf = dealer.get("waf", False)
             if is_waf:
-                # Use WAF parser for WAF Estate emails
-                parsed = parse_waf_email(subject, body)
-                guild = client.guilds[0] if client.guilds else None
-                await send_waf_alert(channel, parsed, guild)
+                # ==================== FIX: Wrap WAF processing in try/except ====================
+                try:
+                    parsed = parse_waf_email(subject, body)
+                    guild = client.guilds[0] if client.guilds else None
+                    await send_waf_alert(channel, parsed, guild)
+                except Exception as e:
+                    logger.error(f"[WAF] Error processing email '{subject}': {e}\n{traceback.format_exc()}")
             else:
                 logo_file = os.path.join(SCRIPT_DIR, "logos", dealer["logo_file"])
                 await send_alert(channel, dealer["name"], dealer["url"], logo_file)
@@ -1276,7 +1287,7 @@ async def dealerprofile_cmd(interaction: discord.Interaction, dealer_name: str):
 async def ratedealer_cmd(interaction: discord.Interaction, dealer_name: str, rating: int, review: str = None):
     # Defer immediately to avoid Discord timeout
     await interaction.response.defer(ephemeral=True)
-    # Fix review being string "None" 
+    # Fix review being string "None"
     if review == "None" or review == "":
         review = None
     logger.info(f"[ratedealer] Called by {interaction.user} for dealer='{dealer_name}' rating={rating} review='{review}'")
