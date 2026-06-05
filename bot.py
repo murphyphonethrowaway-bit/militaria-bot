@@ -102,7 +102,7 @@ EMAIL_DEALERS = [
     {"name": "Epic Artifacts", "flag": "🇺🇸", "match": ["epicartifacts.com", "epic artifacts"], "logo_file": "Epic_artifacts.png", "url": "https://epicartifacts.com/newly-listed/"},
     {"name": "RG Militaria", "flag": "🇳🇱", "match": ["rg-militaria.com", "rg militaria"], "logo_file": "rgmilitaria.png", "url": "https://www.rg-militaria.com/new-items-nieuwe-items"},
     {"name": "Military Antiques Stockholm", "flag": "🇸🇪", "match": ["military-antiques-stockholm.com", "military antiques stockholm"], "logo_file": "Military_Antiques_Stockholm.png", "url": "https://www.military-antiques-stockholm.com/shop/"},
-    {"name": "Oorlogsspullen", "flag": "🇳🇱", "match": ["oorlogsspullen.nl", "oorlogsspullen"], "logo_file": "Oorlogspullen.png", "url": "https://oorlogsspullen.nl/product-categorie/new/"},
+    {"name": "Oorlogsspullen", "flag": "🇳🇱", "match": ["oorlogsspullen.nl", "oorlogsspullen"], "logo_file": "Oorlogspullen.png", "url": "https://oorlogsspullen.nl/product-categorie/new/", "cooldown_hours": 6},
     {"name": "Wittmann Antique Militaria", "flag": "🇩🇪", "match": ["wwiidaggers.com", "wittmann antique militaria", "wittmann"], "logo_file": "wam.png", "url": "https://www.wwiidaggers.com/updates.htm"},
     {"name": "RBNr Militaria", "flag": "🇩🇪", "match": ["rbnr.it", "rbnr militaria", "rbnr"], "logo_file": "RBNR.png", "url": "https://en.rbnr.it/collections/all"},
     {"name": "Iraqi Militaria", "flag": "🇺🇸", "match": ["iraqimilitaria.com", "iraqi militaria"], "logo_file": "iraqi_militaria.png", "url": "https://www.iraqimilitaria.com/"},
@@ -114,7 +114,7 @@ EMAIL_DEALERS = [
     {"name": "Tiger Militaria", "flag": "🇬🇧", "match": ["tigermilitaria.com", "tiger militaria"], "logo_file": "TigerMilitaria.png", "url": "https://tigermilitaria.com/shop?showPerPage=24"},
     {"name": "WAF Estate", "flag": "🇺🇸", "match": ["wehrmacht-awards.com", "waf estate", "e-stand", "estand", "militaria e-stand"], "logo_file": "waf.png", "url": "https://www.wehrmacht-awards.com/forums/forum/the-militaria-e-stand", "waf": True},
     {"name": "Griffin Militaria", "flag": "🇺🇸", "match": ["griffinmilitaria.com", "griffin militaria"], "logo_file": "Griffin_Militaria.png", "url": "https://griffinmilitaria.com/"},
-    {"name": "EA Militaria", "flag": "🇳🇱", "match": ["ea-militaria.com", "ea militaria"], "logo_file": "eamilitaria.png", "url": "https://www.ea-militaria.com/new-items"},
+    {"name": "EA Militaria", "flag": "🇳🇱", "match": ["ea-militaria.com", "ea militaria"], "logo_file": "eamilitaria.png", "url": "https://www.ea-militaria.com/new-items?hideSold=1"},
     {"name": "Militaria Plaza", "flag": "🇳🇱", "match": ["militariaplaza.nl", "militaria plaza"], "logo_file": "Militaria_Plaza.png", "url": "https://militariaplaza.nl/new"},
     {"name": "The Collector's Guild", "flag": "🇺🇸", "match": ["germanmilitaria.com", "collector's guild", "collectors guild"], "logo_file": "germanmilitaria.png", "url": "https://www.germanmilitaria.com/Advanced.html"},
     {"name": "General Assault Militaria", "flag": "🇺🇸", "match": ["generalassaultmilitaria.com", "general assault militaria", "gam"], "logo_file": "gam.png", "url": "https://www.generalassaultmilitaria.com/"},
@@ -304,6 +304,7 @@ bot_state = {
     "last_promo": None,
     "griffin_buffer": [],
     "griffin_timer": None,
+    "dealer_cooldowns": {},
 }
 
 # ==================== DATA FUNCTIONS ====================
@@ -589,6 +590,20 @@ def extract_item_links(html_bytes, selector, base_url):
 
 # ==================== ALERTS ====================
 async def send_alert(channel, name, url, logo_file, test=False, waf=False):
+    # Check cooldown for dealers that have one set
+    if not test:
+        dealer_info = find_dealer(name)
+        cooldown_hours = dealer_info.get("cooldown_hours", 0) if dealer_info else 0
+        if cooldown_hours:
+            last_alert = bot_state["dealer_cooldowns"].get(name)
+            if last_alert:
+                elapsed = (datetime.now(timezone.utc) - last_alert).total_seconds() / 3600
+                if elapsed < cooldown_hours:
+                    remaining = cooldown_hours - elapsed
+                    logger.info(f"[Cooldown] Skipping {name} — {remaining:.1f}h remaining on {cooldown_hours}h cooldown.")
+                    return
+            bot_state["dealer_cooldowns"][name] = datetime.now(timezone.utc)
+
     warning = await db_get_warning(name)
     dealer_reviews = await db_get_reviews(name)
     rating, review_count = get_dealer_rating_sync(dealer_reviews)
