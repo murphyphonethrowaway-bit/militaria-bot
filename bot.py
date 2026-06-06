@@ -157,10 +157,14 @@ class MilitariaBot(discord.Client):
             self.db = await asyncpg.create_pool(DATABASE_URL)
             logger.info("Database connection pool created successfully")
             await self.init_db()
+            # Clear any stale global commands first
+            self.tree.clear_commands(guild=None)
+            await self.tree.sync()
+            # Re-register all commands globally
             guild = discord.Object(id=GUILD_ID)
             self.tree.copy_global_to(guild=guild)
-            await self.tree.sync(guild=guild)  # Instant sync for home server
-            await self.tree.sync()  # Global sync for all other servers
+            await self.tree.sync(guild=guild)
+            await self.tree.sync()
             logger.info("Slash commands synced globally and to guild!")
         except Exception as e:
             logger.error(f"Setup failed: {e}")
@@ -1409,27 +1413,41 @@ async def start_cmd(interaction: discord.Interaction):
     existing = await db_get_user_region(str(interaction.user.id))
     region_str = {"NA": "🇺🇸 North America Only", "EU": "🇪🇺 Europe Only", "both": "🌍 All Dealers"}.get(existing, "Not set yet")
 
-    msg = (
-        f"Hey **{interaction.user.display_name}**, which dealer regions do you want notifications from?\n\n"
-        f"🇺🇸 North America Only\n"
-        f"🇪🇺 Europe Only\n"
-        f"🌍 All Dealers"
+    embed = discord.Embed(
+        title="Question 1 of ?",
+        description=(
+            f"Hey **{interaction.user.display_name}**, which dealer regions do you want notifications from?\n\n"
+            f"🇺🇸 North America Only\n"
+            f"🇪🇺 Europe Only\n"
+            f"🌍 All Dealers"
+        ),
+        color=discord.Color.dark_gold(),
+        timestamp=datetime.now(timezone.utc)
     )
-    await interaction.response.send_message(content=msg, view=RegionSelectView(), ephemeral=True)
+    if existing:
+        embed.add_field(name="Current Setting", value=region_str, inline=False)
+    embed.set_footer(text="Adrian — The Relic Registry")
+    await interaction.response.send_message(embed=embed, view=RegionSelectView(), ephemeral=True)
 
 @client.tree.command(name="settings", description="Update your notification preferences")
 async def settings_cmd(interaction: discord.Interaction):
     existing = await db_get_user_region(str(interaction.user.id))
     region_str = {"NA": "🇺🇸 North America Only", "EU": "🇪🇺 Europe Only", "both": "🌍 All Dealers"}.get(existing, "Not set yet")
 
-    msg = (
-        f"Hey **{interaction.user.display_name}**, which dealer regions do you want notifications from?\n\n"
-        f"🇺🇸 North America Only\n"
-        f"🇪🇺 Europe Only\n"
-        f"🌍 All Dealers\n\n"
-        f"**Current setting:** {region_str}"
+    embed = discord.Embed(
+        title="Question 1 of ?",
+        description=(
+            f"Hey **{interaction.user.display_name}**, which dealer regions do you want notifications from?\n\n"
+            f"🇺🇸 North America Only\n"
+            f"🇪🇺 Europe Only\n"
+            f"🌍 All Dealers"
+        ),
+        color=discord.Color.dark_gold(),
+        timestamp=datetime.now(timezone.utc)
     )
-    await interaction.response.send_message(content=msg, view=RegionSelectView(), ephemeral=True)
+    embed.add_field(name="Current Setting", value=region_str, inline=False)
+    embed.set_footer(text="Adrian — The Relic Registry")
+    await interaction.response.send_message(embed=embed, view=RegionSelectView(), ephemeral=True)
 
 @client.tree.command(name="help", description="Shows all available bot commands")
 async def help_cmd(interaction: discord.Interaction):
