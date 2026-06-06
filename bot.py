@@ -1414,13 +1414,7 @@ async def start_cmd(interaction: discord.Interaction):
     if existing:
         embed.add_field(name="Current Setting", value=region_str, inline=False)
     embed.set_footer(text="Adrian — The Relic Registry")
-    question_img = os.path.join(SCRIPT_DIR, "logos", "adrain_1st_question.png")
-    if os.path.exists(question_img):
-        file = discord.File(question_img, filename="question.png")
-        embed.set_image(url="attachment://question.png")
-        await interaction.response.send_message(file=file, embed=embed, view=RegionSelectView(), ephemeral=True)
-    else:
-        await interaction.response.send_message(embed=embed, view=RegionSelectView(), ephemeral=True)
+    await interaction.response.send_message(embed=embed, view=RegionSelectView(), ephemeral=True)
 
 @client.tree.command(name="settings", description="Update your notification preferences")
 async def settings_cmd(interaction: discord.Interaction):
@@ -1435,13 +1429,7 @@ async def settings_cmd(interaction: discord.Interaction):
     )
     embed.add_field(name="Current Setting", value=region_str, inline=False)
     embed.set_footer(text="Adrian — The Relic Registry")
-    question_img = os.path.join(SCRIPT_DIR, "logos", "adrain_1st_question.png")
-    if os.path.exists(question_img):
-        file = discord.File(question_img, filename="question.png")
-        embed.set_image(url="attachment://question.png")
-        await interaction.response.send_message(file=file, embed=embed, view=RegionSelectView(), ephemeral=True)
-    else:
-        await interaction.response.send_message(embed=embed, view=RegionSelectView(), ephemeral=True)
+    await interaction.response.send_message(embed=embed, view=RegionSelectView(), ephemeral=True)
 
 @client.tree.command(name="help", description="Shows all available bot commands")
 async def help_cmd(interaction: discord.Interaction):
