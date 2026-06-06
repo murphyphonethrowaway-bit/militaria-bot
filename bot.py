@@ -1413,27 +1413,36 @@ async def start_cmd(interaction: discord.Interaction):
     existing = await db_get_user_region(str(interaction.user.id))
     region_str = {"NA": "🇺🇸 North America Only", "EU": "🇪🇺 Europe Only", "both": "🌍 All Dealers"}.get(existing, "Not set yet")
 
-    embed = discord.Embed(color=discord.Color.dark_gold())
+    embeds = []
     if bot_state.get("question1_img_url"):
-        embed.set_image(url=bot_state["question1_img_url"])
+        img_embed = discord.Embed(color=discord.Color.dark_gold())
+        img_embed.set_image(url=bot_state["question1_img_url"])
+        embeds.append(img_embed)
     description = "🇺🇸 North America Only\n🇪🇺 Europe Only\n🌍 All Dealers"
     if existing:
         description += f"\n\n**Current Setting:** {region_str}"
-    embed.description = description
-    embed.set_footer(text="Adrian — The Relic Registry")
-    await interaction.response.send_message(embed=embed, view=RegionSelectView(), ephemeral=True)
+    text_embed = discord.Embed(description=description, color=discord.Color.dark_gold())
+    text_embed.set_footer(text="Adrian — The Relic Registry")
+    embeds.append(text_embed)
+    await interaction.response.send_message(embeds=embeds, view=RegionSelectView(), ephemeral=True)
 
 @client.tree.command(name="settings", description="Update your notification preferences")
 async def settings_cmd(interaction: discord.Interaction):
     existing = await db_get_user_region(str(interaction.user.id))
     region_str = {"NA": "🇺🇸 North America Only", "EU": "🇪🇺 Europe Only", "both": "🌍 All Dealers"}.get(existing, "Not set yet")
 
-    embed = discord.Embed(color=discord.Color.dark_gold())
+    embeds = []
     if bot_state.get("question1_img_url"):
-        embed.set_image(url=bot_state["question1_img_url"])
-    embed.description = f"🇺🇸 North America Only\n🇪🇺 Europe Only\n🌍 All Dealers\n\n**Current Setting:** {region_str}"
-    embed.set_footer(text="Adrian — The Relic Registry")
-    await interaction.response.send_message(embed=embed, view=RegionSelectView(), ephemeral=True)
+        img_embed = discord.Embed(color=discord.Color.dark_gold())
+        img_embed.set_image(url=bot_state["question1_img_url"])
+        embeds.append(img_embed)
+    text_embed = discord.Embed(
+        description=f"🇺🇸 North America Only\n🇪🇺 Europe Only\n🌍 All Dealers\n\n**Current Setting:** {region_str}",
+        color=discord.Color.dark_gold()
+    )
+    text_embed.set_footer(text="Adrian — The Relic Registry")
+    embeds.append(text_embed)
+    await interaction.response.send_message(embeds=embeds, view=RegionSelectView(), ephemeral=True)
 
 @client.tree.command(name="help", description="Shows all available bot commands")
 async def help_cmd(interaction: discord.Interaction):
