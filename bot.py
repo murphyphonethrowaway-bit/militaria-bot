@@ -1413,17 +1413,7 @@ async def start_cmd(interaction: discord.Interaction):
     existing = await db_get_user_region(str(interaction.user.id))
     region_str = {"NA": "🇺🇸 North America Only", "EU": "🇪🇺 Europe Only", "both": "🌍 All Dealers"}.get(existing, "Not set yet")
 
-    embed = discord.Embed(
-        title="Question 1 of ?",
-        description=(
-            f"Hey **{interaction.user.display_name}**, which dealer regions do you want notifications from?\n\n"
-            f"🇺🇸 North America Only\n"
-            f"🇪🇺 Europe Only\n"
-            f"🌍 All Dealers"
-        ),
-        color=discord.Color.dark_gold(),
-        timestamp=datetime.now(timezone.utc)
-    )
+    embed = discord.Embed(color=discord.Color.dark_gold())
     if existing:
         embed.add_field(name="Current Setting", value=region_str, inline=False)
     if bot_state.get("question1_img_url"):
@@ -1436,17 +1426,7 @@ async def settings_cmd(interaction: discord.Interaction):
     existing = await db_get_user_region(str(interaction.user.id))
     region_str = {"NA": "🇺🇸 North America Only", "EU": "🇪🇺 Europe Only", "both": "🌍 All Dealers"}.get(existing, "Not set yet")
 
-    embed = discord.Embed(
-        title="Question 1 of ?",
-        description=(
-            f"Hey **{interaction.user.display_name}**, which dealer regions do you want notifications from?\n\n"
-            f"🇺🇸 North America Only\n"
-            f"🇪🇺 Europe Only\n"
-            f"🌍 All Dealers"
-        ),
-        color=discord.Color.dark_gold(),
-        timestamp=datetime.now(timezone.utc)
-    )
+    embed = discord.Embed(color=discord.Color.dark_gold())
     embed.add_field(name="Current Setting", value=region_str, inline=False)
     if bot_state.get("question1_img_url"):
         embed.set_image(url=bot_state["question1_img_url"])
