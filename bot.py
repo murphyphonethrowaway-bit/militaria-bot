@@ -1363,9 +1363,9 @@ class BlockModal(discord.ui.Modal, title="Block Reviewer"):
 
 class RegionSelectView(discord.ui.View):
     def __init__(self):
-        super().__init__(timeout=120)
+        super().__init__(timeout=None)
 
-    @discord.ui.button(label="North America Only", emoji="🇺🇸", style=discord.ButtonStyle.primary, custom_id="region_na")
+    @discord.ui.button(label="North America Only", emoji="🇺🇸", style=discord.ButtonStyle.primary, custom_id="region_select_na")
     async def region_na(self, interaction: discord.Interaction, button: discord.ui.Button):
         await db_set_user_region(str(interaction.user.id), "NA")
         embed = discord.Embed(
@@ -1377,7 +1377,7 @@ class RegionSelectView(discord.ui.View):
         embed.set_footer(text="Adrian — The Relic Registry")
         await interaction.response.edit_message(embed=embed, view=None)
 
-    @discord.ui.button(label="Europe Only", emoji="🇪🇺", style=discord.ButtonStyle.primary, custom_id="region_eu")
+    @discord.ui.button(label="Europe Only", emoji="🇪🇺", style=discord.ButtonStyle.primary, custom_id="region_select_eu")
     async def region_eu(self, interaction: discord.Interaction, button: discord.ui.Button):
         await db_set_user_region(str(interaction.user.id), "EU")
         embed = discord.Embed(
@@ -1389,7 +1389,7 @@ class RegionSelectView(discord.ui.View):
         embed.set_footer(text="Adrian — The Relic Registry")
         await interaction.response.edit_message(embed=embed, view=None)
 
-    @discord.ui.button(label="All Dealers", emoji="🌍", style=discord.ButtonStyle.primary, custom_id="region_both")
+    @discord.ui.button(label="All Dealers", emoji="🌍", style=discord.ButtonStyle.primary, custom_id="region_select_both")
     async def region_both(self, interaction: discord.Interaction, button: discord.ui.Button):
         await db_set_user_region(str(interaction.user.id), "both")
         embed = discord.Embed(
