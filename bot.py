@@ -28,6 +28,7 @@ from datetime import datetime, timezone, timedelta
 
 # ==================== CONFIGURATION ====================
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
+GUILD_ID = 1357352905857826887
 CHANNEL_ID = 1512923925116358806  # #Adrian — unified notifications channel
 WAF_CHANNEL_ID = 1512923925116358806  # #Adrian — unified notifications channel
 WAF_ROLE_ID = 1511101033349124318
@@ -156,8 +157,10 @@ class MilitariaBot(discord.Client):
             self.db = await asyncpg.create_pool(DATABASE_URL)
             logger.info("Database connection pool created successfully")
             await self.init_db()
-            await self.tree.sync()
-            logger.info("Slash commands synced!")
+            guild = discord.Object(id=GUILD_ID)
+            self.tree.copy_global_to(guild=guild)
+            await self.tree.sync(guild=guild)
+            logger.info("Slash commands synced to guild!")
         except Exception as e:
             logger.error(f"Setup failed: {e}")
             logger.error(traceback.format_exc())
