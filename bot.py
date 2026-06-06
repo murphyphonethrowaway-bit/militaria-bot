@@ -28,8 +28,8 @@ from datetime import datetime, timezone, timedelta
 
 # ==================== CONFIGURATION ====================
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-CHANNEL_ID = 1510653092721590323
-WAF_CHANNEL_ID = 1512532164871196864  # #waf-updates — role-gated channel
+CHANNEL_ID = 1512923925116358806  # #Adrian — unified notifications channel
+WAF_CHANNEL_ID = 1512923925116358806  # #Adrian — unified notifications channel
 WAF_ROLE_ID = 1511101033349124318
 DEALER_SUGGEST_CHANNEL_ID = 1511487755266556034  # #dealer-reviews channel
 REVIEW_LOG_CHANNEL_ID = 1511487836220817561  # #review-log channel
@@ -137,7 +137,7 @@ EMAIL_DEALERS = [
     {"name": "Clements Militaria", "flag": "🇳🇱", "match": ["clementsm@emailer500.com", "clements militaria", "clementsmilitaria.com"], "logo_file": "clements_militaria.png", "url": "https://clementsmilitaria.com/shop.php"},
 ]
 
-USMF_CHANNEL_ID = 1512557138172706967  # #usmf-updates channel
+USMF_CHANNEL_ID = 1512923925116358806  # #Adrian — unified notifications channel
 
 
 # ==================== BOT SETUP ====================
@@ -2001,6 +2001,21 @@ async def on_ready():
     client.add_view(FollowDealerView("placeholder"))
     client.add_view(MilitariaAlertAdView())
     logger.info("Persistent views registered.")
+
+    # Post welcome image to #Adrian on every startup
+    try:
+        adrian_channel = client.get_channel(CHANNEL_ID)
+        if adrian_channel:
+            welcome_file = os.path.join(SCRIPT_DIR, "logos", "Adrian_welcome.png")
+            if os.path.exists(welcome_file):
+                await adrian_channel.send(file=discord.File(welcome_file, filename="Adrian_welcome.png"))
+                logger.info("[Startup] Welcome image posted to #Adrian.")
+            else:
+                logger.warning("[Startup] Adrian_welcome.png not found in logos folder.")
+        else:
+            logger.warning("[Startup] Could not find #Adrian channel.")
+    except Exception as e:
+        logger.error(f"[Startup] Failed to post welcome image: {e}")
 
 async def send_griffin_combined():
     """Sends a combined Griffin Militaria alert after 5 minute buffer."""
