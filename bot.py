@@ -157,13 +157,11 @@ class MilitariaBot(discord.Client):
             self.db = await asyncpg.create_pool(DATABASE_URL)
             logger.info("Database connection pool created successfully")
             await self.init_db()
-            # Clear any stale global commands first
-            self.tree.clear_commands(guild=None)
-            await self.tree.sync()
-            # Re-register all commands globally
+            # Sync to home guild instantly
             guild = discord.Object(id=GUILD_ID)
             self.tree.copy_global_to(guild=guild)
             await self.tree.sync(guild=guild)
+            # Sync globally for public bot use
             await self.tree.sync()
             logger.info("Slash commands synced globally and to guild!")
         except Exception as e:
