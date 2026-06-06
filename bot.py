@@ -29,6 +29,7 @@ from datetime import datetime, timezone, timedelta
 # ==================== CONFIGURATION ====================
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 GUILD_ID = 1357352905857826887
+IMAGE_HOST_CHANNEL_ID = 1512953027793915955  # Private channel for image hosting
 CHANNEL_ID = 1512923925116358806  # #Adrian — unified notifications channel
 WAF_CHANNEL_ID = 1512923925116358806  # #Adrian — unified notifications channel
 WAF_ROLE_ID = 1511101033349124318
@@ -316,6 +317,7 @@ bot_state = {
     "griffin_timer": None,
     "dealer_cooldowns": {},
     "waf_notification_count": 0,
+    "question1_img_url": None,
 }
 
 # ==================== DATA FUNCTIONS ====================
@@ -1424,6 +1426,8 @@ async def start_cmd(interaction: discord.Interaction):
     )
     if existing:
         embed.add_field(name="Current Setting", value=region_str, inline=False)
+    if bot_state.get("question1_img_url"):
+        embed.set_image(url=bot_state["question1_img_url"])
     embed.set_footer(text="Adrian — The Relic Registry")
     await interaction.response.send_message(embed=embed, view=RegionSelectView(), ephemeral=True)
 
@@ -1444,6 +1448,8 @@ async def settings_cmd(interaction: discord.Interaction):
         timestamp=datetime.now(timezone.utc)
     )
     embed.add_field(name="Current Setting", value=region_str, inline=False)
+    if bot_state.get("question1_img_url"):
+        embed.set_image(url=bot_state["question1_img_url"])
     embed.set_footer(text="Adrian — The Relic Registry")
     await interaction.response.send_message(embed=embed, view=RegionSelectView(), ephemeral=True)
 
@@ -2159,6 +2165,22 @@ async def on_ready():
             logger.warning("[Startup] Could not find #Adrian channel.")
     except Exception as e:
         logger.error(f"[Startup] Failed to post welcome image: {e}")
+
+    # Upload question 1 image to private image host channel and store CDN URL
+    try:
+        img_host_channel = client.get_channel(IMAGE_HOST_CHANNEL_ID)
+        if img_host_channel:
+            q1_file = os.path.join(SCRIPT_DIR, "logos", "adrain_1st_question.png")
+            if os.path.exists(q1_file):
+                msg = await img_host_channel.send(file=discord.File(q1_file, filename="adrain_1st_question.png"))
+                bot_state["question1_img_url"] = msg.attachments[0].url
+                logger.info(f"[Startup] Question 1 image uploaded. URL: {bot_state['question1_img_url']}")
+            else:
+                logger.warning("[Startup] adrain_1st_question.png not found in logos folder.")
+        else:
+            logger.warning("[Startup] Could not find image host channel.")
+    except Exception as e:
+        logger.error(f"[Startup] Failed to upload question 1 image: {e}")
 
 async def send_griffin_combined():
     """Sends a combined Griffin Militaria alert after 5 minute buffer."""
