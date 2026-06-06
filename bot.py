@@ -1414,10 +1414,12 @@ async def start_cmd(interaction: discord.Interaction):
     region_str = {"NA": "🇺🇸 North America Only", "EU": "🇪🇺 Europe Only", "both": "🌍 All Dealers"}.get(existing, "Not set yet")
 
     embed = discord.Embed(color=discord.Color.dark_gold())
-    if existing:
-        embed.add_field(name="Current Setting", value=region_str, inline=False)
     if bot_state.get("question1_img_url"):
         embed.set_image(url=bot_state["question1_img_url"])
+    description = "🇺🇸 North America Only\n🇪🇺 Europe Only\n🌍 All Dealers"
+    if existing:
+        description += f"\n\n**Current Setting:** {region_str}"
+    embed.description = description
     embed.set_footer(text="Adrian — The Relic Registry")
     await interaction.response.send_message(embed=embed, view=RegionSelectView(), ephemeral=True)
 
@@ -1427,9 +1429,9 @@ async def settings_cmd(interaction: discord.Interaction):
     region_str = {"NA": "🇺🇸 North America Only", "EU": "🇪🇺 Europe Only", "both": "🌍 All Dealers"}.get(existing, "Not set yet")
 
     embed = discord.Embed(color=discord.Color.dark_gold())
-    embed.add_field(name="Current Setting", value=region_str, inline=False)
     if bot_state.get("question1_img_url"):
         embed.set_image(url=bot_state["question1_img_url"])
+    embed.description = f"🇺🇸 North America Only\n🇪🇺 Europe Only\n🌍 All Dealers\n\n**Current Setting:** {region_str}"
     embed.set_footer(text="Adrian — The Relic Registry")
     await interaction.response.send_message(embed=embed, view=RegionSelectView(), ephemeral=True)
 
