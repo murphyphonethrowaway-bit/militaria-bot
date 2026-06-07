@@ -36,6 +36,7 @@ WAF_ROLE_ID = 1511101033349124318
 DEALER_SUGGEST_CHANNEL_ID = 1511487755266556034  # #dealer-reviews channel
 REVIEW_LOG_CHANNEL_ID = 1511487836220817561  # #review-log channel
 BOT_FEEDBACK_CHANNEL_ID = 1513020767393288403  # #bot-feedback channel
+GUERRILLA_WARFARE_ROLE_ID = 1513027040927027350  # Guerrilla Warfare shame role
 TRUSTED_REVIEWER_ROLE_ID = 1511487130189168802  # @Trusted Reviewer role
 TRUSTED_REVIEWER_THRESHOLD = 25  # Number of reviews to get Trusted Reviewer role
 CHECK_INTERVAL = 600
@@ -1684,6 +1685,15 @@ class FeedbackModal(discord.ui.Modal, title="Leave Feedback for the Developer"):
                     logger.warning(f"[Feedback] Could not DM {interaction.user} — DMs closed")
                 except Exception as dm_err:
                     logger.error(f"[Feedback] DM error: {dm_err}")
+                # Assign the Guerrilla Warfare role
+                try:
+                    if interaction.guild:
+                        gw_role = interaction.guild.get_role(GUERRILLA_WARFARE_ROLE_ID)
+                        if gw_role:
+                            await interaction.user.add_roles(gw_role, reason="Triggered feedback filter")
+                            logger.info(f"[Feedback] Guerrilla Warfare role assigned to {interaction.user}")
+                except Exception as role_err:
+                    logger.error(f"[Feedback] Could not assign role: {role_err}")
             else:
                 await interaction.response.send_message("💬 Thanks for your feedback! The developer will review it.", ephemeral=True)
 
