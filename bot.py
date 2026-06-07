@@ -619,13 +619,13 @@ async def db_save_server_config(guild_id, **kwargs):
         existing = await conn.fetchrow("SELECT guild_id FROM server_config WHERE guild_id=$1", str(guild_id))
         if existing:
             set_clause = ", ".join([f"{k}=${i+2}" for i, k in enumerate(kwargs.keys())])
-            values = [str(guild_id)] + [str(v) if v is not None else None for v in kwargs.values()]
+            values = [str(guild_id)] + list(kwargs.values())
             await conn.execute(f"UPDATE server_config SET {set_clause} WHERE guild_id=$1", *values)
         else:
             kwargs["created_at"] = int(datetime.now(timezone.utc).timestamp())
             cols = "guild_id, " + ", ".join(kwargs.keys())
             placeholders = ", ".join([f"${i+1}" for i in range(len(kwargs)+1)])
-            values = [str(guild_id)] + [str(v) if v is not None else None for v in kwargs.values()]
+            values = [str(guild_id)] + list(kwargs.values())
             await conn.execute(f"INSERT INTO server_config ({cols}) VALUES ({placeholders})", *values)
 
 async def db_get_all_servers():
@@ -2381,7 +2381,7 @@ class RegionSelectView(discord.ui.View):
 
 class SetupRegionView(discord.ui.View):
     def __init__(self):
-        super().__init__(timeout=300)
+        super().__init__(timeout=None)
 
     async def _save(self, interaction, region):
         await db_save_server_config(str(interaction.guild_id), alerts_region=region)
@@ -2402,7 +2402,7 @@ class SetupRegionView(discord.ui.View):
 
 class SetupForumView(discord.ui.View):
     def __init__(self):
-        super().__init__(timeout=300)
+        super().__init__(timeout=None)
 
     async def _save(self, interaction, forums):
         await db_save_server_config(str(interaction.guild_id), alerts_forums=forums)
@@ -2425,7 +2425,7 @@ class SetupForumView(discord.ui.View):
 
 class SetupEstateView(discord.ui.View):
     def __init__(self):
-        super().__init__(timeout=300)
+        super().__init__(timeout=None)
 
     @discord.ui.button(label="✅ Yes — Enable Estate", style=discord.ButtonStyle.success, custom_id="setup_estate_yes")
     async def yes(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -2450,7 +2450,7 @@ class SetupEstateView(discord.ui.View):
 
 class SetupCrossPostView(discord.ui.View):
     def __init__(self):
-        super().__init__(timeout=300)
+        super().__init__(timeout=None)
 
     async def _save(self, interaction, accept):
         await db_save_server_config(str(interaction.guild_id), accept_cross_posts=accept, setup_complete=1)
