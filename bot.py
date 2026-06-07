@@ -1548,7 +1548,7 @@ async def show_question4(interaction: discord.Interaction, edit=True):
         embeds.append(img_embed)
 
     text_embed = discord.Embed(
-        description="Would you like new item listing updates from community forums?\n\n🎖️ **WAF** — Wehrmacht Awards Forum only\n🇺🇸 **USMF** — US Militaria Forum only\n🌐 **Both** — WAF & USMF\n❌ **None** — Skip forum notifications",
+        description="🟥 **WAF** — Wehrmacht Awards Forum only\n🟩 **USMF** — US Militaria Forum only\n✅ **Both** — WAF & USMF\n❌ **None** — Skip forum notifications",
         color=discord.Color.dark_gold()
     )
     text_embed.set_footer(text="Adrian — The Relic Registry")
