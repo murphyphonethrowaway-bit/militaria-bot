@@ -1570,11 +1570,11 @@ class ForumSelectView(discord.ui.View):
                 await interaction.response.send_message("⚠️ Something went wrong. Please try again.", ephemeral=True)
             except: pass
 
-    @discord.ui.button(label="🎖️ WAF", style=discord.ButtonStyle.danger, custom_id="forum_waf")
+    @discord.ui.button(label="🟥 WAF", style=discord.ButtonStyle.secondary, custom_id="forum_waf")
     async def forum_waf(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._save(interaction, "waf")
 
-    @discord.ui.button(label="🇺🇸 USMF", style=discord.ButtonStyle.success, custom_id="forum_usmf")
+    @discord.ui.button(label="🟩 USMF", style=discord.ButtonStyle.secondary, custom_id="forum_usmf")
     async def forum_usmf(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._save(interaction, "usmf")
 
