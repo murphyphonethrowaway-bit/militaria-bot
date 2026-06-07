@@ -32,19 +32,19 @@ BOT_OWNER_ID = 161988117862023169  # Murphy's Discord user ID
 GUILD_ID = 1357352905857826887  # Main server
 TEST_GUILD_ID = 1513233559878369422  # Test server
 OWNER_GUILD_ID = 1357352905857826887  # Owner commands go here (main server)
-IMAGE_HOST_CHANNEL_ID = 1512953027793915955  # Private channel for image hosting
-CHANNEL_ID = 1512923925116358806  # #Adrian — unified notifications channel
-WAF_CHANNEL_ID = 1512923925116358806  # #Adrian — unified notifications channel
+IMAGE_HOST_CHANNEL_ID = 1513273241043599530  # #image-host — test server
+CHANNEL_ID = 1513271593273655387  # #adrian — test server
+WAF_CHANNEL_ID = 1513271593273655387  # #adrian — test server
 WAF_ROLE_ID = 1511101033349124318
 DEALER_SUGGEST_CHANNEL_ID = 1511487755266556034  # #dealer-reviews channel
-REVIEW_LOG_CHANNEL_ID = 1511487836220817561  # #review-log channel
-BOT_FEEDBACK_CHANNEL_ID = 1513020767393288403  # #bot-feedback channel
-GUERRILLA_WARFARE_ROLE_ID = 1513027040927027350  # Guerrilla Warfare shame role
-ADRIAN_VERIFIED_ROLE_ID = 1513203231856001084  # Adrian Verified role — grants access to #Adrian
-ADRIAN_UPDATES_CHANNEL_ID = 1513210219126063325  # #adrian-updates announcement channel
-PRIVATE_LOG_CHANNEL_ID = 1513215269496029266  # Private mod log channel
-ESTATE_CHANNEL_ID = 1513226499228958791  # Estate forum channel (test)
-ESTATE_SOLD_TAG_ID = 1479612959541170247  # Sold tag ID
+REVIEW_LOG_CHANNEL_ID = 1513271782436639011  # #review-log — test server
+BOT_FEEDBACK_CHANNEL_ID = 1513271765982511126  # #bot-feedback — test server
+GUERRILLA_WARFARE_ROLE_ID = 1513272208045244598  # Guerrilla Warfare — test server
+ADRIAN_VERIFIED_ROLE_ID = 1513272151912747100  # Adrian Verified — test server
+ADRIAN_UPDATES_CHANNEL_ID = 1513271624172834836  # #adrian-updates — test server
+PRIVATE_LOG_CHANNEL_ID = 1513271737167380541  # #mod-log — test server
+ESTATE_CHANNEL_ID = 1513273443087417614  # #estate-listings — test server
+ESTATE_SOLD_TAG_ID = 1513274158128173146  # Sold tag — test server
 TRUSTED_REVIEWER_ROLE_ID = 1511487130189168802  # @Trusted Reviewer role
 TRUSTED_REVIEWER_THRESHOLD = 25  # Number of reviews to get Trusted Reviewer role
 CHECK_INTERVAL = 600
@@ -149,7 +149,7 @@ EMAIL_DEALERS = [
     {"name": "Clements Militaria", "flag": "🇳🇱", "region": "EU", "match": ["clementsm@emailer500.com", "clements militaria", "clementsmilitaria.com"], "logo_file": "clements_militaria.png", "url": "https://clementsmilitaria.com/shop.php", "eras": [3], "countries": ['B', 'A', 'D']},
 ]
 
-USMF_CHANNEL_ID = 1512923925116358806  # #Adrian — unified notifications channel
+USMF_CHANNEL_ID = 1513271593273655387  # #adrian — test server
 
 
 # ==================== BOT SETUP ====================
@@ -1135,7 +1135,8 @@ async def check_all_dealers():
 async def _check_all_dealers_inner():
     channel = client.get_channel(CHANNEL_ID)
     if not channel:
-        print("ERROR: Could not find channel.")
+        logger.warning(f"[DealerChecker] Could not find channel {CHANNEL_ID} — waiting 60s before retry...")
+        await asyncio.sleep(60)
         return
     logger.info(f"Bot ready! Monitoring {len(DEALERS)} web dealers + {len(EMAIL_DEALERS)} email dealers.")
     while not client.is_closed():
@@ -1513,6 +1514,8 @@ async def check_email_dealers():
 async def _check_email_dealers_inner():
     channel = client.get_channel(CHANNEL_ID)
     if not channel:
+        logger.warning(f"[EmailChecker] Could not find channel {CHANNEL_ID} — waiting 60s before retry...")
+        await asyncio.sleep(60)
         return
     logger.info(f"Email checker ready! Checking every {EMAIL_CHECK_INTERVAL} seconds.")
     while not client.is_closed():
