@@ -251,6 +251,7 @@ class MilitariaBot(discord.Client):
                 )
             ''')
             await conn.execute("ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS eras TEXT DEFAULT ''")
+            await conn.execute("ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS countries TEXT DEFAULT ''")
         logger.info("Database initialized successfully!")
 
 client = MilitariaBot()
@@ -321,6 +322,7 @@ bot_state = {
     "waf_notification_count": 0,
     "question1_img_url": None,
     "question2_img_url": None,
+    "question3_img_url": None,
 }
 
 # ==================== DATA FUNCTIONS ====================
@@ -549,6 +551,21 @@ async def db_set_user_eras(user_id, eras):
         await conn.execute(
             "UPDATE user_preferences SET eras=$1, updated_at=$2 WHERE user_id=$3",
             era_str, int(datetime.now(timezone.utc).timestamp()), str(user_id)
+        )
+
+async def db_get_user_countries(user_id):
+    async with client.db.acquire() as conn:
+        row = await conn.fetchrow("SELECT countries FROM user_preferences WHERE user_id=$1", str(user_id))
+        if row and row["countries"]:
+            return list(row["countries"].split(","))
+        return None
+
+async def db_set_user_countries(user_id, countries):
+    async with client.db.acquire() as conn:
+        country_str = ",".join(countries)
+        await conn.execute(
+            "UPDATE user_preferences SET countries=$1, updated_at=$2 WHERE user_id=$3",
+            country_str, int(datetime.now(timezone.utc).timestamp()), str(user_id)
         )
 
 async def db_get_users_for_region(dealer_region):
@@ -1382,6 +1399,107 @@ class BlockModal(discord.ui.Modal, title="Block Reviewer"):
 
 # ==================== SLASH COMMANDS ====================
 
+# ==================== COUNTRY FLAGS ====================
+COUNTRY_FLAGS = {
+    "Z": "0️⃣", "A": "🇺🇸", "B": "🇬🇧", "C": "🇨🇦",
+    "D": "🇩🇪", "E": "🇷🇺", "F": "🇫🇷", "G": "🇯🇵",
+    "H": "🇮🇹", "I": "🇦🇹", "J": "🏳️", "K": "🌍",
+    "L": "🌐", "M": "🇨🇳",
+}
+
+COUNTRY_NAMES = {
+    "Z": "All Countries", "A": "American", "B": "British/Commonwealth",
+    "C": "Canadian", "D": "German", "E": "Soviet/Russian",
+    "F": "French", "G": "Japanese", "H": "Italian",
+    "I": "Austro-Hungarian", "J": "Other Axis", "K": "Other Allied",
+    "L": "Multi-country", "M": "Chinese/KMT",
+}
+
+class CountrySelectView(discord.ui.View):
+    def __init__(self, selected_countries=None):
+        super().__init__(timeout=None)
+        self.selected = set(selected_countries or [])
+
+    async def _toggle(self, interaction, code):
+        try:
+            if code in self.selected:
+                self.selected.discard(code)
+            else:
+                self.selected.add(code)
+            selected_list = sorted(self.selected)
+            country_display = " ".join([COUNTRY_FLAGS.get(c, c) for c in selected_list]) if selected_list else "None selected"
+
+            embeds = []
+            if bot_state.get("question3_img_url"):
+                img_embed = discord.Embed(color=discord.Color.dark_gold())
+                img_embed.set_image(url=bot_state["question3_img_url"])
+                embeds.append(img_embed)
+
+            description = (
+                "0️⃣ All Countries\n"
+                "🇺🇸 American\n"
+                "🇬🇧 British / Commonwealth\n"
+                "🇨🇦 Canadian\n"
+                "🇩🇪 German\n"
+                "🇷🇺 Soviet / Russian\n"
+                "🇫🇷 French\n"
+                "🇯🇵 Japanese\n"
+                "🇮🇹 Italian\n"
+                "🇦🇹 Austro-Hungarian\n"
+                "🏳️ Other Axis\n"
+                "🌍 Other Allied\n"
+                "🌐 Multi-country / General\n"
+                "🇨🇳 Chinese / KMT\n\n"
+                f"**Selected:** {country_display}\n"
+                "**Click Done when finished.**"
+            )
+            text_embed = discord.Embed(description=description, color=discord.Color.dark_gold())
+            text_embed.set_footer(text="Adrian — The Relic Registry")
+            embeds.append(text_embed)
+
+            await interaction.response.edit_message(embeds=embeds, view=CountrySelectView(list(self.selected)))
+        except Exception as e:
+            logger.error(f"[CountrySelect] Toggle error: {e}\n{traceback.format_exc()}")
+            try:
+                await interaction.response.send_message("⚠️ Something went wrong. Please try again.", ephemeral=True)
+            except: pass
+
+    @discord.ui.button(emoji="0️⃣", style=discord.ButtonStyle.secondary, custom_id="country_Z")
+    async def c_all(self, i, b): await self._toggle(i, "Z")
+    @discord.ui.button(emoji="🇺🇸", style=discord.ButtonStyle.secondary, custom_id="country_A")
+    async def c_a(self, i, b): await self._toggle(i, "A")
+    @discord.ui.button(emoji="🇬🇧", style=discord.ButtonStyle.secondary, custom_id="country_B")
+    async def c_b(self, i, b): await self._toggle(i, "B")
+    @discord.ui.button(emoji="🇨🇦", style=discord.ButtonStyle.secondary, custom_id="country_C")
+    async def c_c(self, i, b): await self._toggle(i, "C")
+    @discord.ui.button(emoji="🇩🇪", style=discord.ButtonStyle.secondary, custom_id="country_D")
+    async def c_d(self, i, b): await self._toggle(i, "D")
+    @discord.ui.button(emoji="🇷🇺", style=discord.ButtonStyle.secondary, custom_id="country_E")
+    async def c_e(self, i, b): await self._toggle(i, "E")
+    @discord.ui.button(emoji="🇫🇷", style=discord.ButtonStyle.secondary, custom_id="country_F")
+    async def c_f(self, i, b): await self._toggle(i, "F")
+    @discord.ui.button(emoji="🇯🇵", style=discord.ButtonStyle.secondary, custom_id="country_G")
+    async def c_g(self, i, b): await self._toggle(i, "G")
+    @discord.ui.button(emoji="🇮🇹", style=discord.ButtonStyle.secondary, custom_id="country_H")
+    async def c_h(self, i, b): await self._toggle(i, "H")
+    @discord.ui.button(emoji="🇦🇹", style=discord.ButtonStyle.secondary, custom_id="country_I")
+    async def c_i(self, i, b): await self._toggle(i, "I")
+    @discord.ui.button(emoji="🏳️", style=discord.ButtonStyle.secondary, custom_id="country_J")
+    async def c_j(self, i, b): await self._toggle(i, "J")
+    @discord.ui.button(emoji="🌍", style=discord.ButtonStyle.secondary, custom_id="country_K")
+    async def c_k(self, i, b): await self._toggle(i, "K")
+    @discord.ui.button(emoji="🌐", style=discord.ButtonStyle.secondary, custom_id="country_L")
+    async def c_l(self, i, b): await self._toggle(i, "L")
+    @discord.ui.button(emoji="🇨🇳", style=discord.ButtonStyle.secondary, custom_id="country_M")
+    async def c_m(self, i, b): await self._toggle(i, "M")
+    @discord.ui.button(label="✅ Done", style=discord.ButtonStyle.success, custom_id="country_done")
+    async def c_done(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.selected:
+            await interaction.response.send_message("⚠️ Please select at least one country.", ephemeral=True)
+            return
+        await db_set_user_countries(str(interaction.user.id), list(self.selected))
+        await show_all_done(interaction, edit=True)
+
 # ==================== ERA SELECT VIEW ====================
 
 ERA_EMOJIS = {
@@ -1406,11 +1524,11 @@ ERA_NAMES = {
     7: "GWOT / Modern (2001–present)",
 }
 
-async def show_question3(interaction: discord.Interaction, edit=True):
-    """Placeholder for question 3 — coming soon."""
+async def show_all_done(interaction: discord.Interaction, edit=True):
+    """Show completion message after all questions answered."""
     embed = discord.Embed(
-        title="✅ All set!",
-        description="Your preferences have been saved! You'll now receive dealer notifications matching your selections.\n\nUse `/settings` anytime to update your preferences.",
+        title="✅ All Done!",
+        description="Your preferences have been saved! Adrian will now send you dealer notifications that match your selections.\n\nUse `/settings` anytime to update your preferences.",
         color=discord.Color.green(),
         timestamp=datetime.now(timezone.utc)
     )
@@ -1419,6 +1537,46 @@ async def show_question3(interaction: discord.Interaction, edit=True):
         await interaction.response.edit_message(embeds=[embed], view=None)
     else:
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+async def show_question3(interaction: discord.Interaction, edit=True):
+    """Show question 3 — country selection."""
+    existing_countries = await db_get_user_countries(str(interaction.user.id))
+    country_display = " ".join([COUNTRY_FLAGS.get(c, c) for c in existing_countries]) if existing_countries else "Not set yet"
+
+    embeds = []
+    if bot_state.get("question3_img_url"):
+        img_embed = discord.Embed(color=discord.Color.dark_gold())
+        img_embed.set_image(url=bot_state["question3_img_url"])
+        embeds.append(img_embed)
+
+    description = (
+        "0️⃣ All Countries\n"
+        "🇺🇸 American\n"
+        "🇬🇧 British / Commonwealth\n"
+        "🇨🇦 Canadian\n"
+        "🇩🇪 German\n"
+        "🇷🇺 Soviet / Russian\n"
+        "🇫🇷 French\n"
+        "🇯🇵 Japanese\n"
+        "🇮🇹 Italian\n"
+        "🇦🇹 Austro-Hungarian\n"
+        "🏳️ Other Axis\n"
+        "🌍 Other Allied\n"
+        "🌐 Multi-country / General\n"
+        "🇨🇳 Chinese / KMT\n\n"
+        "**Select all that apply. Click Done when finished.**"
+    )
+    if existing_countries:
+        description += f"\n\n**Current Selection:** {country_display}"
+
+    text_embed = discord.Embed(description=description, color=discord.Color.dark_gold())
+    text_embed.set_footer(text="Adrian — The Relic Registry")
+    embeds.append(text_embed)
+
+    if edit:
+        await interaction.response.edit_message(embeds=embeds, view=CountrySelectView(existing_countries or []))
+    else:
+        await interaction.response.send_message(embeds=embeds, view=CountrySelectView(existing_countries or []), ephemeral=True)
 
 async def show_question2(interaction: discord.Interaction, edit=True):
     """Show question 2 — era selection."""
@@ -2313,6 +2471,7 @@ async def on_ready():
     client.add_view(MilitariaAlertAdView())
     client.add_view(RegionSelectView())
     client.add_view(EraSelectView())
+    client.add_view(CountrySelectView())
     logger.info("Persistent views registered.")
 
     # Post welcome image to #Adrian on every startup
@@ -2334,7 +2493,7 @@ async def on_ready():
     try:
         img_host_channel = client.get_channel(IMAGE_HOST_CHANNEL_ID)
         if img_host_channel:
-            for q_file, key in [("adrain_1st_question.png", "question1_img_url"), ("adrain_2nd_question.png", "question2_img_url")]:
+            for q_file, key in [("adrain_1st_question.png", "question1_img_url"), ("adrain_2nd_question.png", "question2_img_url"), ("adrain_3rd_question.png", "question3_img_url")]:
                 path = os.path.join(SCRIPT_DIR, "logos", q_file)
                 if os.path.exists(path):
                     msg = await img_host_channel.send(file=discord.File(path, filename=q_file))
