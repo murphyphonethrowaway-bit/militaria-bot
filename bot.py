@@ -35,6 +35,7 @@ WAF_CHANNEL_ID = 1512923925116358806  # #Adrian — unified notifications channe
 WAF_ROLE_ID = 1511101033349124318
 DEALER_SUGGEST_CHANNEL_ID = 1511487755266556034  # #dealer-reviews channel
 REVIEW_LOG_CHANNEL_ID = 1511487836220817561  # #review-log channel
+BOT_FEEDBACK_CHANNEL_ID = 1513020767393288403  # #bot-feedback channel
 TRUSTED_REVIEWER_ROLE_ID = 1511487130189168802  # @Trusted Reviewer role
 TRUSTED_REVIEWER_THRESHOLD = 25  # Number of reviews to get Trusted Reviewer role
 CHECK_INTERVAL = 600
@@ -1632,20 +1633,65 @@ class FeedbackModal(discord.ui.Modal, title="Leave Feedback for the Developer"):
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
-            log_channel = client.get_channel(REVIEW_LOG_CHANNEL_ID)
-            if log_channel:
+            feedback_text = str(self.feedback).lower()
+            server_name = interaction.guild.name if interaction.guild else "DM"
+            server_id = interaction.guild.id if interaction.guild else "N/A"
+
+            # Basic hate speech / slur filter
+            banned_words = [
+                "nigger", "nigga", "faggot", "chink", "spic", "kike", "raghead",
+                "towelhead", "wetback", "tranny", "retard", "cunt"
+            ]
+            triggered = [w for w in banned_words if w in feedback_text]
+            flagged = len(triggered) > 0
+
+            # Always post to feedback channel with full user log
+            feedback_channel = client.get_channel(BOT_FEEDBACK_CHANNEL_ID)
+            if feedback_channel:
+                color = discord.Color.red() if flagged else discord.Color.blurple()
                 embed = discord.Embed(
-                    title="💬 User Feedback",
-                    description=str(self.feedback),
-                    color=discord.Color.blurple(),
+                    title="⚠️ FLAGGED Feedback" if flagged else "💬 Bot Feedback",
+                    description=f"||{str(self.feedback)[:1000]}||" if flagged else str(self.feedback)[:1000],
+                    color=color,
                     timestamp=datetime.now(timezone.utc)
                 )
-                embed.set_footer(text=f"From: {interaction.user} ({interaction.user.id})")
-                await log_channel.send(embed=embed)
-            await interaction.response.send_message("💬 Thanks for your feedback! The developer will review it.", ephemeral=True)
+                embed.add_field(name="User", value=f"{interaction.user.mention} ({interaction.user})", inline=True)
+                embed.add_field(name="User ID", value=str(interaction.user.id), inline=True)
+                embed.add_field(name="Server", value=f"{server_name} ({server_id})", inline=True)
+                embed.add_field(name="Account Created", value=f"<t:{int(interaction.user.created_at.timestamp())}:R>", inline=True)
+                if flagged:
+                    embed.add_field(name="Triggered Words", value=", ".join(triggered), inline=False)
+                    embed.set_footer(text="⚠️ Content hidden — click to reveal spoiler")
+                else:
+                    embed.set_footer(text="Adrian Feedback System")
+                await feedback_channel.send(embed=embed)
+
+            # If flagged — DM the user the Guerrilla Warfare warning
+            if flagged:
+                await interaction.response.send_message(
+                    "⚠️ Your feedback has been logged and flagged for review.",
+                    ephemeral=True
+                )
+                try:
+                    img_path = os.path.join(SCRIPT_DIR, "logos", "guerrilla_warfare.png")
+                    audio_path = os.path.join(SCRIPT_DIR, "logos", "guerrilla_warfare_call.mp3")
+                    if os.path.exists(img_path):
+                        await interaction.user.send(file=discord.File(img_path, filename="guerrilla_warfare.png"))
+                    if os.path.exists(audio_path):
+                        await interaction.user.send(file=discord.File(audio_path, filename="guerrilla_warfare_call.mp3"))
+                    logger.info(f"[Feedback] Guerrilla Warfare warning sent to {interaction.user}")
+                except discord.Forbidden:
+                    logger.warning(f"[Feedback] Could not DM {interaction.user} — DMs closed")
+                except Exception as dm_err:
+                    logger.error(f"[Feedback] DM error: {dm_err}")
+            else:
+                await interaction.response.send_message("💬 Thanks for your feedback! The developer will review it.", ephemeral=True)
+
         except Exception as e:
-            logger.error(f"[Feedback] Error: {e}")
-            await interaction.response.send_message("⚠️ Something went wrong. Please try again.", ephemeral=True)
+            logger.error(f"[Feedback] Error: {e}\n{traceback.format_exc()}")
+            try:
+                await interaction.response.send_message("⚠️ Something went wrong. Please try again.", ephemeral=True)
+            except: pass
 
 async def show_question3(interaction: discord.Interaction, edit=True):
     """Show question 3 — country selection."""
