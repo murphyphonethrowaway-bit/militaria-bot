@@ -252,6 +252,7 @@ class MilitariaBot(discord.Client):
             ''')
             await conn.execute("ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS eras TEXT DEFAULT ''")
             await conn.execute("ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS countries TEXT DEFAULT ''")
+            await conn.execute("ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS forums TEXT DEFAULT ''")
         logger.info("Database initialized successfully!")
 
 client = MilitariaBot()
@@ -323,6 +324,7 @@ bot_state = {
     "question1_img_url": None,
     "question2_img_url": None,
     "question3_img_url": None,
+    "question4_img_url": None,
 }
 
 # ==================== DATA FUNCTIONS ====================
@@ -1401,18 +1403,16 @@ class BlockModal(discord.ui.Modal, title="Block Reviewer"):
 
 # ==================== COUNTRY FLAGS ====================
 COUNTRY_FLAGS = {
-    "Z": "0️⃣", "A": "🇺🇸", "B": "🇬🇧", "C": "🇨🇦",
+    "Z": "0️⃣", "A": "🇺🇸", "B": "🇬🇧", "C": "🇨🇦", "M": "🇨🇳",
     "D": "🇩🇪", "E": "🇷🇺", "F": "🇫🇷", "G": "🇯🇵",
-    "H": "🇮🇹", "I": "🇦🇹", "J": "🏳️", "K": "🌍",
-    "L": "🌐", "M": "🇨🇳",
+    "H": "🇮🇹", "I": "🇦🇹", "J": "🏳️", "K": "🌍", "L": "🌐",
 }
 
 COUNTRY_NAMES = {
     "Z": "All Countries", "A": "American", "B": "British/Commonwealth",
-    "C": "Canadian", "D": "German", "E": "Soviet/Russian",
+    "C": "Canadian", "M": "Chinese/KMT", "D": "German", "E": "Soviet/Russian",
     "F": "French", "G": "Japanese", "H": "Italian",
-    "I": "Austro-Hungarian", "J": "Other Axis", "K": "Other Allied",
-    "L": "Multi-country", "M": "Chinese/KMT",
+    "I": "Austro-Hungarian", "J": "Other Axis", "K": "Other Allied", "L": "Multi-country",
 }
 
 class CountrySelectView(discord.ui.View):
@@ -1472,6 +1472,8 @@ class CountrySelectView(discord.ui.View):
     async def c_b(self, i, b): await self._toggle(i, "B")
     @discord.ui.button(emoji="🇨🇦", style=discord.ButtonStyle.secondary, custom_id="country_C")
     async def c_c(self, i, b): await self._toggle(i, "C")
+    @discord.ui.button(emoji="🇨🇳", style=discord.ButtonStyle.secondary, custom_id="country_M")
+    async def c_m(self, i, b): await self._toggle(i, "M")
     @discord.ui.button(emoji="🇩🇪", style=discord.ButtonStyle.secondary, custom_id="country_D")
     async def c_d(self, i, b): await self._toggle(i, "D")
     @discord.ui.button(emoji="🇷🇺", style=discord.ButtonStyle.secondary, custom_id="country_E")
@@ -1490,15 +1492,13 @@ class CountrySelectView(discord.ui.View):
     async def c_k(self, i, b): await self._toggle(i, "K")
     @discord.ui.button(emoji="🌐", style=discord.ButtonStyle.secondary, custom_id="country_L")
     async def c_l(self, i, b): await self._toggle(i, "L")
-    @discord.ui.button(emoji="🇨🇳", style=discord.ButtonStyle.secondary, custom_id="country_M")
-    async def c_m(self, i, b): await self._toggle(i, "M")
     @discord.ui.button(label="✅ Done", style=discord.ButtonStyle.success, custom_id="country_done")
     async def c_done(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not self.selected:
             await interaction.response.send_message("⚠️ Please select at least one country.", ephemeral=True)
             return
         await db_set_user_countries(str(interaction.user.id), list(self.selected))
-        await show_all_done(interaction, edit=True)
+        await show_question4(interaction, edit=True)
 
 # ==================== ERA SELECT VIEW ====================
 
@@ -1523,6 +1523,68 @@ ERA_NAMES = {
     6: "Cold War (1947–1991)",
     7: "GWOT / Modern (2001–present)",
 }
+
+async def db_get_user_forums(user_id):
+    async with client.db.acquire() as conn:
+        row = await conn.fetchrow("SELECT forums FROM user_preferences WHERE user_id=$1", str(user_id))
+        return row["forums"] if row else None
+
+async def db_set_user_forums(user_id, forums_choice):
+    async with client.db.acquire() as conn:
+        await conn.execute(
+            "UPDATE user_preferences SET forums=$1, updated_at=$2 WHERE user_id=$3",
+            forums_choice, int(datetime.now(timezone.utc).timestamp()), str(user_id)
+        )
+
+async def show_question4(interaction: discord.Interaction, edit=True):
+    """Show question 4 — community forums opt-in."""
+    embeds = []
+    if bot_state.get("question4_img_url"):
+        img_embed = discord.Embed(color=discord.Color.dark_gold())
+        img_embed.set_image(url=bot_state["question4_img_url"])
+        embeds.append(img_embed)
+
+    text_embed = discord.Embed(
+        description="Would you like new item listing updates from community forums?\n\n🎖️ **WAF** — Wehrmacht Awards Forum only\n🇺🇸 **USMF** — US Militaria Forum only\n🌐 **Both** — WAF & USMF\n❌ **None** — Skip forum notifications",
+        color=discord.Color.dark_gold()
+    )
+    text_embed.set_footer(text="Adrian — The Relic Registry")
+    embeds.append(text_embed)
+
+    if edit:
+        await interaction.response.edit_message(embeds=embeds, view=ForumSelectView())
+    else:
+        await interaction.response.send_message(embeds=embeds, view=ForumSelectView(), ephemeral=True)
+
+class ForumSelectView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    async def _save(self, interaction, choice):
+        try:
+            await db_set_user_forums(str(interaction.user.id), choice)
+            await show_all_done(interaction, edit=True)
+        except Exception as e:
+            logger.error(f"[ForumSelect] Error: {e}\n{traceback.format_exc()}")
+            try:
+                await interaction.response.send_message("⚠️ Something went wrong. Please try again.", ephemeral=True)
+            except: pass
+
+    @discord.ui.button(label="🎖️ WAF", style=discord.ButtonStyle.danger, custom_id="forum_waf")
+    async def forum_waf(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._save(interaction, "waf")
+
+    @discord.ui.button(label="🇺🇸 USMF", style=discord.ButtonStyle.success, custom_id="forum_usmf")
+    async def forum_usmf(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._save(interaction, "usmf")
+
+    @discord.ui.button(label="🌐 Both", style=discord.ButtonStyle.primary, custom_id="forum_both")
+    async def forum_both(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._save(interaction, "both")
+
+    @discord.ui.button(label="❌ None", style=discord.ButtonStyle.danger, custom_id="forum_none")
+    async def forum_none(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._save(interaction, "none")
 
 async def show_all_done(interaction: discord.Interaction, edit=True):
     """Show completion message after all questions answered."""
@@ -1554,6 +1616,7 @@ async def show_question3(interaction: discord.Interaction, edit=True):
         "🇺🇸 American\n"
         "🇬🇧 British / Commonwealth\n"
         "🇨🇦 Canadian\n"
+        "🇨🇳 Chinese / KMT\n"
         "🇩🇪 German\n"
         "🇷🇺 Soviet / Russian\n"
         "🇫🇷 French\n"
@@ -1563,7 +1626,6 @@ async def show_question3(interaction: discord.Interaction, edit=True):
         "🏳️ Other Axis\n"
         "🌍 Other Allied\n"
         "🌐 Multi-country / General\n"
-        "🇨🇳 Chinese / KMT\n\n"
         "**Select all that apply. Click Done when finished.**"
     )
     if existing_countries:
@@ -2472,6 +2534,7 @@ async def on_ready():
     client.add_view(RegionSelectView())
     client.add_view(EraSelectView())
     client.add_view(CountrySelectView())
+    client.add_view(ForumSelectView())
     logger.info("Persistent views registered.")
 
     # Post welcome image to #Adrian on every startup
@@ -2493,7 +2556,7 @@ async def on_ready():
     try:
         img_host_channel = client.get_channel(IMAGE_HOST_CHANNEL_ID)
         if img_host_channel:
-            for q_file, key in [("adrain_1st_question.png", "question1_img_url"), ("adrain_2nd_question.png", "question2_img_url"), ("adrain_3rd_question.png", "question3_img_url")]:
+            for q_file, key in [("adrain_1st_question.png", "question1_img_url"), ("adrain_2nd_question.png", "question2_img_url"), ("adrain_3rd_question.png", "question3_img_url"), ("adrain_4th_question.png", "question4_img_url")]:
                 path = os.path.join(SCRIPT_DIR, "logos", q_file)
                 if os.path.exists(path):
                     msg = await img_host_channel.send(file=discord.File(path, filename=q_file))
