@@ -2462,49 +2462,7 @@ class RegionSelectView(discord.ui.View):
 
 # ==================== SETUP FLOW VIEWS ====================
 
-class SetupRegionView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
 
-    async def _save(self, interaction, region):
-        await db_save_server_config(str(interaction.guild_id), alerts_region=region)
-        embed = discord.Embed(
-            title="⚙️ Setup — Step 3 of 5",
-            description="Which community forums do you want alerts from?\n\n🟥 **WAF** — Wehrmacht Awards Forum\n🟩 **USMF** — US Militaria Forum\n✅ **Both**\n❌ **None**",
-            color=discord.Color.dark_gold()
-        )
-        embed.set_footer(text="Adrian Setup — The Relic Registry")
-        await interaction.response.edit_message(embed=embed, view=SetupForumView())
-
-    @discord.ui.button(emoji="🇺🇸", label="North America", style=discord.ButtonStyle.secondary, custom_id="setup_region_na")
-    async def na(self, i, b): await self._save(i, "NA")
-    @discord.ui.button(emoji="🇪🇺", label="Europe", style=discord.ButtonStyle.secondary, custom_id="setup_region_eu")
-    async def eu(self, i, b): await self._save(i, "EU")
-    @discord.ui.button(emoji="🌍", label="Both", style=discord.ButtonStyle.secondary, custom_id="setup_region_both")
-    async def both(self, i, b): await self._save(i, "both")
-
-class SetupForumView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    async def _save(self, interaction, forums):
-        await db_save_server_config(str(interaction.guild_id), alerts_forums=forums)
-        embed = discord.Embed(
-            title="⚙️ Setup — Step 4 of 5",
-            description="Do you want an **Estate** channel where members can buy and sell?\n\nThe bot will monitor your forum channel and provide seller profiles, ratings and cross-server listings.\n\n✅ **Yes** — Enable estate features\n❌ **No** — Skip estate",
-            color=discord.Color.dark_gold()
-        )
-        embed.set_footer(text="Adrian Setup — The Relic Registry")
-        await interaction.response.edit_message(embed=embed, view=SetupEstateView())
-
-    @discord.ui.button(emoji="🟥", style=discord.ButtonStyle.secondary, custom_id="setup_forum_waf")
-    async def waf(self, i, b): await self._save(i, "waf")
-    @discord.ui.button(emoji="🟩", style=discord.ButtonStyle.secondary, custom_id="setup_forum_usmf")
-    async def usmf(self, i, b): await self._save(i, "usmf")
-    @discord.ui.button(emoji="✅", style=discord.ButtonStyle.secondary, custom_id="setup_forum_both")
-    async def both(self, i, b): await self._save(i, "both")
-    @discord.ui.button(emoji="❌", style=discord.ButtonStyle.secondary, custom_id="setup_forum_none")
-    async def none(self, i, b): await self._save(i, "none")
 
 class SetupEstateView(discord.ui.View):
     def __init__(self):
@@ -2513,7 +2471,7 @@ class SetupEstateView(discord.ui.View):
     @discord.ui.button(label="✅ Yes — Enable Estate", style=discord.ButtonStyle.success, custom_id="setup_estate_yes")
     async def yes(self, interaction: discord.Interaction, button: discord.ui.Button):
         embed = discord.Embed(
-            title="⚙️ Setup — Step 4b of 5",
+            title="⚙️ Setup — Step 3b of 3",
             description="Do you want to **accept cross-posted listings** from other Adrian servers in your estate channel?\n\nThis lets sellers from other servers post their items here too.\n\n✅ **Yes** — Accept cross-posts\n❌ **No** — Local listings only",
             color=discord.Color.dark_gold()
         )
@@ -2573,7 +2531,7 @@ async def setup_cmd(interaction: discord.Interaction):
         img_embed.set_image(url=bot_state["setup_img_url"])
         embeds.append(img_embed)
     text_embed = discord.Embed(
-        title="⚙️ Welcome to Adrian Setup — Step 1 of 5",
+        title="⚙️ Welcome to Adrian Setup — Step 1 of 3",
         description=f"Hey **{interaction.user.display_name}**! Let\'s get Adrian set up on **{interaction.guild.name}**.\n\nFirst — what channel should Adrian use for **slash commands and the welcome message**?\n\nPlease mention the channel: e.g. `#adrian`",
         color=discord.Color.dark_gold()
     )
@@ -2593,7 +2551,7 @@ async def setup_cmd(interaction: discord.Interaction):
 
         # Step 2 — updates channel
         embed2 = discord.Embed(
-            title="⚙️ Setup — Step 2 of 5",
+            title="⚙️ Setup — Step 2 of 3",
             description=f"✅ Commands channel set to {commands_channel.mention}\n\nNow — what channel should Adrian post **dealer update notifications** to?\n\nPlease mention the channel: e.g. `#adrian-updates`",
             color=discord.Color.dark_gold()
         )
@@ -2605,14 +2563,14 @@ async def setup_cmd(interaction: discord.Interaction):
         await db_save_server_config(str(interaction.guild_id), updates_channel_id=str(updates_channel.id))
         await msg2.delete()
 
-        # Step 3 — region
+        # Step 3 — estate
         embed3 = discord.Embed(
-            title="⚙️ Setup — Step 3 of 5",
-            description=f"✅ Updates channel set to {updates_channel.mention}\n\nWhich **dealer regions** do you want alerts from?",
+            title="⚙️ Setup — Step 3 of 3",
+            description=f"✅ Updates channel set to {updates_channel.mention}\n\nDo you want an **Estate** channel where members can buy and sell?\n\nThe bot will monitor your forum channel and provide seller profiles, ratings and cross-server listings.\n\n✅ **Yes** — Enable estate features\n❌ **No** — Skip estate",
             color=discord.Color.dark_gold()
         )
         embed3.set_footer(text="Adrian Setup — The Relic Registry")
-        await interaction.edit_original_response(embed=embed3, view=SetupRegionView())
+        await interaction.edit_original_response(embed=embed3, view=SetupEstateView())
 
     except asyncio.TimeoutError:
         await interaction.edit_original_response(
@@ -3801,8 +3759,6 @@ async def on_ready():
     client.add_view(BuyerIdentifyView("placeholder", "placeholder"))
     client.add_view(SellerProfileView("placeholder"))
     client.add_view(EstateRatingView("placeholder", "placeholder", "placeholder"))
-    client.add_view(SetupRegionView())
-    client.add_view(SetupForumView())
     client.add_view(SetupEstateView())
     client.add_view(SetupCrossPostView())
     logger.info("Persistent views registered.")
