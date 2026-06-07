@@ -2592,11 +2592,7 @@ async def setup_cmd(interaction: discord.Interaction):
     )
 
     embeds = []
-    if bot_state.get("setup_img_url"):
-        img_embed = discord.Embed(color=discord.Color.dark_gold())
-        img_embed.set_image(url=bot_state["setup_img_url"])
-        embeds.append(img_embed)
-    text_embed = discord.Embed(
+    single_embed = discord.Embed(
         title="Hey! I'm Adrian — Discord's #1 Militaria Bot",
         description=(
             f"Thanks for adding me to **{interaction.guild.name}**!\n\n"
@@ -2612,7 +2608,9 @@ async def setup_cmd(interaction: discord.Interaction):
         ),
         color=discord.Color.dark_gold()
     )
-    # Build channel dropdowns from guild channels
+    if bot_state.get("setup_img_url"):
+        single_embed.set_thumbnail(url=bot_state["setup_img_url"])
+    embeds.append(single_embed)
     text_channels = [c for c in interaction.guild.channels if isinstance(c, discord.TextChannel)]
     commands_options = [
         discord.SelectOption(label=f"#{c.name}"[:100], value=str(c.id))
