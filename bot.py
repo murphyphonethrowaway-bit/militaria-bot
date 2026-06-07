@@ -420,6 +420,7 @@ bot_state = {
     "thankyou_img_url": None,
     "check_before_buy_img_url": None,
     "setup_img_url": None,
+    "error_404_img_url": None,
     "command_cooldowns": {},
     "health_status": "starting",
     "startup_time": None,
@@ -2608,63 +2609,65 @@ async def setup_cmd(interaction: discord.Interaction):
         color=discord.Color.dark_gold()
     )
 
-    await interaction.response.send_message(embeds=embeds, ephemeral=True)
+    # Build channel dropdowns from guild channels
+    text_channels = [c for c in interaction.guild.channels if isinstance(c, discord.TextChannel)]
+    commands_options = [
+        discord.SelectOption(label=f"#{c.name}"[:100], value=str(c.id))
+        for c in sorted(text_channels, key=lambda x: x.position)
+    ][:25]
 
-    # Wait for channel mention
-    def check(m):
-        return m.author.id == interaction.user.id and m.guild.id == interaction.guild_id and m.channel_mentions
+    class CommandsChannelSelect(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=300)
 
-    try:
-        msg = await client.wait_for("message", check=check, timeout=120)
-        commands_channel = msg.channel_mentions[0]
-        await db_save_server_config(str(interaction.guild_id), channel_id=str(commands_channel.id))
-        await msg.delete()
+        @discord.ui.select(placeholder="Select your commands channel...", options=commands_options)
+        async def select_commands(self, interaction2: discord.Interaction, select: discord.ui.Select):
+            commands_channel_id = int(select.values[0])
+            commands_channel = interaction2.guild.get_channel(commands_channel_id)
+            await db_save_server_config(str(interaction2.guild_id), channel_id=str(commands_channel_id))
 
-        # Step 2 — updates channel
-        embed2 = discord.Embed(
-            title="⚙️ Step 2 of 3 — Updates Channel",
-            description=(
-                f"✅ Got it! Command channel set to {commands_channel.mention}\n\n"
-                "Now — which channel should Adrian post **dealer alerts** to?\n\n"
-                "💡 We recommend a dedicated channel like `#militaria-alerts` or `#adrian-updates`.\n\n"
-                "📌 Mention the channel below — e.g. `#adrian-updates`"
-            ),
-            color=discord.Color.dark_gold()
-        )
+            updates_options = [
+                discord.SelectOption(label=f"#{c.name}"[:100], value=str(c.id))
+                for c in sorted(text_channels, key=lambda x: x.position)
+            ][:25]
 
+            class UpdatesChannelSelect(discord.ui.View):
+                def __init__(self):
+                    super().__init__(timeout=300)
 
-        msg2 = await client.wait_for("message", check=check, timeout=120)
-        updates_channel = msg2.channel_mentions[0]
-        await db_save_server_config(str(interaction.guild_id), updates_channel_id=str(updates_channel.id))
-        await msg2.delete()
+                @discord.ui.select(placeholder="Select your updates/alerts channel...", options=updates_options)
+                async def select_updates(self, interaction3: discord.Interaction, select2: discord.ui.Select):
+                    updates_channel_id = int(select2.values[0])
+                    updates_channel = interaction3.guild.get_channel(updates_channel_id)
+                    await db_save_server_config(str(interaction3.guild_id), updates_channel_id=str(updates_channel_id))
+                    embed3 = discord.Embed(
+                        title="⚙️ Last Step — Do you want a Marketplace?",
+                        description=(
+                            f"✅ Commands: {commands_channel.mention} | Updates: {updates_channel.mention}\n\n"
+                            "**Turn your server into a trusted militaria marketplace!** 🏪\n\n"
+                            "🔍 **Seller profiles** — buyers check seller ratings before purchasing\n"
+                            "⭐ **Reputation system** — every transaction builds a global trust score\n"
+                            "🌐 **Cross-server listings** — sellers reach buyers across ALL Adrian servers\n"
+                            "🛡️ **Scam protection** — warning flags follow bad actors everywhere\n"
+                            "📊 **Transaction history** — full record of every completed sale\n\n"
+                            "It's completely free and takes 30 seconds to set up."
+                        ),
+                        color=discord.Color.dark_gold()
+                    )
+                    await interaction3.response.edit_message(embed=embed3, view=SetupEstateView())
 
-        # Step 3 — estate
-        embed3 = discord.Embed(
-            title="⚙️ Last Step — Do you want a Marketplace?",
-            description=(
-                "✅ Updates channel set to " + updates_channel.mention + "\n\n"
-                "**Turn your server into a trusted militaria marketplace!** 🏪\n\n"
-                "Adrian\'s Estate feature transforms any forum channel into a full buying & selling hub:\n\n"
-                "🔍 **Seller profiles** — buyers can check a seller\'s rating and history before purchasing\n"
-                "⭐ **Reputation system** — every transaction builds a global trust score\n"
-                "🌐 **Cross-server listings** — sellers reach buyers across ALL Adrian servers\n"
-                "🛡️ **Scam protection** — warning flags follow bad actors across every server\n"
-                "📊 **Transaction history** — full record of every completed sale\n\n"
-                "It\'s completely free and takes 30 seconds to set up."
-            ),
-            color=discord.Color.dark_gold()
-        )
-
-        await interaction.edit_original_response(embed=embed3, view=SetupEstateView())
-
-    except asyncio.TimeoutError:
-        await interaction.edit_original_response(
-            embed=discord.Embed(
-                title="⏰ Setup Timed Out",
-                description="Setup timed out. Run `/setup` again to start over.",
-                color=discord.Color.red()
+            embed2 = discord.Embed(
+                title="⚙️ Step 2 of 3 — Updates Channel",
+                description=(
+                    f"✅ Commands channel set to {commands_channel.mention}\n\n"
+                    "Now — which channel should Adrian post **dealer alerts** to?\n\n"
+                    "💡 We recommend a dedicated channel like `#militaria-alerts` or `#adrian-updates`."
+                ),
+                color=discord.Color.dark_gold()
             )
-        )
+            await interaction2.response.edit_message(embed=embed2, view=UpdatesChannelSelect())
+
+    await interaction.response.send_message(embeds=embeds, view=CommandsChannelSelect(), ephemeral=True)
 
 # ==================== OWNER COMMANDS (Murphy only, test server only) ====================
 
@@ -3695,14 +3698,69 @@ async def on_error(event, *args, **kwargs):
 
 @client.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
-    logger.error(f"Slash command error in '{interaction.command.name if interaction.command else 'unknown'}': {error}")
+    command_name = interaction.command.name if interaction.command else "unknown"
+    logger.error(f"[Error] Slash command '{command_name}' failed: {error}")
     logger.error(traceback.format_exc())
+
+    # Log to private mod channel
+    try:
+        log_channel = client.get_channel(PRIVATE_LOG_CHANNEL_ID)
+        if log_channel:
+            error_embed = discord.Embed(
+                title="⚠️ Command Error",
+                color=discord.Color.red(),
+                timestamp=datetime.now(timezone.utc)
+            )
+            error_embed.add_field(name="Command", value=f"`/{command_name}`", inline=True)
+            error_embed.add_field(name="User", value=f"{interaction.user} ({interaction.user.id})", inline=True)
+            error_embed.add_field(name="Server", value=f"{interaction.guild.name if interaction.guild else 'DM'}", inline=True)
+            error_embed.add_field(name="Error", value=f"```{str(error)[:500]}```", inline=False)
+            await log_channel.send(embed=error_embed)
+    except Exception:
+        pass
+
+    # Friendly message to user based on error type
+    if isinstance(error, app_commands.CommandOnCooldown):
+        msg = f"⏳ This command is on cooldown. Try again in **{error.retry_after:.0f} seconds**."
+    elif isinstance(error, app_commands.MissingPermissions):
+        msg = "🚫 You don\'t have permission to use this command."
+    elif isinstance(error, app_commands.BotMissingPermissions):
+        msg = "🚫 I\'m missing permissions to do that. Please make sure I have the right roles."
+    elif isinstance(error, app_commands.CommandNotFound):
+        msg = "❓ Unknown command."
+    elif isinstance(error, app_commands.CheckFailure):
+        msg = "🚫 You don\'t have access to this command."
+    else:
+        msg = (
+            "The error has been logged and will be looked into. "
+            "Please try again in a moment or contact a mod if it keeps happening."
+        )
+        # Show 404 image for unknown errors
+        try:
+            embeds = []
+            if bot_state.get("error_404_img_url"):
+                err_embed = discord.Embed(color=discord.Color.red())
+                err_embed.set_image(url=bot_state["error_404_img_url"])
+                embeds.append(err_embed)
+            text_embed = discord.Embed(
+                description=msg,
+                color=discord.Color.red()
+            )
+            embeds.append(text_embed)
+            if not interaction.response.is_done():
+                await interaction.response.send_message(embeds=embeds, ephemeral=True)
+            else:
+                await interaction.followup.send(embeds=embeds, ephemeral=True)
+        except Exception:
+            pass
+        return
+
     try:
         if not interaction.response.is_done():
-            await interaction.response.send_message(f"⚠️ An error occurred. Please try again or contact a mod.", ephemeral=True)
+            await interaction.response.send_message(msg, ephemeral=True)
         else:
-            await interaction.followup.send(f"⚠️ An error occurred. Please try again or contact a mod.", ephemeral=True)
-    except:
+            await interaction.followup.send(msg, ephemeral=True)
+    except Exception:
         pass
 
 @client.event
@@ -4064,6 +4122,14 @@ async def handle_guide(request):
             return web.Response(text=f.read(), content_type="text/html")
     return web.Response(text="Guide not found", status=404)
 
+async def handle_404(request):
+    """404 page for web server."""
+    img_path = os.path.join(SCRIPT_DIR, "logos", "adrian", "404.png")
+    if os.path.exists(img_path):
+        with open(img_path, "rb") as f:
+            return web.Response(body=f.read(), content_type="image/png", status=404)
+    return web.Response(text="404 Not Found", status=404)
+
 async def handle_health(request):
     """Health check endpoint for Railway and monitoring."""
     uptime = ""
@@ -4094,6 +4160,7 @@ async def start_web_server():
     app.router.add_get("/", handle_guide)
     app.router.add_get("/guide", handle_guide)
     app.router.add_get("/health", handle_health)
+    app.router.add_route("*", "/{path_info:.*}", handle_404)
     app.router.add_get("/alert", handle_webhook)
     app.router.add_post("/alert", handle_webhook)
     runner = web.AppRunner(app)
