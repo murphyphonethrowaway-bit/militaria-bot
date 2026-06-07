@@ -28,6 +28,7 @@ from datetime import datetime, timezone, timedelta
 
 # ==================== CONFIGURATION ====================
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
+BOT_OWNER_ID = 161988117862023169  # Murphy's Discord user ID
 GUILD_ID = 1357352905857826887
 IMAGE_HOST_CHANNEL_ID = 1512953027793915955  # Private channel for image hosting
 CHANNEL_ID = 1512923925116358806  # #Adrian — unified notifications channel
@@ -293,6 +294,32 @@ class MilitariaBot(discord.Client):
                     rating INTEGER NOT NULL,
                     review TEXT,
                     timestamp BIGINT NOT NULL
+                )
+            ''')
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS server_config (
+                    guild_id TEXT PRIMARY KEY,
+                    guild_name TEXT,
+                    owner_id TEXT,
+                    channel_id TEXT,
+                    updates_channel_id TEXT,
+                    estate_channel_id TEXT,
+                    estate_cross_posts_channel_id TEXT,
+                    mod_log_channel_id TEXT,
+                    bot_feedback_channel_id TEXT,
+                    review_log_channel_id TEXT,
+                    image_host_channel_id TEXT,
+                    verified_role_id TEXT,
+                    premium_role_id TEXT,
+                    guerrilla_role_id TEXT,
+                    estate_sold_tag_id TEXT,
+                    estate_name TEXT DEFAULT 'Estate',
+                    alerts_region TEXT DEFAULT 'both',
+                    alerts_forums TEXT DEFAULT 'both',
+                    accept_cross_posts INTEGER DEFAULT 0,
+                    setup_complete INTEGER DEFAULT 0,
+                    premium INTEGER DEFAULT 0,
+                    created_at BIGINT NOT NULL
                 )
             ''')
         logger.info("Database initialized successfully!")
@@ -571,6 +598,52 @@ async def db_get_all_stats():
         return {r["dealer_name"]: r["alert_count"] for r in rows}
 
 
+
+# ==================== SERVER CONFIG DB ====================
+
+async def db_get_server_config(guild_id):
+    """Get config for a specific server. Returns dict or None if not set up."""
+    async with client.db.acquire() as conn:
+        row = await conn.fetchrow("SELECT * FROM server_config WHERE guild_id=$1", str(guild_id))
+        return dict(row) if row else None
+
+async def db_save_server_config(guild_id, **kwargs):
+    """Insert or update a server config."""
+    async with client.db.acquire() as conn:
+        existing = await conn.fetchrow("SELECT guild_id FROM server_config WHERE guild_id=$1", str(guild_id))
+        if existing:
+            set_clause = ", ".join([f"{k}=${i+2}" for i, k in enumerate(kwargs.keys())])
+            values = [str(guild_id)] + [str(v) if v is not None else None for v in kwargs.values()]
+            await conn.execute(f"UPDATE server_config SET {set_clause} WHERE guild_id=$1", *values)
+        else:
+            kwargs["created_at"] = int(datetime.now(timezone.utc).timestamp())
+            cols = "guild_id, " + ", ".join(kwargs.keys())
+            placeholders = ", ".join([f"${i+1}" for i in range(len(kwargs)+1)])
+            values = [str(guild_id)] + [str(v) if v is not None else None for v in kwargs.values()]
+            await conn.execute(f"INSERT INTO server_config ({cols}) VALUES ({placeholders})", *values)
+
+async def db_get_all_servers():
+    """Get all server configs — for owner dashboard."""
+    async with client.db.acquire() as conn:
+        rows = await conn.fetch("SELECT * FROM server_config ORDER BY created_at DESC")
+        return [dict(r) for r in rows]
+
+async def db_is_setup(guild_id):
+    """Check if a server has completed setup."""
+    config = await db_get_server_config(guild_id)
+    return config and config.get("setup_complete") == "1"
+
+def get_config_value(config, key, fallback=None):
+    """Safely get a value from server config, converting to int if it looks like an ID."""
+    if not config:
+        return fallback
+    val = config.get(key)
+    if val is None:
+        return fallback
+    try:
+        return int(val)
+    except (ValueError, TypeError):
+        return val
 
 # ==================== ESTATE DB FUNCTIONS ====================
 
@@ -2298,6 +2371,261 @@ class RegionSelectView(discord.ui.View):
 
 # ==================== SLASH COMMANDS ====================
 
+# ==================== SETUP FLOW VIEWS ====================
+
+class SetupRegionView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=300)
+
+    async def _save(self, interaction, region):
+        await db_save_server_config(str(interaction.guild_id), alerts_region=region)
+        embed = discord.Embed(
+            title="⚙️ Setup — Step 3 of 5",
+            description="Which community forums do you want alerts from?\n\n🟥 **WAF** — Wehrmacht Awards Forum\n🟩 **USMF** — US Militaria Forum\n✅ **Both**\n❌ **None**",
+            color=discord.Color.dark_gold()
+        )
+        embed.set_footer(text="Adrian Setup — The Relic Registry")
+        await interaction.response.edit_message(embed=embed, view=SetupForumView())
+
+    @discord.ui.button(emoji="🇺🇸", label="North America", style=discord.ButtonStyle.secondary, custom_id="setup_region_na")
+    async def na(self, i, b): await self._save(i, "NA")
+    @discord.ui.button(emoji="🇪🇺", label="Europe", style=discord.ButtonStyle.secondary, custom_id="setup_region_eu")
+    async def eu(self, i, b): await self._save(i, "EU")
+    @discord.ui.button(emoji="🌍", label="Both", style=discord.ButtonStyle.secondary, custom_id="setup_region_both")
+    async def both(self, i, b): await self._save(i, "both")
+
+class SetupForumView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=300)
+
+    async def _save(self, interaction, forums):
+        await db_save_server_config(str(interaction.guild_id), alerts_forums=forums)
+        embed = discord.Embed(
+            title="⚙️ Setup — Step 4 of 5",
+            description="Do you want an **Estate** channel where members can buy and sell?\n\nThe bot will monitor your forum channel and provide seller profiles, ratings and cross-server listings.\n\n✅ **Yes** — Enable estate features\n❌ **No** — Skip estate",
+            color=discord.Color.dark_gold()
+        )
+        embed.set_footer(text="Adrian Setup — The Relic Registry")
+        await interaction.response.edit_message(embed=embed, view=SetupEstateView())
+
+    @discord.ui.button(emoji="🟥", style=discord.ButtonStyle.secondary, custom_id="setup_forum_waf")
+    async def waf(self, i, b): await self._save(i, "waf")
+    @discord.ui.button(emoji="🟩", style=discord.ButtonStyle.secondary, custom_id="setup_forum_usmf")
+    async def usmf(self, i, b): await self._save(i, "usmf")
+    @discord.ui.button(emoji="✅", style=discord.ButtonStyle.secondary, custom_id="setup_forum_both")
+    async def both(self, i, b): await self._save(i, "both")
+    @discord.ui.button(emoji="❌", style=discord.ButtonStyle.secondary, custom_id="setup_forum_none")
+    async def none(self, i, b): await self._save(i, "none")
+
+class SetupEstateView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=300)
+
+    @discord.ui.button(label="✅ Yes — Enable Estate", style=discord.ButtonStyle.success, custom_id="setup_estate_yes")
+    async def yes(self, interaction: discord.Interaction, button: discord.ui.Button):
+        embed = discord.Embed(
+            title="⚙️ Setup — Step 4b of 5",
+            description="Do you want to **accept cross-posted listings** from other Adrian servers in your estate channel?\n\nThis lets sellers from other servers post their items here too.\n\n✅ **Yes** — Accept cross-posts\n❌ **No** — Local listings only",
+            color=discord.Color.dark_gold()
+        )
+        embed.set_footer(text="Adrian Setup — The Relic Registry")
+        await interaction.response.edit_message(embed=embed, view=SetupCrossPostView())
+
+    @discord.ui.button(label="❌ No Estate", style=discord.ButtonStyle.danger, custom_id="setup_estate_no")
+    async def no(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await db_save_server_config(str(interaction.guild_id), setup_complete=1)
+        embed = discord.Embed(
+            title="✅ Setup Complete!",
+            description="Adrian is ready to go! Here\'s what to do next:\n\n1. Make sure **#adrian** is visible to everyone\n2. Make sure **#adrian-updates** is only visible to `Adrian Verified` role\n3. Tell your members to type `/start` to set up their profile\n\nAdrian will now post the welcome image and start monitoring dealers!",
+            color=discord.Color.green()
+        )
+        embed.set_footer(text="Adrian — The Relic Registry")
+        await interaction.response.edit_message(embed=embed, view=None)
+
+class SetupCrossPostView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=300)
+
+    async def _save(self, interaction, accept):
+        await db_save_server_config(str(interaction.guild_id), accept_cross_posts=accept, setup_complete=1)
+        embed = discord.Embed(
+            title="✅ Setup Complete!",
+            description="Adrian is ready to go! Here\'s what to do next:\n\n1. Make sure **#adrian** is visible to everyone\n2. Make sure **#adrian-updates** is only visible to `Adrian Verified` role\n3. Tell your members to type `/start` to set up their profile\n\nAdrian will now post the welcome image and start monitoring dealers!",
+            color=discord.Color.green()
+        )
+        embed.set_footer(text="Adrian — The Relic Registry")
+        await interaction.response.edit_message(embed=embed, view=None)
+
+    @discord.ui.button(label="✅ Yes — Accept Cross-Posts", style=discord.ButtonStyle.success, custom_id="setup_crosspost_yes")
+    async def yes(self, i, b): await self._save(i, 1)
+    @discord.ui.button(label="❌ No — Local Only", style=discord.ButtonStyle.danger, custom_id="setup_crosspost_no")
+    async def no(self, i, b): await self._save(i, 0)
+
+# ==================== SETUP COMMAND ====================
+
+@client.tree.command(name="setup", description="Set up Adrian on your server")
+async def setup_cmd(interaction: discord.Interaction):
+    # Only server owner or admin can run setup
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("🚫 Only server administrators can run `/setup`.", ephemeral=True)
+        return
+
+    # Save basic server info
+    await db_save_server_config(
+        str(interaction.guild_id),
+        guild_name=interaction.guild.name,
+        owner_id=str(interaction.guild.owner_id)
+    )
+
+    embed = discord.Embed(
+        title="⚙️ Welcome to Adrian Setup — Step 1 of 5",
+        description=f"Hey **{interaction.user.display_name}**! Let\'s get Adrian set up on **{interaction.guild.name}**.\n\nFirst — what channel should Adrian use for **slash commands and the welcome message**?\n\nPlease mention the channel: e.g. `#adrian`",
+        color=discord.Color.dark_gold()
+    )
+    embed.set_footer(text="Adrian Setup — Type the channel mention to continue")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    # Wait for channel mention
+    def check(m):
+        return m.author.id == interaction.user.id and m.guild.id == interaction.guild_id and m.channel_mentions
+
+    try:
+        msg = await client.wait_for("message", check=check, timeout=120)
+        commands_channel = msg.channel_mentions[0]
+        await db_save_server_config(str(interaction.guild_id), channel_id=str(commands_channel.id))
+        await msg.delete()
+
+        # Step 2 — updates channel
+        embed2 = discord.Embed(
+            title="⚙️ Setup — Step 2 of 5",
+            description=f"✅ Commands channel set to {commands_channel.mention}\n\nNow — what channel should Adrian post **dealer update notifications** to?\n\nPlease mention the channel: e.g. `#adrian-updates`",
+            color=discord.Color.dark_gold()
+        )
+        embed2.set_footer(text="Adrian Setup — Type the channel mention to continue")
+        await interaction.edit_original_response(embed=embed2)
+
+        msg2 = await client.wait_for("message", check=check, timeout=120)
+        updates_channel = msg2.channel_mentions[0]
+        await db_save_server_config(str(interaction.guild_id), updates_channel_id=str(updates_channel.id))
+        await msg2.delete()
+
+        # Step 3 — region
+        embed3 = discord.Embed(
+            title="⚙️ Setup — Step 3 of 5",
+            description=f"✅ Updates channel set to {updates_channel.mention}\n\nWhich **dealer regions** do you want alerts from?",
+            color=discord.Color.dark_gold()
+        )
+        embed3.set_footer(text="Adrian Setup — The Relic Registry")
+        await interaction.edit_original_response(embed=embed3, view=SetupRegionView())
+
+    except asyncio.TimeoutError:
+        await interaction.edit_original_response(
+            embed=discord.Embed(
+                title="⏰ Setup Timed Out",
+                description="Setup timed out. Run `/setup` again to start over.",
+                color=discord.Color.red()
+            )
+        )
+
+# ==================== OWNER COMMANDS (Murphy only, test server only) ====================
+
+def is_bot_owner(user):
+    return user.id == BOT_OWNER_ID
+
+@client.tree.command(name="servers", description="[Owner] List all servers running Adrian")
+async def servers_cmd(interaction: discord.Interaction):
+    if not is_bot_owner(interaction.user):
+        await interaction.response.send_message("❓ Unknown command.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    servers = await db_get_all_servers()
+    if not servers:
+        await interaction.followup.send("No servers configured yet.", ephemeral=True)
+        return
+    embed = discord.Embed(
+        title=f"🌐 Adrian — {len(servers)} Server(s)",
+        color=discord.Color.dark_gold(),
+        timestamp=datetime.now(timezone.utc)
+    )
+    for s in servers[:25]:
+        setup = "✅" if s.get("setup_complete") == "1" else "⚠️"
+        premium = "💎" if s.get("premium") == "1" else ""
+        embed.add_field(
+            name=f"{setup} {premium} {s.get('guild_name', 'Unknown')}",
+            value=f"ID: `{s['guild_id']}`\nOwner: <@{s.get('owner_id', '?')}>",
+            inline=True
+        )
+    embed.set_footer(text=f"Adrian Owner Dashboard — {len(servers)} total servers")
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+@client.tree.command(name="serverstats", description="[Owner] View stats for a specific server")
+@app_commands.describe(guild_id="The server ID to look up")
+async def serverstats_cmd(interaction: discord.Interaction, guild_id: str):
+    if not is_bot_owner(interaction.user):
+        await interaction.response.send_message("❓ Unknown command.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    config = await db_get_server_config(guild_id)
+    if not config:
+        await interaction.followup.send(f"⚠️ No config found for server `{guild_id}`.", ephemeral=True)
+        return
+    embed = discord.Embed(
+        title=f"📊 {config.get('guild_name', 'Unknown Server')}",
+        color=discord.Color.dark_gold(),
+        timestamp=datetime.now(timezone.utc)
+    )
+    embed.add_field(name="Guild ID", value=f"`{config['guild_id']}`", inline=True)
+    embed.add_field(name="Owner", value=f"<@{config.get('owner_id', '?')}>", inline=True)
+    embed.add_field(name="Setup", value="✅ Complete" if config.get("setup_complete") == "1" else "⚠️ Incomplete", inline=True)
+    embed.add_field(name="Premium", value="💎 Yes" if config.get("premium") == "1" else "❌ No", inline=True)
+    embed.add_field(name="Region", value=config.get("alerts_region", "?"), inline=True)
+    embed.add_field(name="Forums", value=config.get("alerts_forums", "?"), inline=True)
+    embed.add_field(name="Cross-Posts", value="✅" if config.get("accept_cross_posts") == "1" else "❌", inline=True)
+    embed.set_footer(text="Adrian Owner Dashboard")
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+@client.tree.command(name="setpremium", description="[Owner] Grant or revoke premium for a server")
+@app_commands.describe(guild_id="The server ID", premium="True to grant, False to revoke")
+async def setpremium_cmd(interaction: discord.Interaction, guild_id: str, premium: bool):
+    if not is_bot_owner(interaction.user):
+        await interaction.response.send_message("❓ Unknown command.", ephemeral=True)
+        return
+    await db_save_server_config(guild_id, premium=1 if premium else 0)
+    await interaction.response.send_message(
+        f"{'💎 Premium granted' if premium else '❌ Premium revoked'} for server `{guild_id}`.",
+        ephemeral=True
+    )
+
+@client.tree.command(name="broadcast", description="[Owner] Send a message to all Adrian servers")
+@app_commands.describe(message="The message to broadcast")
+async def broadcast_cmd(interaction: discord.Interaction, message: str):
+    if not is_bot_owner(interaction.user):
+        await interaction.response.send_message("❓ Unknown command.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    servers = await db_get_all_servers()
+    sent = 0
+    failed = 0
+    for server in servers:
+        try:
+            channel_id = server.get("updates_channel_id") or server.get("channel_id")
+            if channel_id:
+                channel = client.get_channel(int(channel_id))
+                if channel:
+                    embed = discord.Embed(
+                        title="📢 Message from Adrian",
+                        description=message,
+                        color=discord.Color.dark_gold(),
+                        timestamp=datetime.now(timezone.utc)
+                    )
+                    embed.set_footer(text="Adrian — The Relic Registry")
+                    await channel.send(embed=embed)
+                    sent += 1
+        except Exception as e:
+            failed += 1
+            logger.error(f"[Broadcast] Failed for {server.get('guild_id')}: {e}")
+    await interaction.followup.send(f"📢 Broadcast sent to {sent} server(s). {failed} failed.", ephemeral=True)
+
 @client.tree.command(name="start", description="Get started with Adrian and set your notification preferences")
 async def start_cmd(interaction: discord.Interaction):
     existing = await db_get_user_region(str(interaction.user.id))
@@ -3179,6 +3507,38 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
         pass
 
 @client.event
+async def on_guild_join(guild):
+    """When bot joins a new server, DM the owner to run /setup."""
+    try:
+        logger.info(f"[Guild] Joined new server: {guild.name} ({guild.id})")
+        # Save basic info
+        await db_save_server_config(
+            str(guild.id),
+            guild_name=guild.name,
+            owner_id=str(guild.owner_id)
+        )
+        # DM the server owner
+        try:
+            owner = await client.fetch_user(guild.owner_id)
+            if owner:
+                embed = discord.Embed(
+                    title="👋 Thanks for adding Adrian!",
+                    description=f"Hey! I\'m Adrian, Discord\'s #1 Militaria Bot.\n\nTo get started on **{guild.name}**, please run `/setup` in your server. It only takes 2 minutes!\n\n**What I can do:**\n📬 Dealer alert notifications\n🏪 Estate marketplace with seller ratings\n🎖️ Global collector profiles\n⭐ Cross-server reputation system",
+                    color=discord.Color.dark_gold()
+                )
+                embed.set_footer(text="Adrian — The Relic Registry")
+                await owner.send(embed=embed)
+        except Exception as e:
+            logger.warning(f"[Guild] Could not DM owner of {guild.name}: {e}")
+    except Exception as e:
+        logger.error(f"[Guild] on_guild_join error: {e}\n{traceback.format_exc()}")
+
+@client.event
+async def on_guild_remove(guild):
+    """When bot is removed from a server, log it."""
+    logger.info(f"[Guild] Removed from server: {guild.name} ({guild.id})")
+
+@client.event
 async def on_thread_create(thread):
     """When a new listing is posted in the estate channel, bot posts a check before you buy message."""
     try:
@@ -3187,6 +3547,9 @@ async def on_thread_create(thread):
 
         seller_id = thread.owner_id
         logger.info(f"[Estate] New listing thread: {thread.name} by {seller_id}")
+
+        # Wait for the post author to send their initial message
+        await asyncio.sleep(10)
 
         # Build seller profile button embed
         embed = discord.Embed(
@@ -3264,6 +3627,10 @@ async def on_ready():
     client.add_view(BuyerIdentifyView("placeholder", "placeholder"))
     client.add_view(SellerProfileView("placeholder"))
     client.add_view(EstateRatingView("placeholder", "placeholder", "placeholder"))
+    client.add_view(SetupRegionView())
+    client.add_view(SetupForumView())
+    client.add_view(SetupEstateView())
+    client.add_view(SetupCrossPostView())
     logger.info("Persistent views registered.")
 
     # Post welcome image to #Adrian on every startup
