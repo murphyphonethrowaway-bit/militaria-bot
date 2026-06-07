@@ -246,8 +246,10 @@ class MilitariaBot(discord.Client):
                 CREATE TABLE IF NOT EXISTS user_preferences (
                     user_id TEXT PRIMARY KEY,
                     region TEXT DEFAULT 'both',
+                    eras TEXT DEFAULT '',
                     updated_at BIGINT NOT NULL
                 )
+            
             ''')
         logger.info("Database initialized successfully!")
 
@@ -318,6 +320,7 @@ bot_state = {
     "dealer_cooldowns": {},
     "waf_notification_count": 0,
     "question1_img_url": None,
+    "question2_img_url": None,
 }
 
 # ==================== DATA FUNCTIONS ====================
@@ -531,6 +534,21 @@ async def db_set_user_region(user_id, region):
         await conn.execute(
             "INSERT INTO user_preferences (user_id, region, updated_at) VALUES ($1,$2,$3) ON CONFLICT (user_id) DO UPDATE SET region=$2, updated_at=$3",
             str(user_id), region, int(datetime.now(timezone.utc).timestamp())
+        )
+
+async def db_get_user_eras(user_id):
+    async with client.db.acquire() as conn:
+        row = await conn.fetchrow("SELECT eras FROM user_preferences WHERE user_id=$1", str(user_id))
+        if row and row["eras"]:
+            return [int(e) for e in row["eras"].split(",")]
+        return None
+
+async def db_set_user_eras(user_id, eras):
+    async with client.db.acquire() as conn:
+        era_str = ",".join(str(e) for e in eras)
+        await conn.execute(
+            "UPDATE user_preferences SET eras=$1, updated_at=$2 WHERE user_id=$3",
+            era_str, int(datetime.now(timezone.utc).timestamp()), str(user_id)
         )
 
 async def db_get_users_for_region(dealer_region):
@@ -1364,6 +1382,163 @@ class BlockModal(discord.ui.Modal, title="Block Reviewer"):
 
 # ==================== SLASH COMMANDS ====================
 
+# ==================== ERA SELECT VIEW ====================
+
+ERA_EMOJIS = {
+    0: "⚪",  # All eras
+    1: "🟤",  # Pre-1914
+    2: "🟡",  # WWI
+    3: "🔴",  # WWII
+    4: "🔵",  # Korean War
+    5: "🟢",  # Vietnam
+    6: "🟣",  # Cold War
+    7: "🟠",  # GWOT
+}
+
+ERA_NAMES = {
+    0: "All Eras",
+    1: "Pre-1914",
+    2: "WWI (1914–1918)",
+    3: "WWII (1939–1945)",
+    4: "Korean War (1950–1953)",
+    5: "Vietnam War (1955–1975)",
+    6: "Cold War (1947–1991)",
+    7: "GWOT / Modern (2001–present)",
+}
+
+async def show_question3(interaction: discord.Interaction, edit=True):
+    """Placeholder for question 3 — coming soon."""
+    embed = discord.Embed(
+        title="✅ All set!",
+        description="Your preferences have been saved! You'll now receive dealer notifications matching your selections.\n\nUse `/settings` anytime to update your preferences.",
+        color=discord.Color.green(),
+        timestamp=datetime.now(timezone.utc)
+    )
+    embed.set_footer(text="Adrian — The Relic Registry")
+    if edit:
+        await interaction.response.edit_message(embeds=[embed], view=None)
+    else:
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+async def show_question2(interaction: discord.Interaction, edit=True):
+    """Show question 2 — era selection."""
+    existing_eras = await db_get_user_eras(str(interaction.user.id))
+    era_display = ", ".join([f"{ERA_EMOJIS[e]} {ERA_NAMES[e]}" for e in existing_eras]) if existing_eras else "Not set yet"
+
+    embeds = []
+    if bot_state.get("question2_img_url"):
+        img_embed = discord.Embed(color=discord.Color.dark_gold())
+        img_embed.set_image(url=bot_state["question2_img_url"])
+        embeds.append(img_embed)
+
+    description = (
+        "⚪ All Eras\n"
+        "🟤 Pre-1914\n"
+        "🟡 WWI (1914\u20131918)\n"
+        "🔴 WWII (1939\u20131945)\n"
+        "🔵 Korean War (1950\u20131953)\n"
+        "🟢 Vietnam War (1955\u20131975)\n"
+        "🟣 Cold War (1947\u20131991)\n"
+        "🟠 GWOT / Modern (2001\u2013present)\n\n"
+        "**Select all that apply. Click Done when finished.**"
+    )
+    if existing_eras:
+        description += f"\n\n**Current Selection:** {era_display}"
+
+    text_embed = discord.Embed(description=description, color=discord.Color.dark_gold())
+    text_embed.set_footer(text="Adrian — The Relic Registry")
+    embeds.append(text_embed)
+
+    if edit:
+        await interaction.response.edit_message(embeds=embeds, view=EraSelectView(existing_eras or []))
+    else:
+        await interaction.response.send_message(embeds=embeds, view=EraSelectView(existing_eras or []), ephemeral=True)
+
+class EraSelectView(discord.ui.View):
+    def __init__(self, selected_eras=None):
+        super().__init__(timeout=None)
+        self.selected = set(selected_eras or [])
+
+    @discord.ui.button(emoji="⚪", style=discord.ButtonStyle.secondary, custom_id="era_0")
+    async def era_all(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._toggle(interaction, 0)
+
+    @discord.ui.button(emoji="🟤", style=discord.ButtonStyle.secondary, custom_id="era_1")
+    async def era_pre14(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._toggle(interaction, 1)
+
+    @discord.ui.button(emoji="🟡", style=discord.ButtonStyle.secondary, custom_id="era_2")
+    async def era_wwi(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._toggle(interaction, 2)
+
+    @discord.ui.button(emoji="🔴", style=discord.ButtonStyle.secondary, custom_id="era_3")
+    async def era_wwii(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._toggle(interaction, 3)
+
+    @discord.ui.button(emoji="🔵", style=discord.ButtonStyle.secondary, custom_id="era_4")
+    async def era_korea(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._toggle(interaction, 4)
+
+    @discord.ui.button(emoji="🟢", style=discord.ButtonStyle.secondary, custom_id="era_5")
+    async def era_vietnam(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._toggle(interaction, 5)
+
+    @discord.ui.button(emoji="🟣", style=discord.ButtonStyle.secondary, custom_id="era_6")
+    async def era_coldwar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._toggle(interaction, 6)
+
+    @discord.ui.button(emoji="🟠", style=discord.ButtonStyle.secondary, custom_id="era_7")
+    async def era_gwot(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._toggle(interaction, 7)
+
+    @discord.ui.button(label="✅ Done", style=discord.ButtonStyle.success, custom_id="era_done")
+    async def era_done(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.selected:
+            await interaction.response.send_message("⚠️ Please select at least one era.", ephemeral=True)
+            return
+        await db_set_user_eras(str(interaction.user.id), list(self.selected))
+        # Move to question 3
+        await show_question3(interaction, edit=True)
+
+    async def _toggle(self, interaction: discord.Interaction, era: int):
+        try:
+            if era in self.selected:
+                self.selected.discard(era)
+            else:
+                self.selected.add(era)
+            selected_list = sorted(self.selected)
+            era_display = " ".join([ERA_EMOJIS[e] for e in selected_list]) if selected_list else "None selected"
+
+            embeds = []
+            if bot_state.get("question2_img_url"):
+                img_embed = discord.Embed(color=discord.Color.dark_gold())
+                img_embed.set_image(url=bot_state["question2_img_url"])
+                embeds.append(img_embed)
+
+            description = (
+                "⚪ All Eras\n"
+                "🟤 Pre-1914\n"
+                "🟡 WWI (1914–1918)\n"
+                "🔴 WWII (1939–1945)\n"
+                "🔵 Korean War (1950–1953)\n"
+                "🟢 Vietnam War (1955–1975)\n"
+                "🟣 Cold War (1947–1991)\n"
+                "🟠 GWOT / Modern (2001–present)\n\n"
+                f"**Selected:** {era_display}\n"
+                "**Click Done when finished.**"
+            )
+            text_embed = discord.Embed(description=description, color=discord.Color.dark_gold())
+            text_embed.set_footer(text="Adrian — The Relic Registry")
+            embeds.append(text_embed)
+
+            await interaction.response.edit_message(embeds=embeds, view=EraSelectView(list(self.selected)))
+        except Exception as e:
+            logger.error(f"[EraSelect] Toggle error: {e}\n{traceback.format_exc()}")
+            try:
+                await interaction.response.send_message("⚠️ Something went wrong. Please try again.", ephemeral=True)
+            except:
+                pass
+
 # ==================== REGION SELECT VIEW ====================
 
 class RegionSelectView(discord.ui.View):
@@ -1373,38 +1548,17 @@ class RegionSelectView(discord.ui.View):
     @discord.ui.button(emoji="🇺🇸", style=discord.ButtonStyle.secondary, custom_id="region_select_na")
     async def region_na(self, interaction: discord.Interaction, button: discord.ui.Button):
         await db_set_user_region(str(interaction.user.id), "NA")
-        embed = discord.Embed(
-            title="✅ Preferences Saved!",
-            description="You'll now receive notifications from **North American dealers only** 🇺🇸\n\nUse `/settings` anytime to change your preferences.",
-            color=discord.Color.green(),
-            timestamp=datetime.now(timezone.utc)
-        )
-        embed.set_footer(text="Adrian — The Relic Registry")
-        await interaction.response.edit_message(embed=embed, view=None)
+        await show_question2(interaction, edit=True)
 
     @discord.ui.button(emoji="🇪🇺", style=discord.ButtonStyle.secondary, custom_id="region_select_eu")
     async def region_eu(self, interaction: discord.Interaction, button: discord.ui.Button):
         await db_set_user_region(str(interaction.user.id), "EU")
-        embed = discord.Embed(
-            title="✅ Preferences Saved!",
-            description="You'll now receive notifications from **European dealers only** 🇪🇺\n\nUse `/settings` anytime to change your preferences.",
-            color=discord.Color.green(),
-            timestamp=datetime.now(timezone.utc)
-        )
-        embed.set_footer(text="Adrian — The Relic Registry")
-        await interaction.response.edit_message(embed=embed, view=None)
+        await show_question2(interaction, edit=True)
 
     @discord.ui.button(emoji="🌍", style=discord.ButtonStyle.secondary, custom_id="region_select_both")
     async def region_both(self, interaction: discord.Interaction, button: discord.ui.Button):
         await db_set_user_region(str(interaction.user.id), "both")
-        embed = discord.Embed(
-            title="✅ Preferences Saved!",
-            description="You'll now receive notifications from **all dealers worldwide** 🌍\n\nUse `/settings` anytime to change your preferences.",
-            color=discord.Color.green(),
-            timestamp=datetime.now(timezone.utc)
-        )
-        embed.set_footer(text="Adrian — The Relic Registry")
-        await interaction.response.edit_message(embed=embed, view=None)
+        await show_question2(interaction, edit=True)
 
 # ==================== SLASH COMMANDS ====================
 
@@ -2140,6 +2294,7 @@ async def on_ready():
     client.add_view(FollowDealerView("placeholder"))
     client.add_view(MilitariaAlertAdView())
     client.add_view(RegionSelectView())
+    client.add_view(EraSelectView())
     logger.info("Persistent views registered.")
 
     # Post welcome image to #Adrian on every startup
@@ -2157,21 +2312,22 @@ async def on_ready():
     except Exception as e:
         logger.error(f"[Startup] Failed to post welcome image: {e}")
 
-    # Upload question 1 image to private image host channel and store CDN URL
+    # Upload question images to private image host channel and store CDN URLs
     try:
         img_host_channel = client.get_channel(IMAGE_HOST_CHANNEL_ID)
         if img_host_channel:
-            q1_file = os.path.join(SCRIPT_DIR, "logos", "adrain_1st_question.png")
-            if os.path.exists(q1_file):
-                msg = await img_host_channel.send(file=discord.File(q1_file, filename="adrain_1st_question.png"))
-                bot_state["question1_img_url"] = msg.attachments[0].url
-                logger.info(f"[Startup] Question 1 image uploaded. URL: {bot_state['question1_img_url']}")
-            else:
-                logger.warning("[Startup] adrain_1st_question.png not found in logos folder.")
+            for q_file, key in [("adrain_1st_question.png", "question1_img_url"), ("adrain_2nd_question.png", "question2_img_url")]:
+                path = os.path.join(SCRIPT_DIR, "logos", q_file)
+                if os.path.exists(path):
+                    msg = await img_host_channel.send(file=discord.File(path, filename=q_file))
+                    bot_state[key] = msg.attachments[0].url
+                    logger.info(f"[Startup] {q_file} uploaded. URL: {bot_state[key]}")
+                else:
+                    logger.warning(f"[Startup] {q_file} not found in logos folder.")
         else:
             logger.warning("[Startup] Could not find image host channel.")
     except Exception as e:
-        logger.error(f"[Startup] Failed to upload question 1 image: {e}")
+        logger.error(f"[Startup] Failed to upload question images: {e}")
 
 async def send_griffin_combined():
     """Sends a combined Griffin Militaria alert after 5 minute buffer."""
