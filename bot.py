@@ -369,6 +369,7 @@ bot_state = {
     "question4_img_url": None,
     "question5_img_url": None,
     "thankyou_img_url": None,
+    "check_before_buy_img_url": None,
 }
 
 # ==================== DATA FUNCTIONS ====================
@@ -1420,6 +1421,81 @@ async def send_promo():
             print("Promo message sent!")
         except Exception as e:
             print(f"Failed to send promo: {e}")
+
+# ==================== SELLER PROFILE VIEW ====================
+
+class SellerProfileView(discord.ui.View):
+    def __init__(self, seller_id):
+        super().__init__(timeout=None)
+        self.seller_id = seller_id
+
+    @discord.ui.button(label="Check Seller Profile", emoji="🔍", style=discord.ButtonStyle.primary, custom_id="estate_check_seller")
+    async def check_seller(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            guild = interaction.guild
+            seller = guild.get_member(int(self.seller_id))
+            if not seller:
+                await interaction.response.send_message("⚠️ Could not find seller profile.", ephemeral=True)
+                return
+
+            # Get seller stats
+            buyer_rating, buyer_count = await db_get_buyer_rating(self.seller_id)
+
+            # Get highest rank role (we'll add rank roles later)
+            roles = [r for r in seller.roles if r.name != "@everyone"]
+            highest_role = roles[-1] if roles else None
+
+            # Server join date
+            joined = seller.joined_at
+            join_ts = int(joined.timestamp()) if joined else 0
+
+            # Account age
+            account_ts = int(seller.created_at.timestamp())
+
+            # Build embed
+            embed = discord.Embed(
+                title=f"🎖️ {seller.display_name}",
+                color=discord.Color.dark_gold(),
+                timestamp=datetime.now(timezone.utc)
+            )
+            embed.set_thumbnail(url=seller.display_avatar.url)
+            embed.add_field(
+                name="🏅 Server Rank",
+                value=highest_role.mention if highest_role else "No rank",
+                inline=True
+            )
+            embed.add_field(
+                name="📅 Member Since",
+                value=f"<t:{join_ts}:R>" if join_ts else "Unknown",
+                inline=True
+            )
+            embed.add_field(
+                name="🗓️ Account Created",
+                value=f"<t:{account_ts}:R>",
+                inline=True
+            )
+            if buyer_rating:
+                stars = "⭐" * int(buyer_rating) + ("✨" if buyer_rating % 1 >= 0.5 else "")
+                embed.add_field(
+                    name="🏅 Estate Rating",
+                    value=f"{stars} {buyer_rating}/5 · {buyer_count} transaction(s)",
+                    inline=False
+                )
+            else:
+                embed.add_field(
+                    name="🏅 Estate Rating",
+                    value="No transactions yet",
+                    inline=False
+                )
+            embed.set_footer(text="The Relic Registry — Estate")
+
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        except Exception as e:
+            logger.error(f"[Estate] SellerProfile error: {e}\n{traceback.format_exc()}")
+            try:
+                await interaction.response.send_message("⚠️ Something went wrong.", ephemeral=True)
+            except: pass
 
 # ==================== ESTATE BUYER ID VIEW ====================
 
@@ -2970,55 +3046,72 @@ async def profile_cmd(interaction: discord.Interaction):
     follows = await db_get_follows(user_id)
     watchlist = await db_get_watchlist(user_id)
 
+    # Check profile completeness
+    complete = all([region, eras, countries, forums])
+    status = "✅ Complete" if complete else "⚠️ Incomplete — type `/start` to finish setup"
+
     # Format region
     region_display = {
-        "NA": "🇺🇸 North America Only",
-        "EU": "🇪🇺 Europe Only",
+        "NA": "🇺🇸 North America",
+        "EU": "🇪🇺 Europe",
         "both": "🌍 All Dealers"
-    }.get(region, "⚠️ Not set — type `/start`")
+    }.get(region, "Not set")
 
-    # Format eras
+    # Format eras — emoji row only
     if eras:
         era_display = " ".join([ERA_EMOJIS.get(e, str(e)) for e in sorted(eras)])
-        era_names = ", ".join([ERA_NAMES.get(e, str(e)) for e in sorted(eras)])
     else:
-        era_display = "⚠️ Not set"
-        era_names = ""
+        era_display = "Not set"
 
-    # Format countries
+    # Format countries — flag row only
     if countries:
         country_display = " ".join([COUNTRY_FLAGS.get(c, c) for c in countries])
     else:
-        country_display = "⚠️ Not set"
+        country_display = "Not set"
 
     # Format forums
     forum_display = {
-        "waf": "🟥 WAF Only",
-        "usmf": "🟩 USMF Only",
-        "both": "✅ WAF & USMF",
-        "none": "❌ No Forums"
-    }.get(forums, "⚠️ Not set")
+        "waf": "🟥 WAF",
+        "usmf": "🟩 USMF",
+        "both": "🟥 WAF + 🟩 USMF",
+        "none": "❌ None"
+    }.get(forums, "Not set")
 
     # Format buyer rep
     if buyer_rating:
-        rep_display = f"{'⭐' * int(buyer_rating)} {buyer_rating}/5 ({buyer_count} transactions)"
+        stars = "⭐" * int(buyer_rating) + ("✨" if buyer_rating % 1 >= 0.5 else "")
+        rep_display = f"{stars} {buyer_rating}/5 · {buyer_count} sale(s)"
     else:
         rep_display = "No transactions yet"
 
+    # Build profile code
+    region_code = {"NA": "NA", "EU": "EU", "both": "ALL"}.get(region, "?")
+    era_code = "".join([str(e) for e in sorted(eras)]) if eras else "?"
+    country_code = "".join(sorted(countries)) if countries else "?"
+    forum_code = {"waf": "W", "usmf": "U", "both": "WU", "none": "N"}.get(forums, "?")
+    profile_code = f"`{region_code}-{era_code}-{country_code}-{forum_code}`"
+
     embed = discord.Embed(
-        title=f"🎖️ {interaction.user.display_name}'s Adrian Profile",
-        color=discord.Color.dark_gold(),
+        title=f"🎖️ {interaction.user.display_name}",
+        description=f"{status}\n\n**Profile Code:** {profile_code}",
+        color=discord.Color.green() if complete else discord.Color.orange(),
         timestamp=datetime.now(timezone.utc)
     )
     embed.set_thumbnail(url=interaction.user.display_avatar.url)
-    embed.add_field(name="📍 Region", value=region_display, inline=False)
-    embed.add_field(name="🕰️ Eras", value=f"{era_display}\n{era_names}" if era_names else era_display, inline=False)
-    embed.add_field(name="🌐 Countries", value=country_display, inline=False)
+
+    # Notification preferences section
+    embed.add_field(name="📍 Region", value=region_display, inline=True)
     embed.add_field(name="📬 Forums", value=forum_display, inline=True)
+    embed.add_field(name="​", value="​", inline=True)  # spacer
+    embed.add_field(name="🕰️ Eras", value=era_display, inline=False)
+    embed.add_field(name="🌐 Countries", value=country_display, inline=False)
+
+    # Activity section
     embed.add_field(name="🔔 Following", value=f"{len(follows)} dealer(s)", inline=True)
     embed.add_field(name="👁️ Watchlist", value=f"{len(watchlist)} item(s)", inline=True)
-    embed.add_field(name="🏅 Buyer Rep", value=rep_display, inline=False)
-    embed.set_footer(text="Use /settings to update your preferences • Adrian — The Relic Registry")
+    embed.add_field(name="🏅 Buyer Rep", value=rep_display, inline=True)
+
+    embed.set_footer(text="Use /settings to update • Adrian — The Relic Registry")
 
     await interaction.followup.send(embed=embed, ephemeral=True)
 
@@ -3086,6 +3179,31 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
         pass
 
 @client.event
+async def on_thread_create(thread):
+    """When a new listing is posted in the estate channel, bot posts a check before you buy message."""
+    try:
+        if thread.parent_id != ESTATE_CHANNEL_ID:
+            return
+
+        seller_id = thread.owner_id
+        logger.info(f"[Estate] New listing thread: {thread.name} by {seller_id}")
+
+        # Build seller profile button embed
+        embed = discord.Embed(
+            color=discord.Color.dark_gold()
+        )
+        if bot_state.get("check_before_buy_img_url"):
+            embed.set_image(url=bot_state["check_before_buy_img_url"])
+        embed.set_footer(text="The Relic Registry — Estate")
+
+        view = SellerProfileView(str(seller_id))
+        await thread.send(embed=embed, view=view)
+        logger.info(f"[Estate] Check before you buy message posted in {thread.name}")
+
+    except Exception as e:
+        logger.error(f"[Estate] on_thread_create error: {e}\n{traceback.format_exc()}")
+
+@client.event
 async def on_thread_update(before, after):
     """Detect when the Sold tag is applied to an estate listing."""
     try:
@@ -3144,6 +3262,7 @@ async def on_ready():
     client.add_view(ForumSelectView())
     client.add_view(FinalScreenView())
     client.add_view(BuyerIdentifyView("placeholder", "placeholder"))
+    client.add_view(SellerProfileView("placeholder"))
     client.add_view(EstateRatingView("placeholder", "placeholder", "placeholder"))
     logger.info("Persistent views registered.")
 
@@ -3166,7 +3285,7 @@ async def on_ready():
     try:
         img_host_channel = client.get_channel(IMAGE_HOST_CHANNEL_ID)
         if img_host_channel:
-            for q_file, key in [("adrain_1st_question.png", "question1_img_url"), ("adrain_2nd_question.png", "question2_img_url"), ("adrain_3rd_question.png", "question3_img_url"), ("adrain_4th_question.png", "question4_img_url"), ("adrain_5th_question.png", "question5_img_url"), ("thank_you_please_buy.png", "thankyou_img_url")]:
+            for q_file, key in [("adrain_1st_question.png", "question1_img_url"), ("adrain_2nd_question.png", "question2_img_url"), ("adrain_3rd_question.png", "question3_img_url"), ("adrain_4th_question.png", "question4_img_url"), ("adrain_5th_question.png", "question5_img_url"), ("thank_you_please_buy.png", "thankyou_img_url"), ("adrain_check_before_buy.png", "check_before_buy_img_url")]:
                 path = os.path.join(SCRIPT_DIR, "logos", q_file)
                 if os.path.exists(path):
                     msg = await img_host_channel.send(file=discord.File(path, filename=q_file))
