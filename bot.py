@@ -249,9 +249,8 @@ class MilitariaBot(discord.Client):
                     eras TEXT DEFAULT '',
                     updated_at BIGINT NOT NULL
                 )
-            
             ''')
-        await conn.execute("ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS eras TEXT DEFAULT ''")
+            await conn.execute("ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS eras TEXT DEFAULT ''")
         logger.info("Database initialized successfully!")
 
 client = MilitariaBot()
