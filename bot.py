@@ -29,7 +29,9 @@ from datetime import datetime, timezone, timedelta
 # ==================== CONFIGURATION ====================
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 BOT_OWNER_ID = 161988117862023169  # Murphy's Discord user ID
-GUILD_ID = 1357352905857826887
+GUILD_ID = 1357352905857826887  # Main server
+TEST_GUILD_ID = 1513233559878369422  # Test server
+OWNER_GUILD_ID = 1357352905857826887  # Owner commands go here (main server)
 IMAGE_HOST_CHANNEL_ID = 1512953027793915955  # Private channel for image hosting
 CHANNEL_ID = 1512923925116358806  # #Adrian — unified notifications channel
 WAF_CHANNEL_ID = 1512923925116358806  # #Adrian — unified notifications channel
@@ -166,13 +168,17 @@ class MilitariaBot(discord.Client):
             self.db = await asyncpg.create_pool(DATABASE_URL)
             logger.info("Database connection pool created successfully")
             await self.init_db()
-            # Sync to home guild instantly
+            # Sync to main guild instantly
             guild = discord.Object(id=GUILD_ID)
             self.tree.copy_global_to(guild=guild)
             await self.tree.sync(guild=guild)
+            # Sync to test guild instantly
+            test_guild = discord.Object(id=TEST_GUILD_ID)
+            self.tree.copy_global_to(guild=test_guild)
+            await self.tree.sync(guild=test_guild)
             # Sync globally for public bot use
             await self.tree.sync()
-            logger.info("Slash commands synced globally and to guild!")
+            logger.info("Slash commands synced globally and to both guilds!")
         except Exception as e:
             logger.error(f"Setup failed: {e}")
             logger.error(traceback.format_exc())
