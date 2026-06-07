@@ -37,6 +37,8 @@ DEALER_SUGGEST_CHANNEL_ID = 1511487755266556034  # #dealer-reviews channel
 REVIEW_LOG_CHANNEL_ID = 1511487836220817561  # #review-log channel
 BOT_FEEDBACK_CHANNEL_ID = 1513020767393288403  # #bot-feedback channel
 GUERRILLA_WARFARE_ROLE_ID = 1513027040927027350  # Guerrilla Warfare shame role
+ESTATE_CHANNEL_ID = 1479610589931245608  # Estate forum channel
+ESTATE_SOLD_TAG_ID = 1479612959541170247  # Sold tag ID
 TRUSTED_REVIEWER_ROLE_ID = 1511487130189168802  # @Trusted Reviewer role
 TRUSTED_REVIEWER_THRESHOLD = 25  # Number of reviews to get Trusted Reviewer role
 CHECK_INTERVAL = 600
@@ -255,6 +257,31 @@ class MilitariaBot(discord.Client):
             await conn.execute("ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS eras TEXT DEFAULT ''")
             await conn.execute("ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS countries TEXT DEFAULT ''")
             await conn.execute("ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS forums TEXT DEFAULT ''")
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS estate_transactions (
+                    id SERIAL PRIMARY KEY,
+                    thread_id TEXT NOT NULL,
+                    thread_name TEXT NOT NULL,
+                    seller_id TEXT NOT NULL,
+                    buyer_id TEXT,
+                    rating INTEGER,
+                    review TEXT,
+                    status TEXT DEFAULT 'pending',
+                    created_at BIGINT NOT NULL,
+                    completed_at BIGINT
+                )
+            ''')
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS estate_ratings (
+                    id SERIAL PRIMARY KEY,
+                    buyer_id TEXT NOT NULL,
+                    seller_id TEXT NOT NULL,
+                    thread_id TEXT NOT NULL,
+                    rating INTEGER NOT NULL,
+                    review TEXT,
+                    timestamp BIGINT NOT NULL
+                )
+            ''')
         logger.info("Database initialized successfully!")
 
 client = MilitariaBot()
@@ -328,6 +355,7 @@ bot_state = {
     "question3_img_url": None,
     "question4_img_url": None,
     "question5_img_url": None,
+    "thankyou_img_url": None,
 }
 
 # ==================== DATA FUNCTIONS ====================
@@ -529,6 +557,49 @@ async def db_get_all_stats():
         return {r["dealer_name"]: r["alert_count"] for r in rows}
 
 
+
+# ==================== ESTATE DB FUNCTIONS ====================
+
+async def db_create_transaction(thread_id, thread_name, seller_id):
+    async with client.db.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO estate_transactions (thread_id, thread_name, seller_id, status, created_at) VALUES ($1,$2,$3,'pending',$4) ON CONFLICT DO NOTHING",
+            str(thread_id), thread_name, str(seller_id), int(datetime.now(timezone.utc).timestamp())
+        )
+
+async def db_set_transaction_buyer(thread_id, buyer_id):
+    async with client.db.acquire() as conn:
+        await conn.execute(
+            "UPDATE estate_transactions SET buyer_id=$1, status='awaiting_rating' WHERE thread_id=$2",
+            str(buyer_id), str(thread_id)
+        )
+
+async def db_get_transaction(thread_id):
+    async with client.db.acquire() as conn:
+        row = await conn.fetchrow("SELECT * FROM estate_transactions WHERE thread_id=$1", str(thread_id))
+        return dict(row) if row else None
+
+async def db_complete_transaction(thread_id, rating, review=""):
+    async with client.db.acquire() as conn:
+        await conn.execute(
+            "UPDATE estate_transactions SET rating=$1, review=$2, status='completed', completed_at=$3 WHERE thread_id=$4",
+            rating, review, int(datetime.now(timezone.utc).timestamp()), str(thread_id)
+        )
+
+async def db_add_estate_rating(buyer_id, seller_id, thread_id, rating, review=""):
+    async with client.db.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO estate_ratings (buyer_id, seller_id, thread_id, rating, review, timestamp) VALUES ($1,$2,$3,$4,$5,$6)",
+            str(buyer_id), str(seller_id), str(thread_id), rating, review, int(datetime.now(timezone.utc).timestamp())
+        )
+
+async def db_get_buyer_rating(buyer_id):
+    async with client.db.acquire() as conn:
+        rows = await conn.fetch("SELECT rating FROM estate_ratings WHERE buyer_id=$1", str(buyer_id))
+        if not rows:
+            return None, 0
+        ratings = [r["rating"] for r in rows]
+        return round(sum(ratings) / len(ratings), 1), len(ratings)
 
 # ==================== USER PREFERENCES DB ====================
 async def db_get_user_region(user_id):
@@ -1199,6 +1270,88 @@ async def send_promo():
         except Exception as e:
             print(f"Failed to send promo: {e}")
 
+# ==================== ESTATE BUYER ID VIEW ====================
+
+class BuyerIdentifyView(discord.ui.View):
+    def __init__(self, thread_id, seller_id):
+        super().__init__(timeout=None)
+        self.thread_id = thread_id
+        self.seller_id = seller_id
+
+    @discord.ui.button(label="I'm the Buyer", emoji="🙋", style=discord.ButtonStyle.primary, custom_id="estate_buyer_claim")
+    async def claim_buyer(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            user_id = str(interaction.user.id)
+            # Block seller from claiming they are the buyer
+            if user_id == str(self.seller_id):
+                await interaction.response.send_message("🚫 You cannot identify yourself as the buyer of your own listing.", ephemeral=True)
+                return
+            # Save buyer to transaction
+            await db_set_transaction_buyer(self.thread_id, user_id)
+            await interaction.response.send_message(f"✅ Got it! The seller will now be prompted to rate you.", ephemeral=True)
+            # Disable the button on the message
+            for item in self.children:
+                item.disabled = True
+            await interaction.message.edit(view=self)
+            # Now prompt the seller to rate the buyer
+            try:
+                seller = await client.fetch_user(int(self.seller_id))
+                if seller:
+                    rating_embed = discord.Embed(
+                        title="⭐ Rate Your Buyer",
+                        description=f"How was your experience selling to **{interaction.user.display_name}**?\n\nClick a star rating below:",
+                        color=discord.Color.dark_gold(),
+                        timestamp=datetime.now(timezone.utc)
+                    )
+                    rating_embed.set_footer(text="The Relic Registry — Estate")
+                    await seller.send(embed=rating_embed, view=EstateRatingView(self.thread_id, str(interaction.user.id), self.seller_id))
+            except Exception as e:
+                logger.error(f"[Estate] Could not DM seller: {e}")
+        except Exception as e:
+            logger.error(f"[Estate] BuyerIdentify error: {e}\n{traceback.format_exc()}")
+            try:
+                await interaction.response.send_message("⚠️ Something went wrong. Please try again.", ephemeral=True)
+            except: pass
+
+class EstateRatingView(discord.ui.View):
+    def __init__(self, thread_id, buyer_id, seller_id):
+        super().__init__(timeout=None)
+        self.thread_id = thread_id
+        self.buyer_id = buyer_id
+        self.seller_id = seller_id
+
+    async def _rate(self, interaction, stars):
+        try:
+            await db_add_estate_rating(self.buyer_id, self.seller_id, self.thread_id, stars)
+            await db_complete_transaction(self.thread_id, stars)
+            for item in self.children:
+                item.disabled = True
+            await interaction.response.edit_message(
+                embed=discord.Embed(
+                    title="✅ Rating Submitted!",
+                    description=f"You rated this buyer **{'⭐' * stars}**. Thank you!",
+                    color=discord.Color.green()
+                ),
+                view=self
+            )
+            logger.info(f"[Estate] Rating {stars}★ submitted for buyer {self.buyer_id}")
+        except Exception as e:
+            logger.error(f"[Estate] Rating error: {e}")
+            try:
+                await interaction.response.send_message("⚠️ Something went wrong.", ephemeral=True)
+            except: pass
+
+    @discord.ui.button(emoji="⭐", label="1", style=discord.ButtonStyle.secondary, custom_id="estate_rate_1")
+    async def rate_1(self, i, b): await self._rate(i, 1)
+    @discord.ui.button(emoji="⭐", label="2", style=discord.ButtonStyle.secondary, custom_id="estate_rate_2")
+    async def rate_2(self, i, b): await self._rate(i, 2)
+    @discord.ui.button(emoji="⭐", label="3", style=discord.ButtonStyle.secondary, custom_id="estate_rate_3")
+    async def rate_3(self, i, b): await self._rate(i, 3)
+    @discord.ui.button(emoji="⭐", label="4", style=discord.ButtonStyle.secondary, custom_id="estate_rate_4")
+    async def rate_4(self, i, b): await self._rate(i, 4)
+    @discord.ui.button(emoji="⭐", label="5", style=discord.ButtonStyle.secondary, custom_id="estate_rate_5")
+    async def rate_5(self, i, b): await self._rate(i, 5)
+
 # ==================== MILITARIA ALERT AD BUTTON ====================
 
 class MilitariaAlertAdView(discord.ui.View):
@@ -1592,10 +1745,15 @@ class ForumSelectView(discord.ui.View):
 async def show_all_done(interaction: discord.Interaction, edit=True):
     """Show final screen after all questions answered."""
     embeds = []
+    # Show adrain_5th image first, then the thank you image
     if bot_state.get("question5_img_url"):
         img_embed = discord.Embed(color=discord.Color.dark_gold())
         img_embed.set_image(url=bot_state["question5_img_url"])
         embeds.append(img_embed)
+    if bot_state.get("thankyou_img_url"):
+        ty_embed = discord.Embed(color=discord.Color.dark_gold())
+        ty_embed.set_image(url=bot_state["thankyou_img_url"])
+        embeds.append(ty_embed)
 
     if edit:
         await interaction.response.edit_message(embeds=embeds, view=FinalScreenView())
@@ -2577,6 +2735,91 @@ async def mywatchlist_cmd(interaction: discord.Interaction):
     embed.set_footer(text="Watchlist entries expire after 90 days — The Relic Registry")
     await interaction.followup.send(embed=embed, ephemeral=True)
 
+@client.tree.command(name="profile", description="View your Adrian notification profile")
+async def profile_cmd(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    user_id = str(interaction.user.id)
+
+    # Fetch all preferences
+    region = await db_get_user_region(user_id)
+    eras = await db_get_user_eras(user_id)
+    countries = await db_get_user_countries(user_id)
+    forums = await db_get_user_forums(user_id)
+    buyer_rating, buyer_count = await db_get_buyer_rating(user_id)
+    follows = await db_get_follows(user_id)
+    watchlist = await db_get_watchlist(user_id)
+
+    # Format region
+    region_display = {
+        "NA": "🇺🇸 North America Only",
+        "EU": "🇪🇺 Europe Only",
+        "both": "🌍 All Dealers"
+    }.get(region, "⚠️ Not set — type `/start`")
+
+    # Format eras
+    if eras:
+        era_display = " ".join([ERA_EMOJIS.get(e, str(e)) for e in sorted(eras)])
+        era_names = ", ".join([ERA_NAMES.get(e, str(e)) for e in sorted(eras)])
+    else:
+        era_display = "⚠️ Not set"
+        era_names = ""
+
+    # Format countries
+    if countries:
+        country_display = " ".join([COUNTRY_FLAGS.get(c, c) for c in countries])
+    else:
+        country_display = "⚠️ Not set"
+
+    # Format forums
+    forum_display = {
+        "waf": "🟥 WAF Only",
+        "usmf": "🟩 USMF Only",
+        "both": "✅ WAF & USMF",
+        "none": "❌ No Forums"
+    }.get(forums, "⚠️ Not set")
+
+    # Format buyer rep
+    if buyer_rating:
+        rep_display = f"{'⭐' * int(buyer_rating)} {buyer_rating}/5 ({buyer_count} transactions)"
+    else:
+        rep_display = "No transactions yet"
+
+    embed = discord.Embed(
+        title=f"🎖️ {interaction.user.display_name}'s Adrian Profile",
+        color=discord.Color.dark_gold(),
+        timestamp=datetime.now(timezone.utc)
+    )
+    embed.set_thumbnail(url=interaction.user.display_avatar.url)
+    embed.add_field(name="📍 Region", value=region_display, inline=False)
+    embed.add_field(name="🕰️ Eras", value=f"{era_display}\n{era_names}" if era_names else era_display, inline=False)
+    embed.add_field(name="🌐 Countries", value=country_display, inline=False)
+    embed.add_field(name="📬 Forums", value=forum_display, inline=True)
+    embed.add_field(name="🔔 Following", value=f"{len(follows)} dealer(s)", inline=True)
+    embed.add_field(name="👁️ Watchlist", value=f"{len(watchlist)} item(s)", inline=True)
+    embed.add_field(name="🏅 Buyer Rep", value=rep_display, inline=False)
+    embed.set_footer(text="Use /settings to update your preferences • Adrian — The Relic Registry")
+
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+@client.tree.command(name="reputation", description="Check a member's buyer reputation in the estate")
+@app_commands.describe(member="The member to look up")
+async def reputation_cmd(interaction: discord.Interaction, member: discord.Member):
+    rating, count = await db_get_buyer_rating(str(member.id))
+    embed = discord.Embed(
+        title=f"🏅 Buyer Reputation — {member.display_name}",
+        color=discord.Color.dark_gold(),
+        timestamp=datetime.now(timezone.utc)
+    )
+    embed.set_thumbnail(url=member.display_avatar.url)
+    if rating is None:
+        embed.description = "No ratings yet — this member has not completed any estate purchases."
+    else:
+        stars = "⭐" * int(rating) + ("✨" if rating % 1 >= 0.5 else "")
+        embed.add_field(name="Rating", value=f"{stars} {rating}/5", inline=True)
+        embed.add_field(name="Transactions", value=f"📦 {count}", inline=True)
+    embed.set_footer(text="The Relic Registry — Estate")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
 @client.tree.command(name="nextemail", description="🔒 Shows countdown to next email check")
 async def nextemail_cmd(interaction: discord.Interaction):
     if not is_mod(interaction.user):
@@ -2622,6 +2865,46 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
         pass
 
 @client.event
+async def on_thread_update(before, after):
+    """Detect when the Sold tag is applied to an estate listing."""
+    try:
+        # Only watch the estate channel
+        if after.parent_id != ESTATE_CHANNEL_ID:
+            return
+
+        before_tag_ids = {t.id for t in before.applied_tags} if before.applied_tags else set()
+        after_tag_ids = {t.id for t in after.applied_tags} if after.applied_tags else set()
+
+        # Check if Sold tag was just added
+        if ESTATE_SOLD_TAG_ID in after_tag_ids and ESTATE_SOLD_TAG_ID not in before_tag_ids:
+            logger.info(f"[Estate] Sold tag detected on thread: {after.name} ({after.id})")
+
+            # Get the thread owner (seller) from the starter message
+            try:
+                starter = await after.fetch_message(after.id)
+                seller_id = starter.author.id
+            except:
+                # Fallback — use thread owner
+                seller_id = after.owner_id
+
+            # Create transaction record
+            await db_create_transaction(str(after.id), after.name, str(seller_id))
+
+            # Post buyer identification message in the thread
+            embed = discord.Embed(
+                title="🏷️ Item Marked as Sold!",
+                description="Congratulations on your sale! 🎉\n\nIf you are the **buyer** of this item, please click the button below to identify yourself. The seller will then be asked to rate you as a buyer.",
+                color=discord.Color.dark_gold(),
+                timestamp=datetime.now(timezone.utc)
+            )
+            embed.set_footer(text="The Relic Registry — Estate")
+            await after.send(embed=embed, view=BuyerIdentifyView(str(after.id), str(seller_id)))
+            logger.info(f"[Estate] Buyer identification message sent in thread {after.name}")
+
+    except Exception as e:
+        logger.error(f"[Estate] on_thread_update error: {e}\n{traceback.format_exc()}")
+
+@client.event
 async def on_ready():
     logger.info(f"Logged in as {client.user}")
     logger.info(f"SCRIPT_DIR: {SCRIPT_DIR}")
@@ -2639,6 +2922,8 @@ async def on_ready():
     client.add_view(CountrySelectView())
     client.add_view(ForumSelectView())
     client.add_view(FinalScreenView())
+    client.add_view(BuyerIdentifyView("placeholder", "placeholder"))
+    client.add_view(EstateRatingView("placeholder", "placeholder", "placeholder"))
     logger.info("Persistent views registered.")
 
     # Post welcome image to #Adrian on every startup
@@ -2660,7 +2945,7 @@ async def on_ready():
     try:
         img_host_channel = client.get_channel(IMAGE_HOST_CHANNEL_ID)
         if img_host_channel:
-            for q_file, key in [("adrain_1st_question.png", "question1_img_url"), ("adrain_2nd_question.png", "question2_img_url"), ("adrain_3rd_question.png", "question3_img_url"), ("adrain_4th_question.png", "question4_img_url"), ("adrain_5th_question.png", "question5_img_url")]:
+            for q_file, key in [("adrain_1st_question.png", "question1_img_url"), ("adrain_2nd_question.png", "question2_img_url"), ("adrain_3rd_question.png", "question3_img_url"), ("adrain_4th_question.png", "question4_img_url"), ("adrain_5th_question.png", "question5_img_url"), ("thank_you_please_buy.png", "thankyou_img_url")]:
                 path = os.path.join(SCRIPT_DIR, "logos", q_file)
                 if os.path.exists(path):
                     msg = await img_host_channel.send(file=discord.File(path, filename=q_file))
