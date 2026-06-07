@@ -2597,18 +2597,21 @@ async def setup_cmd(interaction: discord.Interaction):
         img_embed.set_image(url=bot_state["setup_img_url"])
         embeds.append(img_embed)
     text_embed = discord.Embed(
-        title="👋 Welcome to Adrian!",
+        title="Hey! I'm Adrian — Discord's #1 Militaria Bot",
         description=(
-            f"Hey **{interaction.user.display_name}**! I'm Adrian — Discord's #1 Militaria Bot.\n\n"
-            f"Let's get me set up on **{interaction.guild.name}** in just 3 quick steps.\n\n"
-            "**Step 1 of 3 — Command Channel**\n"
-            "Which channel should members use to interact with me?\n"
-            "This is where the welcome image posts and where members type `/start`.\n\n"
-            "📌 Mention the channel below — e.g. `#adrian`"
+            f"Thanks for adding me to **{interaction.guild.name}**!\n\n"
+            "Here's what I'll do automatically during setup:\n"
+            "📌 **Assign channels** for commands and dealer alerts\n"
+            "🔒 **Set permissions** — only verified members see the alerts channel\n"
+            "🎖️ **Create Adrian Verified role** — given to members after `/start`\n"
+            "🖼️ **Post the welcome image** in your commands channel\n\n"
+            "You won't need to touch any settings — I handle everything.\n\n"
+            "**Step 1 of 3 — Commands Channel**\n"
+            "Pick the channel where members type `/start` and use bot commands.\n"
+            "💡 We suggest naming it `#adrian` but any channel works."
         ),
         color=discord.Color.dark_gold()
     )
-
     # Build channel dropdowns from guild channels
     text_channels = [c for c in interaction.guild.channels if isinstance(c, discord.TextChannel)]
     commands_options = [
