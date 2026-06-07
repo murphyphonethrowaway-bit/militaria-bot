@@ -37,6 +37,8 @@ DEALER_SUGGEST_CHANNEL_ID = 1511487755266556034  # #dealer-reviews channel
 REVIEW_LOG_CHANNEL_ID = 1511487836220817561  # #review-log channel
 BOT_FEEDBACK_CHANNEL_ID = 1513020767393288403  # #bot-feedback channel
 GUERRILLA_WARFARE_ROLE_ID = 1513027040927027350  # Guerrilla Warfare shame role
+ADRIAN_VERIFIED_ROLE_ID = 1513203231856001084  # Adrian Verified role — grants access to #Adrian
+ADRIAN_UPDATES_CHANNEL_ID = 1513210219126063325  # #adrian-updates announcement channel
 ESTATE_CHANNEL_ID = 1479610589931245608  # Estate forum channel
 ESTATE_SOLD_TAG_ID = 1479612959541170247  # Sold tag ID
 TRUSTED_REVIEWER_ROLE_ID = 1511487130189168802  # @Trusted Reviewer role
@@ -863,14 +865,15 @@ async def send_alert(channel, name, url, logo_file, test=False, waf=False):
             dealer_countries = dealer_info.get("countries", ["Z"]) if dealer_info else ["Z"]
             matched_users = await db_get_users_for_dealer(dealer_region, dealer_eras, dealer_countries)
             logger.info(f"[Alert] Pinging {len(matched_users)} matched user(s) for {name}")
+            updates_channel = client.get_channel(ADRIAN_UPDATES_CHANNEL_ID) or channel
             for uid in matched_users:
                 try:
                     # Save to pending alerts DB
                     await db_add_pending_alert(uid, name, url, flag)
-                    # Ping in #Adrian — auto-deletes after 8 seconds
-                    member = channel.guild.get_member(int(uid))
+                    # Ping in #adrian-updates — auto-deletes after 8 seconds
+                    member = updates_channel.guild.get_member(int(uid))
                     if member:
-                        ping_msg = await channel.send(
+                        await updates_channel.send(
                             content=f"{member.mention} 🆕 **{name}** has new items! Type `/alerts` to see your updates.",
                             delete_after=8
                         )
@@ -1173,13 +1176,14 @@ async def send_usmf_alert(channel, parsed):
         logger.info(f"[USMF] Alert sent for: {parsed['item_title']}")
         # Ping users who opted in to USMF
         try:
+            usmf_updates_channel = client.get_channel(ADRIAN_UPDATES_CHANNEL_ID) or channel
             usmf_users = await db_get_users_for_forum("usmf")
             for uid in usmf_users:
                 try:
                     await db_add_pending_alert(uid, f"USMF: {parsed['item_title']}", parsed.get('forum_url', ''), "🇺🇸")
-                    member = channel.guild.get_member(int(uid))
+                    member = usmf_updates_channel.guild.get_member(int(uid))
                     if member:
-                        await channel.send(
+                        await usmf_updates_channel.send(
                             content=f"{member.mention} 🇺🇸 New USMF listing! Type `/alerts` to see it.",
                             delete_after=8
                         )
@@ -1240,13 +1244,14 @@ async def send_waf_alert(channel, parsed, guild):
         logger.info(f"[WAF] Alert sent for: {parsed['item_title']} | Price: {price_str} | Role: {role.name if role else 'Unknown'}")
         # Ping users who opted in to WAF
         try:
+            waf_updates_channel = client.get_channel(ADRIAN_UPDATES_CHANNEL_ID) or channel
             waf_users = await db_get_users_for_forum("waf")
             for uid in waf_users:
                 try:
                     await db_add_pending_alert(uid, f"WAF: {parsed['item_title']}", parsed.get('forum_url', ''), "🎖️")
-                    member = channel.guild.get_member(int(uid))
+                    member = waf_updates_channel.guild.get_member(int(uid))
                     if member:
-                        await channel.send(
+                        await waf_updates_channel.send(
                             content=f"{member.mention} 🎖️ New WAF listing! Type `/alerts` to see it.",
                             delete_after=8
                         )
@@ -1848,6 +1853,16 @@ class ForumSelectView(discord.ui.View):
 
 async def show_all_done(interaction: discord.Interaction, edit=True):
     """Show final screen after all questions answered."""
+    # Assign Adrian Verified role
+    try:
+        if interaction.guild:
+            verified_role = interaction.guild.get_role(ADRIAN_VERIFIED_ROLE_ID)
+            if verified_role and verified_role not in interaction.user.roles:
+                await interaction.user.add_roles(verified_role, reason="Completed /start onboarding")
+                logger.info(f"[Adrian] Verified role assigned to {interaction.user}")
+    except Exception as e:
+        logger.error(f"[Adrian] Could not assign verified role: {e}")
+
     embeds = []
     # Show adrain_5th image first, then the thank you image
     if bot_state.get("question5_img_url"):
@@ -2553,6 +2568,29 @@ async def leaderboard_cmd(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # ==================== MOD COMMANDS ====================
+
+@client.tree.command(name="testalert", description="🔒 Test the alert ping and /alerts system for yourself")
+async def testalert_cmd(interaction: discord.Interaction):
+    if not is_mod(interaction.user):
+        await interaction.response.send_message("🚫 You need Moderator permissions.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    channel = client.get_channel(CHANNEL_ID)
+    user_id = str(interaction.user.id)
+
+    # Save a test alert to pending
+    await db_add_pending_alert(user_id, "TEST — Weitze Militaria", "https://www.weitze.com/neuheiten.html", "🇩🇪")
+
+    # Ping in #adrian-updates
+    updates_channel = client.get_channel(ADRIAN_UPDATES_CHANNEL_ID) or channel
+    if updates_channel:
+        member = updates_channel.guild.get_member(interaction.user.id)
+        if member:
+            await updates_channel.send(
+                content=f"{member.mention} 🆕 **TEST** — Weitze Militaria has new items! Type `/alerts` to see your updates.",
+                delete_after=8
+            )
+    await interaction.followup.send("✅ Test alert sent! Check #Adrian for the ping, then type `/alerts` to verify.", ephemeral=True)
 
 @client.tree.command(name="rescan", description="🔒 Force an immediate check of all dealers")
 async def rescan_cmd(interaction: discord.Interaction):
