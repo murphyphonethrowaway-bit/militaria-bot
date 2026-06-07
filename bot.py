@@ -2468,7 +2468,7 @@ class SetupEstateView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="✅ Yes — Enable Estate", style=discord.ButtonStyle.success, custom_id="setup_estate_yes")
+    @discord.ui.button(label="✅ Yes — Add the Marketplace", style=discord.ButtonStyle.success, custom_id="setup_estate_yes")
     async def yes(self, interaction: discord.Interaction, button: discord.ui.Button):
         embed = discord.Embed(
             title="⚙️ Setup — Step 3b of 3",
@@ -2478,16 +2478,11 @@ class SetupEstateView(discord.ui.View):
         embed.set_footer(text="Adrian Setup — The Relic Registry")
         await interaction.response.edit_message(embed=embed, view=SetupCrossPostView())
 
-    @discord.ui.button(label="❌ No Estate", style=discord.ButtonStyle.danger, custom_id="setup_estate_no")
+    @discord.ui.button(label="❌ No Thanks", style=discord.ButtonStyle.secondary, custom_id="setup_estate_no")
     async def no(self, interaction: discord.Interaction, button: discord.ui.Button):
         await db_save_server_config(str(interaction.guild_id), setup_complete=1)
-        embed = discord.Embed(
-            title="✅ Setup Complete!",
-            description="Adrian is ready to go! Here\'s what to do next:\n\n1. Make sure **#adrian** is visible to everyone\n2. Make sure **#adrian-updates** is only visible to `Adrian Verified` role\n3. Tell your members to type `/start` to set up their profile\n\nAdrian will now post the welcome image and start monitoring dealers!",
-            color=discord.Color.green()
-        )
-        embed.set_footer(text="Adrian — The Relic Registry")
-        await interaction.response.edit_message(embed=embed, view=None)
+        await complete_setup(interaction)
+
 
 class SetupCrossPostView(discord.ui.View):
     def __init__(self):
@@ -2495,18 +2490,88 @@ class SetupCrossPostView(discord.ui.View):
 
     async def _save(self, interaction, accept):
         await db_save_server_config(str(interaction.guild_id), accept_cross_posts=accept, setup_complete=1)
-        embed = discord.Embed(
-            title="✅ Setup Complete!",
-            description="Adrian is ready to go! Here\'s what to do next:\n\n1. Make sure **#adrian** is visible to everyone\n2. Make sure **#adrian-updates** is only visible to `Adrian Verified` role\n3. Tell your members to type `/start` to set up their profile\n\nAdrian will now post the welcome image and start monitoring dealers!",
-            color=discord.Color.green()
-        )
-        embed.set_footer(text="Adrian — The Relic Registry")
-        await interaction.response.edit_message(embed=embed, view=None)
+        await complete_setup(interaction)
+
 
     @discord.ui.button(label="✅ Yes — Accept Cross-Posts", style=discord.ButtonStyle.success, custom_id="setup_crosspost_yes")
     async def yes(self, i, b): await self._save(i, 1)
     @discord.ui.button(label="❌ No — Local Only", style=discord.ButtonStyle.danger, custom_id="setup_crosspost_no")
     async def no(self, i, b): await self._save(i, 0)
+
+async def complete_setup(interaction, accept_cross_posts=None):
+    """Handle setup completion — set permissions and post welcome image."""
+    guild = interaction.guild
+    config = await db_get_server_config(str(guild.id))
+    if not config:
+        return
+
+    results = []
+
+    # Get channels and roles
+    commands_channel_id = config.get("channel_id")
+    updates_channel_id = config.get("updates_channel_id")
+    commands_channel = guild.get_channel(int(commands_channel_id)) if commands_channel_id else None
+    updates_channel = guild.get_channel(int(updates_channel_id)) if updates_channel_id else None
+
+    # Find or create Adrian Verified role
+    verified_role = None
+    for role in guild.roles:
+        if role.name == "Adrian Verified":
+            verified_role = role
+            break
+    if not verified_role:
+        try:
+            verified_role = await guild.create_role(
+                name="Adrian Verified",
+                color=discord.Color.blue(),
+                reason="Created by Adrian setup"
+            )
+            results.append("✅ Created **Adrian Verified** role")
+            await db_save_server_config(str(guild.id), verified_role_id=str(verified_role.id))
+        except Exception as e:
+            results.append(f"⚠️ Could not create Adrian Verified role: {e}")
+
+    # Set permissions on commands channel — everyone can see and use
+    if commands_channel and verified_role:
+        try:
+            await commands_channel.set_permissions(guild.default_role, view_channel=True, send_messages=False)
+            await commands_channel.set_permissions(guild.me, view_channel=True, send_messages=True)
+            results.append(f"✅ Set permissions on {commands_channel.mention}")
+        except Exception as e:
+            results.append(f"⚠️ Could not set permissions on commands channel: {e}")
+
+    # Set permissions on updates channel — only Adrian Verified can see
+    if updates_channel and verified_role:
+        try:
+            await updates_channel.set_permissions(guild.default_role, view_channel=False)
+            await updates_channel.set_permissions(verified_role, view_channel=True, send_messages=False)
+            await updates_channel.set_permissions(guild.me, view_channel=True, send_messages=True)
+            results.append(f"✅ Set permissions on {updates_channel.mention} — only **Adrian Verified** members can see it")
+        except Exception as e:
+            results.append(f"⚠️ Could not set permissions on updates channel: {e}")
+
+    # Post welcome image to commands channel
+    if commands_channel:
+        try:
+            welcome_file = os.path.join(SCRIPT_DIR, "logos", "adrian", "Adrian_welcome.png")
+            if os.path.exists(welcome_file):
+                await commands_channel.send(file=discord.File(welcome_file, filename="Adrian_welcome.png"))
+                results.append(f"✅ Posted welcome image to {commands_channel.mention}")
+        except Exception as e:
+            results.append(f"⚠️ Could not post welcome image: {e}")
+
+    results_text = "\n".join(results)
+    embed = discord.Embed(
+        title="🎖️ Adrian is Ready!",
+        description=(
+            f"Setup complete! Here\'s what I did automatically:\n\n"
+            f"{results_text}\n\n"
+            f"**Your members can now type `/start` in {commands_channel.mention if commands_channel else '#adrian'} to create their profile and start receiving alerts!**"
+        ),
+        color=discord.Color.green()
+    )
+    embed.set_footer(text="Adrian — Discord\'s #1 Militaria Bot")
+    await interaction.response.edit_message(embed=embed, view=None)
 
 # ==================== SETUP COMMAND ====================
 
@@ -2531,12 +2596,18 @@ async def setup_cmd(interaction: discord.Interaction):
         img_embed.set_image(url=bot_state["setup_img_url"])
         embeds.append(img_embed)
     text_embed = discord.Embed(
-        title="⚙️ Welcome to Adrian Setup — Step 1 of 3",
-        description=f"Hey **{interaction.user.display_name}**! Let\'s get Adrian set up on **{interaction.guild.name}**.\n\nFirst — what channel should Adrian use for **slash commands and the welcome message**?\n\nPlease mention the channel: e.g. `#adrian`",
+        title="👋 Welcome to Adrian!",
+        description=(
+            f"Hey **{interaction.user.display_name}**! I'm Adrian — Discord's #1 Militaria Bot.\n\n"
+            f"Let's get me set up on **{interaction.guild.name}** in just 3 quick steps.\n\n"
+            "**Step 1 of 3 — Command Channel**\n"
+            "Which channel should members use to interact with me?\n"
+            "This is where the welcome image posts and where members type `/start`.\n\n"
+            "📌 Mention the channel below — e.g. `#adrian`"
+        ),
         color=discord.Color.dark_gold()
     )
-    text_embed.set_footer(text="Adrian Setup — Type the channel mention to continue")
-    embeds.append(text_embed)
+
     await interaction.response.send_message(embeds=embeds, ephemeral=True)
 
     # Wait for channel mention
@@ -2551,12 +2622,16 @@ async def setup_cmd(interaction: discord.Interaction):
 
         # Step 2 — updates channel
         embed2 = discord.Embed(
-            title="⚙️ Setup — Step 2 of 3",
-            description=f"✅ Commands channel set to {commands_channel.mention}\n\nNow — what channel should Adrian post **dealer update notifications** to?\n\nPlease mention the channel: e.g. `#adrian-updates`",
+            title="⚙️ Step 2 of 3 — Updates Channel",
+            description=(
+                f"✅ Got it! Command channel set to {commands_channel.mention}\n\n"
+                "Now — which channel should Adrian post **dealer alerts** to?\n\n"
+                "💡 We recommend a dedicated channel like `#militaria-alerts` or `#adrian-updates`.\n\n"
+                "📌 Mention the channel below — e.g. `#adrian-updates`"
+            ),
             color=discord.Color.dark_gold()
         )
-        embed2.set_footer(text="Adrian Setup — Type the channel mention to continue")
-        await interaction.edit_original_response(embed=embed2)
+
 
         msg2 = await client.wait_for("message", check=check, timeout=120)
         updates_channel = msg2.channel_mentions[0]
@@ -2565,11 +2640,21 @@ async def setup_cmd(interaction: discord.Interaction):
 
         # Step 3 — estate
         embed3 = discord.Embed(
-            title="⚙️ Setup — Step 3 of 3",
-            description=f"✅ Updates channel set to {updates_channel.mention}\n\nDo you want an **Estate** channel where members can buy and sell?\n\nThe bot will monitor your forum channel and provide seller profiles, ratings and cross-server listings.\n\n✅ **Yes** — Enable estate features\n❌ **No** — Skip estate",
+            title="⚙️ Last Step — Do you want a Marketplace?",
+            description=(
+                "✅ Updates channel set to " + updates_channel.mention + "\n\n"
+                "**Turn your server into a trusted militaria marketplace!** 🏪\n\n"
+                "Adrian\'s Estate feature transforms any forum channel into a full buying & selling hub:\n\n"
+                "🔍 **Seller profiles** — buyers can check a seller\'s rating and history before purchasing\n"
+                "⭐ **Reputation system** — every transaction builds a global trust score\n"
+                "🌐 **Cross-server listings** — sellers reach buyers across ALL Adrian servers\n"
+                "🛡️ **Scam protection** — warning flags follow bad actors across every server\n"
+                "📊 **Transaction history** — full record of every completed sale\n\n"
+                "It\'s completely free and takes 30 seconds to set up."
+            ),
             color=discord.Color.dark_gold()
         )
-        embed3.set_footer(text="Adrian Setup — The Relic Registry")
+
         await interaction.edit_original_response(embed=embed3, view=SetupEstateView())
 
     except asyncio.TimeoutError:
