@@ -165,8 +165,24 @@ class MilitariaBot(discord.Client):
 
     async def setup_hook(self):
         try:
-            self.db = await asyncpg.create_pool(DATABASE_URL)
-            logger.info("Database connection pool created successfully")
+            # DB connection with retry
+            for attempt in range(5):
+                try:
+                    self.db = await asyncpg.create_pool(
+                        DATABASE_URL,
+                        min_size=2,
+                        max_size=10,
+                        command_timeout=30,
+                        max_inactive_connection_lifetime=300
+                    )
+                    logger.info("Database connection pool created successfully")
+                    break
+                except Exception as db_err:
+                    if attempt < 4:
+                        logger.warning(f"DB connection attempt {attempt+1}/5 failed: {db_err} — retrying in 5s...")
+                        await asyncio.sleep(5)
+                    else:
+                        raise
             await self.init_db()
             # Sync to main guild instantly
             guild = discord.Object(id=GUILD_ID)
@@ -403,6 +419,10 @@ bot_state = {
     "question5_img_url": None,
     "thankyou_img_url": None,
     "check_before_buy_img_url": None,
+    "setup_img_url": None,
+    "command_cooldowns": {},
+    "health_status": "starting",
+    "startup_time": None,
 }
 
 # ==================== DATA FUNCTIONS ====================
@@ -615,6 +635,7 @@ async def db_get_server_config(guild_id):
 
 async def db_save_server_config(guild_id, **kwargs):
     """Insert or update a server config."""
+    logger.debug(f"[DB] db_save_server_config guild={guild_id} keys={list(kwargs.keys())}")
     async with client.db.acquire() as conn:
         existing = await conn.fetchrow("SELECT guild_id FROM server_config WHERE guild_id=$1", str(guild_id))
         if existing:
@@ -806,6 +827,38 @@ async def db_get_users_for_dealer(dealer_region, dealer_eras, dealer_countries):
         matched.append(user_id)
     return matched
 
+# ==================== RATE LIMITING ====================
+
+COMMAND_COOLDOWNS = {
+    "start": 30,      # 30 seconds between /start calls
+    "alerts": 10,     # 10 seconds between /alerts calls
+    "profile": 10,
+    "ratedealer": 60,
+    "setup": 60,
+}
+
+def check_cooldown(user_id, command):
+    """Returns (is_on_cooldown, seconds_remaining)."""
+    key = f"{user_id}:{command}"
+    now = datetime.now(timezone.utc).timestamp()
+    last = bot_state["command_cooldowns"].get(key, 0)
+    cooldown = COMMAND_COOLDOWNS.get(command, 0)
+    remaining = cooldown - (now - last)
+    if remaining > 0:
+        return True, int(remaining)
+    bot_state["command_cooldowns"][key] = now
+    return False, 0
+
+def cleanup_cooldowns():
+    """Remove expired cooldown entries to prevent memory leak."""
+    now = datetime.now(timezone.utc).timestamp()
+    max_cooldown = max(COMMAND_COOLDOWNS.values(), default=60)
+    expired = [k for k, v in bot_state["command_cooldowns"].items() if now - v > max_cooldown + 10]
+    for k in expired:
+        del bot_state["command_cooldowns"][k]
+    if expired:
+        logger.debug(f"[Cooldown] Cleared {len(expired)} expired cooldown entries")
+
 def is_mod(member):
     return member.guild_permissions.administrator or member.guild_permissions.manage_guild
 
@@ -908,6 +961,7 @@ async def send_alert(channel, name, url, logo_file, test=False, waf=False):
     rating, review_count = get_dealer_rating_sync(dealer_reviews)
 
     dealer_info = find_dealer(name)
+    logger.debug(f"[Alert] Processing alert for {name} | test={test} | waf={waf}")
     flag = dealer_info.get("flag", "🌐") if dealer_info else "🌐"
     dealer_region = dealer_info.get("region", "both") if dealer_info else "both"
     title = f"🧪 TEST — {name}" if test else f"🆕 {flag} New Items at {name}!"
@@ -1067,6 +1121,18 @@ async def check_gmail_async():
 # ==================== BACKGROUND TASKS ====================
 async def check_all_dealers():
     await client.wait_until_ready()
+    while not client.is_closed():
+        try:
+            await _check_all_dealers_inner()
+        except asyncio.CancelledError:
+            logger.info("[DealerChecker] Task cancelled — shutting down.")
+            break
+        except Exception as e:
+            logger.error(f"[DealerChecker] CRASHED: {e}\n{traceback.format_exc()}")
+            logger.info("[DealerChecker] Restarting in 60 seconds...")
+            await asyncio.sleep(60)
+
+async def _check_all_dealers_inner():
     channel = client.get_channel(CHANNEL_ID)
     if not channel:
         print("ERROR: Could not find channel.")
@@ -1078,6 +1144,7 @@ async def check_all_dealers():
             continue
         bot_state["force_rescan"] = False
         logger.info(f"--- Checking dealers at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---")
+        logger.debug(f"[Dealer Check] Paused={bot_state['paused']} | Force={bot_state['force_rescan']} | Dealers={len(DEALERS)+len(EMAIL_DEALERS)}")
         bot_state["last_check"] = datetime.now(timezone.utc)
         seen = load_seen()
         async with aiohttp.ClientSession() as session:
@@ -1432,6 +1499,18 @@ async def send_waf_alert(channel, parsed, guild):
 
 async def check_email_dealers():
     await client.wait_until_ready()
+    while not client.is_closed():
+        try:
+            await _check_email_dealers_inner()
+        except asyncio.CancelledError:
+            logger.info("[EmailChecker] Task cancelled — shutting down.")
+            break
+        except Exception as e:
+            logger.error(f"[EmailChecker] CRASHED: {e}\n{traceback.format_exc()}")
+            logger.info("[EmailChecker] Restarting in 60 seconds...")
+            await asyncio.sleep(60)
+
+async def _check_email_dealers_inner():
     channel = client.get_channel(CHANNEL_ID)
     if not channel:
         return
@@ -1441,6 +1520,7 @@ async def check_email_dealers():
             await asyncio.sleep(30)
             continue
         bot_state["last_email_check"] = datetime.now(timezone.utc)
+        logger.debug(f"[Email Check] Running email check at {datetime.now().strftime('%H:%M:%S')}")
 
         # Check Gmail
         triggered = await check_gmail_async()
@@ -2148,8 +2228,8 @@ class FeedbackModal(discord.ui.Modal, title="Leave Feedback for the Developer"):
                     ephemeral=True
                 )
                 try:
-                    img_path = os.path.join(SCRIPT_DIR, "logos", "guerrilla_warfare.png")
-                    audio_path = os.path.join(SCRIPT_DIR, "logos", "guerrilla_warfare_call.mp3")
+                    img_path = os.path.join(SCRIPT_DIR, "logos", "adrian", "guerrilla_warfare.png")
+                    audio_path = os.path.join(SCRIPT_DIR, "logos", "adrian", "guerrilla_warfare_call.mp3")
                     if os.path.exists(img_path):
                         await interaction.user.send(file=discord.File(img_path, filename="guerrilla_warfare.png"))
                     if os.path.exists(audio_path):
@@ -2476,6 +2556,7 @@ async def setup_cmd(interaction: discord.Interaction):
         await interaction.response.send_message("🚫 Only server administrators can run `/setup`.", ephemeral=True)
         return
 
+    logger.info(f"[Setup] /setup started by {interaction.user} in {interaction.guild.name} ({interaction.guild_id})")
     # Save basic server info
     await db_save_server_config(
         str(interaction.guild_id),
@@ -2483,13 +2564,19 @@ async def setup_cmd(interaction: discord.Interaction):
         owner_id=str(interaction.guild.owner_id)
     )
 
-    embed = discord.Embed(
+    embeds = []
+    if bot_state.get("setup_img_url"):
+        img_embed = discord.Embed(color=discord.Color.dark_gold())
+        img_embed.set_image(url=bot_state["setup_img_url"])
+        embeds.append(img_embed)
+    text_embed = discord.Embed(
         title="⚙️ Welcome to Adrian Setup — Step 1 of 5",
         description=f"Hey **{interaction.user.display_name}**! Let\'s get Adrian set up on **{interaction.guild.name}**.\n\nFirst — what channel should Adrian use for **slash commands and the welcome message**?\n\nPlease mention the channel: e.g. `#adrian`",
         color=discord.Color.dark_gold()
     )
-    embed.set_footer(text="Adrian Setup — Type the channel mention to continue")
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    text_embed.set_footer(text="Adrian Setup — Type the channel mention to continue")
+    embeds.append(text_embed)
+    await interaction.response.send_message(embeds=embeds, ephemeral=True)
 
     # Wait for channel mention
     def check(m):
@@ -2602,6 +2689,58 @@ async def setpremium_cmd(interaction: discord.Interaction, guild_id: str, premiu
         ephemeral=True
     )
 
+@client.tree.command(name="debug", description="[Owner] Show live bot health and status")
+async def debug_cmd(interaction: discord.Interaction):
+    if not is_bot_owner(interaction.user):
+        await interaction.response.send_message("❓ Unknown command.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+
+    import sys
+    import platform
+
+    # Bot state
+    paused = "⏸️ Paused" if bot_state["paused"] else "▶️ Running"
+    last_check = f"<t:{int(bot_state['last_check'].timestamp())}:R>" if bot_state["last_check"] else "Never"
+    last_email = f"<t:{int(bot_state['last_email_check'].timestamp())}:R>" if bot_state["last_email_check"] else "Never"
+
+    # Guild info
+    guilds = client.guilds
+    total_members = sum(g.member_count for g in guilds)
+
+    # DB pool stats
+    db_size = client.db.get_size() if client.db else 0
+    db_free = client.db.get_idle_size() if client.db else 0
+
+    # Tasks
+    all_tasks = asyncio.all_tasks()
+    running_tasks = [t.get_name() for t in all_tasks if not t.done()]
+
+    embed = discord.Embed(
+        title="🔧 Adrian Debug Dashboard",
+        color=discord.Color.dark_gold(),
+        timestamp=datetime.now(timezone.utc)
+    )
+    embed.add_field(name="Status", value=paused, inline=True)
+    embed.add_field(name="Guilds", value=f"{len(guilds)} servers", inline=True)
+    embed.add_field(name="Total Members", value=f"{total_members:,}", inline=True)
+    embed.add_field(name="Last Dealer Check", value=last_check, inline=True)
+    embed.add_field(name="Last Email Check", value=last_email, inline=True)
+    embed.add_field(name="WAF Alerts Sent", value=str(bot_state["waf_notification_count"]), inline=True)
+    embed.add_field(name="DB Pool", value=f"{db_size} total / {db_free} idle", inline=True)
+    embed.add_field(name="Griffin Buffer", value=f"{len(bot_state['griffin_buffer'])} pending", inline=True)
+    embed.add_field(name="Active Tasks", value=f"{len(running_tasks)}", inline=True)
+    embed.add_field(name="Python", value=platform.python_version(), inline=True)
+    embed.add_field(name="Discord.py", value=discord.__version__, inline=True)
+    embed.add_field(name="Dealers", value=f"{len(DEALERS)} web + {len(EMAIL_DEALERS)} email", inline=True)
+
+    # List all guilds
+    guild_list = "\n".join([f"• {g.name} ({g.id})" for g in guilds[:10]])
+    embed.add_field(name="Connected Servers", value=guild_list or "None", inline=False)
+
+    embed.set_footer(text="Adrian Owner Dashboard")
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
 @client.tree.command(name="broadcast", description="[Owner] Send a message to all Adrian servers")
 @app_commands.describe(message="The message to broadcast")
 async def broadcast_cmd(interaction: discord.Interaction, message: str):
@@ -2634,6 +2773,10 @@ async def broadcast_cmd(interaction: discord.Interaction, message: str):
 
 @client.tree.command(name="start", description="Get started with Adrian and set your notification preferences")
 async def start_cmd(interaction: discord.Interaction):
+    on_cd, remaining = check_cooldown(str(interaction.user.id), "start")
+    if on_cd:
+        await interaction.response.send_message(f"⏳ Please wait {remaining}s before using `/start` again.", ephemeral=True)
+        return
     existing = await db_get_user_region(str(interaction.user.id))
     region_str = {"NA": "🇺🇸 North America Only", "EU": "🇪🇺 Europe Only", "both": "🌍 All Dealers"}.get(existing, "Not set yet")
 
@@ -3331,6 +3474,10 @@ async def mywatchlist_cmd(interaction: discord.Interaction):
 
 @client.tree.command(name="alerts", description="See your pending dealer and forum alerts")
 async def alerts_cmd(interaction: discord.Interaction):
+    on_cd, remaining = check_cooldown(str(interaction.user.id), "alerts")
+    if on_cd:
+        await interaction.response.send_message(f"⏳ Please wait {remaining}s before checking alerts again.", ephemeral=True)
+        return
     await interaction.response.defer(ephemeral=True)
     user_id = str(interaction.user.id)
     alerts = await db_get_pending_alerts(user_id)
@@ -3516,7 +3663,11 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
 async def on_guild_join(guild):
     """When bot joins a new server, DM the owner to run /setup."""
     try:
+        logger.info(f"[Guild] ==============================")
         logger.info(f"[Guild] Joined new server: {guild.name} ({guild.id})")
+        logger.info(f"[Guild] Owner ID: {guild.owner_id}")
+        logger.info(f"[Guild] Member count: {guild.member_count}")
+        logger.info(f"[Guild] ==============================")
         # Save basic info
         await db_save_server_config(
             str(guild.id),
@@ -3552,7 +3703,10 @@ async def on_thread_create(thread):
             return
 
         seller_id = thread.owner_id
+        logger.info(f"[Estate] ==============================")
         logger.info(f"[Estate] New listing thread: {thread.name} by {seller_id}")
+        logger.info(f"[Estate] Thread ID: {thread.id} | Parent: {thread.parent_id}")
+        logger.info(f"[Estate] ==============================")
 
         # Wait for the post author to send their initial message
         await asyncio.sleep(10)
@@ -3614,11 +3768,22 @@ async def on_thread_update(before, after):
 
 @client.event
 async def on_ready():
-    logger.info(f"Logged in as {client.user}")
+    bot_state["startup_time"] = datetime.now(timezone.utc)
+    bot_state["health_status"] = "ready"
+    logger.info(f"[Startup] ============================")
+    logger.info(f"[Startup] Adrian Bot Starting Up")
+    logger.info(f"[Startup] Logged in as {client.user}")
+    logger.info(f"[Startup] Discord.py version: {discord.__version__}")
+    logger.info(f"[Startup] Guild count: {len(client.guilds)}")
+    for g in client.guilds:
+        logger.info(f"[Startup] Connected to guild: {g.name} ({g.id})")
+    logger.info(f"[Startup] ============================")
     logger.info(f"SCRIPT_DIR: {SCRIPT_DIR}")
     logos_path = os.path.join(SCRIPT_DIR, "logos")
+    adrian_path = os.path.join(SCRIPT_DIR, "logos", "adrian")
     if os.path.exists(logos_path):
-        logger.info(f"Logos found: {os.listdir(logos_path)}")
+        logger.info(f"Adrian images: {os.listdir(adrian_path) if os.path.exists(adrian_path) else 'MISSING'}")
+        logger.info(f"Dealer logos: {os.listdir(logos_path)}")
     else:
         logger.warning(f"Logos folder NOT found at {logos_path}!")
     # Re-register persistent views so buttons work after bot restarts
@@ -3643,7 +3808,7 @@ async def on_ready():
     try:
         adrian_channel = client.get_channel(CHANNEL_ID)
         if adrian_channel:
-            welcome_file = os.path.join(SCRIPT_DIR, "logos", "Adrian_welcome.png")
+            welcome_file = os.path.join(SCRIPT_DIR, "logos", "adrian", "Adrian_welcome.png")
             if os.path.exists(welcome_file):
                 await adrian_channel.send(file=discord.File(welcome_file, filename="Adrian_welcome.png"))
                 logger.info("[Startup] Welcome image posted to #Adrian.")
@@ -3658,7 +3823,7 @@ async def on_ready():
     try:
         img_host_channel = client.get_channel(IMAGE_HOST_CHANNEL_ID)
         if img_host_channel:
-            for q_file, key in [("adrain_1st_question.png", "question1_img_url"), ("adrain_2nd_question.png", "question2_img_url"), ("adrain_3rd_question.png", "question3_img_url"), ("adrain_4th_question.png", "question4_img_url"), ("adrain_5th_question.png", "question5_img_url"), ("thank_you_please_buy.png", "thankyou_img_url"), ("adrain_check_before_buy.png", "check_before_buy_img_url")]:
+            for q_file, key in [("adrian/adrain_1st_question.png", "question1_img_url"), ("adrian/adrain_2nd_question.png", "question2_img_url"), ("adrian/adrain_3rd_question.png", "question3_img_url"), ("adrian/adrain_4th_question.png", "question4_img_url"), ("adrian/adrain_5th_question.png", "question5_img_url"), ("adrian/thank_you_please_buy.png", "thankyou_img_url"), ("adrian/adrain_check_before_buy.png", "check_before_buy_img_url"), ("adrian/setup_1.png", "setup_img_url")]:
                 path = os.path.join(SCRIPT_DIR, "logos", q_file)
                 if os.path.exists(path):
                     msg = await img_host_channel.send(file=discord.File(path, filename=q_file))
@@ -3855,11 +4020,36 @@ async def handle_guide(request):
             return web.Response(text=f.read(), content_type="text/html")
     return web.Response(text="Guide not found", status=404)
 
+async def handle_health(request):
+    """Health check endpoint for Railway and monitoring."""
+    uptime = ""
+    if bot_state.get("startup_time"):
+        seconds = int((datetime.now(timezone.utc) - bot_state["startup_time"]).total_seconds())
+        hours = seconds // 3600
+        minutes = (seconds % 3600) // 60
+        uptime = f"{hours}h {minutes}m"
+    health = {
+        "status": bot_state.get("health_status", "unknown"),
+        "uptime": uptime,
+        "guilds": len(client.guilds),
+        "paused": bot_state["paused"],
+        "last_check": bot_state["last_check"].isoformat() if bot_state["last_check"] else None,
+        "last_email": bot_state["last_email_check"].isoformat() if bot_state["last_email_check"] else None,
+        "waf_count": bot_state["waf_notification_count"],
+    }
+    import json as json_module
+    return web.Response(
+        text=json_module.dumps(health, indent=2),
+        content_type="application/json",
+        status=200
+    )
+
 async def start_web_server():
     await client.wait_until_ready()
     app = web.Application()
     app.router.add_get("/", handle_guide)
     app.router.add_get("/guide", handle_guide)
+    app.router.add_get("/health", handle_health)
     app.router.add_get("/alert", handle_webhook)
     app.router.add_post("/alert", handle_webhook)
     runner = web.AppRunner(app)
@@ -3871,17 +4061,77 @@ async def start_web_server():
 async def daily_cleanup():
     await client.wait_until_ready()
     while not client.is_closed():
-        await asyncio.sleep(24 * 3600)
-        await db_cleanup_watchlist()
-        await db_cleanup_old_alerts()
+        await asyncio.sleep(3600)  # Run every hour instead of daily
+        try:
+            await db_cleanup_old_alerts()
+            cleanup_cooldowns()
+            logger.info("[Cleanup] Hourly cleanup complete")
+        except Exception as e:
+            logger.error(f"[Cleanup] Error: {e}")
+        # Run full cleanup once per day
+        if datetime.now(timezone.utc).hour == 3:  # 3am UTC
+            try:
+                await db_cleanup_watchlist()
+                logger.info("[Cleanup] Daily cleanup complete")
+            except Exception as e:
+                logger.error(f"[Cleanup] Daily cleanup error: {e}")
 
 async def main():
-    async with client:
-        client.loop.create_task(check_all_dealers())
-        client.loop.create_task(check_email_dealers())
-        client.loop.create_task(send_promo())
-        client.loop.create_task(start_web_server())
-        client.loop.create_task(daily_cleanup())
-        await client.start(BOT_TOKEN)
+    loop = asyncio.get_event_loop()
+
+    # Track all background tasks for clean shutdown
+    tasks = []
+
+    async def shutdown(signal_name=None):
+        if signal_name:
+            logger.info(f"[Shutdown] Received {signal_name} — shutting down gracefully...")
+        else:
+            logger.info("[Shutdown] Shutting down gracefully...")
+
+        # Cancel all background tasks
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+                try:
+                    await asyncio.wait_for(task, timeout=3.0)
+                except (asyncio.CancelledError, asyncio.TimeoutError):
+                    pass
+
+        # Close Discord connection
+        if not client.is_closed():
+            await client.close()
+            logger.info("[Shutdown] Discord connection closed.")
+
+        # Close DB pool
+        if client.db:
+            await client.db.close()
+            logger.info("[Shutdown] Database pool closed.")
+
+        logger.info("[Shutdown] Clean shutdown complete.")
+
+    try:
+        async with client:
+            tasks.append(asyncio.create_task(check_all_dealers()))
+            tasks.append(asyncio.create_task(check_email_dealers()))
+            tasks.append(asyncio.create_task(send_promo()))
+            tasks.append(asyncio.create_task(start_web_server()))
+            tasks.append(asyncio.create_task(daily_cleanup()))
+
+            # Handle SIGTERM and SIGINT for Railway
+            import signal as signal_module
+            for sig in (signal_module.SIGTERM, signal_module.SIGINT):
+                loop.add_signal_handler(
+                    sig,
+                    lambda s=sig: asyncio.create_task(shutdown(s.name))
+                )
+
+            await client.start(BOT_TOKEN)
+
+    except asyncio.CancelledError:
+        logger.info("[Shutdown] Main task cancelled.")
+    except Exception as e:
+        logger.error(f"[Main] Fatal error: {e}\n{traceback.format_exc()}")
+    finally:
+        await shutdown()
 
 asyncio.run(main())
