@@ -251,6 +251,7 @@ class MilitariaBot(discord.Client):
                 )
             
             ''')
+        await conn.execute("ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS eras TEXT DEFAULT ''")
         logger.info("Database initialized successfully!")
 
 client = MilitariaBot()
@@ -1547,18 +1548,36 @@ class RegionSelectView(discord.ui.View):
 
     @discord.ui.button(emoji="🇺🇸", style=discord.ButtonStyle.secondary, custom_id="region_select_na")
     async def region_na(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await db_set_user_region(str(interaction.user.id), "NA")
-        await show_question2(interaction, edit=True)
+        try:
+            await db_set_user_region(str(interaction.user.id), "NA")
+            await show_question2(interaction, edit=True)
+        except Exception as e:
+            logger.error(f"[RegionSelect] NA error: {e}\n{traceback.format_exc()}")
+            try:
+                await interaction.response.send_message("⚠️ Something went wrong. Please try again.", ephemeral=True)
+            except: pass
 
     @discord.ui.button(emoji="🇪🇺", style=discord.ButtonStyle.secondary, custom_id="region_select_eu")
     async def region_eu(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await db_set_user_region(str(interaction.user.id), "EU")
-        await show_question2(interaction, edit=True)
+        try:
+            await db_set_user_region(str(interaction.user.id), "EU")
+            await show_question2(interaction, edit=True)
+        except Exception as e:
+            logger.error(f"[RegionSelect] EU error: {e}\n{traceback.format_exc()}")
+            try:
+                await interaction.response.send_message("⚠️ Something went wrong. Please try again.", ephemeral=True)
+            except: pass
 
     @discord.ui.button(emoji="🌍", style=discord.ButtonStyle.secondary, custom_id="region_select_both")
     async def region_both(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await db_set_user_region(str(interaction.user.id), "both")
-        await show_question2(interaction, edit=True)
+        try:
+            await db_set_user_region(str(interaction.user.id), "both")
+            await show_question2(interaction, edit=True)
+        except Exception as e:
+            logger.error(f"[RegionSelect] Both error: {e}\n{traceback.format_exc()}")
+            try:
+                await interaction.response.send_message("⚠️ Something went wrong. Please try again.", ephemeral=True)
+            except: pass
 
 # ==================== SLASH COMMANDS ====================
 
