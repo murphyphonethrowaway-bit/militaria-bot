@@ -255,6 +255,16 @@ class MilitariaBot(discord.Client):
                 )
             ''')
             await conn.execute("ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS eras TEXT DEFAULT ''")
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS pending_alerts (
+                    id SERIAL PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    dealer_name TEXT NOT NULL,
+                    dealer_url TEXT NOT NULL,
+                    dealer_flag TEXT DEFAULT '🌐',
+                    created_at BIGINT NOT NULL
+                )
+            ''')
             await conn.execute("ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS countries TEXT DEFAULT ''")
             await conn.execute("ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS forums TEXT DEFAULT ''")
             await conn.execute('''
@@ -644,14 +654,74 @@ async def db_set_user_countries(user_id, countries):
             country_str, int(datetime.now(timezone.utc).timestamp()), str(user_id)
         )
 
-async def db_get_users_for_region(dealer_region):
-    """Get all user_ids that should receive alerts for this dealer's region."""
+# ==================== PENDING ALERTS DB ====================
+
+async def db_add_pending_alert(user_id, dealer_name, dealer_url, dealer_flag):
+    async with client.db.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO pending_alerts (user_id, dealer_name, dealer_url, dealer_flag, created_at) VALUES ($1,$2,$3,$4,$5)",
+            str(user_id), dealer_name, dealer_url, dealer_flag, int(datetime.now(timezone.utc).timestamp())
+        )
+
+async def db_get_pending_alerts(user_id):
     async with client.db.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT user_id FROM user_preferences WHERE region='both' OR region=$1",
-            dealer_region
+            "SELECT * FROM pending_alerts WHERE user_id=$1 ORDER BY created_at ASC",
+            str(user_id)
+        )
+        return [dict(r) for r in rows]
+
+async def db_clear_pending_alerts(user_id):
+    async with client.db.acquire() as conn:
+        await conn.execute("DELETE FROM pending_alerts WHERE user_id=$1", str(user_id))
+
+async def db_cleanup_old_alerts():
+    """Remove alerts older than 24 hours."""
+    cutoff = int(datetime.now(timezone.utc).timestamp()) - (24 * 3600)
+    async with client.db.acquire() as conn:
+        deleted = await conn.fetchval("SELECT COUNT(*) FROM pending_alerts WHERE created_at < $1", cutoff)
+        await conn.execute("DELETE FROM pending_alerts WHERE created_at < $1", cutoff)
+        if deleted:
+            logger.info(f"[Alerts] Cleaned up {deleted} expired pending alerts")
+
+async def db_get_users_for_forum(forum_type):
+    """Get user_ids who opted in to a specific forum (waf, usmf, or both)."""
+    async with client.db.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT user_id FROM user_preferences WHERE forums=$1 OR forums='both'",
+            forum_type
         )
         return [r["user_id"] for r in rows]
+
+async def db_get_users_for_dealer(dealer_region, dealer_eras, dealer_countries):
+    """Get all user_ids whose full profile matches this dealer."""
+    async with client.db.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT user_id, region, eras, countries FROM user_preferences WHERE region IS NOT NULL AND eras IS NOT NULL AND eras != '' AND countries IS NOT NULL AND countries != ''"
+        )
+    matched = []
+    for row in rows:
+        user_id = row["user_id"]
+        user_region = row["region"] or "both"
+        user_eras = [int(e) for e in row["eras"].split(",") if e] if row["eras"] else []
+        user_countries = list(row["countries"].split(",")) if row["countries"] else []
+
+        # Region check
+        if user_region != "both" and user_region != dealer_region:
+            continue
+
+        # Era check — pass if user selected "all" (0) or dealer has "all" (0) or any overlap
+        if 0 not in user_eras and 0 not in dealer_eras:
+            if not set(user_eras) & set(dealer_eras):
+                continue
+
+        # Country check — pass if user selected "Z" (all) or dealer has "Z" or any overlap
+        if "Z" not in user_countries and "Z" not in dealer_countries:
+            if not set(user_countries) & set(dealer_countries):
+                continue
+
+        matched.append(user_id)
+    return matched
 
 def is_mod(member):
     return member.guild_permissions.administrator or member.guild_permissions.manage_guild
@@ -786,26 +856,28 @@ async def send_alert(channel, name, url, logo_file, test=False, waf=False):
     except Exception as e:
         logger.error(f"Failed to send message for {name}: {e}\n{traceback.format_exc()}")
 
-    # DM users who have set region preferences matching this dealer
+    # Save alert to pending DB and ping matched users in #Adrian
     if not test:
         try:
-            opted_in_users = await db_get_users_for_region(dealer_region)
-            for uid in opted_in_users:
+            dealer_eras = dealer_info.get("eras", [0]) if dealer_info else [0]
+            dealer_countries = dealer_info.get("countries", ["Z"]) if dealer_info else ["Z"]
+            matched_users = await db_get_users_for_dealer(dealer_region, dealer_eras, dealer_countries)
+            logger.info(f"[Alert] Pinging {len(matched_users)} matched user(s) for {name}")
+            for uid in matched_users:
                 try:
-                    user = await client.fetch_user(int(uid))
-                    if user:
-                        dm_embed = discord.Embed(
-                            title=title,
-                            description=f"New items have been added to [{name}]({url})\n\n[**Click here to view new items →**]({url})",
-                            color=discord.Color.dark_gold(),
-                            timestamp=datetime.now(timezone.utc)
+                    # Save to pending alerts DB
+                    await db_add_pending_alert(uid, name, url, flag)
+                    # Ping in #Adrian — auto-deletes after 8 seconds
+                    member = channel.guild.get_member(int(uid))
+                    if member:
+                        ping_msg = await channel.send(
+                            content=f"{member.mention} 🆕 **{name}** has new items! Type `/alerts` to see your updates.",
+                            delete_after=8
                         )
-                        dm_embed.set_footer(text="Adrian — The Relic Registry")
-                        await user.send(embed=dm_embed)
-                except Exception as dm_err:
-                    logger.debug(f"[DM] Could not DM user {uid}: {dm_err}")
+                except Exception as alert_err:
+                    logger.debug(f"[Alert] Could not ping user {uid}: {alert_err}")
         except Exception as e:
-            logger.error(f"[DM] Failed to send region DMs for {name}: {e}")
+            logger.error(f"[Alert] Failed to send alerts for {name}: {e}")
 
 async def check_dealer(session, dealer, seen, channel):
     name = dealer["name"]
@@ -1099,6 +1171,22 @@ async def send_usmf_alert(channel, parsed):
         else:
             await channel.send(embed=embed)
         logger.info(f"[USMF] Alert sent for: {parsed['item_title']}")
+        # Ping users who opted in to USMF
+        try:
+            usmf_users = await db_get_users_for_forum("usmf")
+            for uid in usmf_users:
+                try:
+                    await db_add_pending_alert(uid, f"USMF: {parsed['item_title']}", parsed.get('forum_url', ''), "🇺🇸")
+                    member = channel.guild.get_member(int(uid))
+                    if member:
+                        await channel.send(
+                            content=f"{member.mention} 🇺🇸 New USMF listing! Type `/alerts` to see it.",
+                            delete_after=8
+                        )
+                except Exception as ping_err:
+                    logger.debug(f"[USMF Alert] Could not ping {uid}: {ping_err}")
+        except Exception as e:
+            logger.error(f"[USMF Alert] Failed: {e}")
     except Exception as e:
         logger.error(f"[USMF] Failed to send alert: {e}")
 
@@ -1150,6 +1238,22 @@ async def send_waf_alert(channel, parsed, guild):
         else:
             await channel.send(content=content_msg, embed=embed, view=watch_view)
         logger.info(f"[WAF] Alert sent for: {parsed['item_title']} | Price: {price_str} | Role: {role.name if role else 'Unknown'}")
+        # Ping users who opted in to WAF
+        try:
+            waf_users = await db_get_users_for_forum("waf")
+            for uid in waf_users:
+                try:
+                    await db_add_pending_alert(uid, f"WAF: {parsed['item_title']}", parsed.get('forum_url', ''), "🎖️")
+                    member = channel.guild.get_member(int(uid))
+                    if member:
+                        await channel.send(
+                            content=f"{member.mention} 🎖️ New WAF listing! Type `/alerts` to see it.",
+                            delete_after=8
+                        )
+                except Exception as ping_err:
+                    logger.debug(f"[WAF Alert] Could not ping {uid}: {ping_err}")
+        except Exception as e:
+            logger.error(f"[WAF Alert] Failed: {e}")
         # Every 25 WAF notifications, send a Militaria Alert ad
         bot_state["waf_notification_count"] += 1
         if bot_state["waf_notification_count"] % 25 == 0:
@@ -2735,6 +2839,43 @@ async def mywatchlist_cmd(interaction: discord.Interaction):
     embed.set_footer(text="Watchlist entries expire after 90 days — The Relic Registry")
     await interaction.followup.send(embed=embed, ephemeral=True)
 
+@client.tree.command(name="alerts", description="See your pending dealer and forum alerts")
+async def alerts_cmd(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    user_id = str(interaction.user.id)
+    alerts = await db_get_pending_alerts(user_id)
+
+    if not alerts:
+        await interaction.followup.send(
+            "✅ You have no pending alerts. New items matching your profile will appear here!\n\nMake sure you've completed `/start` to set up your preferences.",
+            ephemeral=True
+        )
+        return
+
+    embed = discord.Embed(
+        title=f"🔔 You have {len(alerts)} pending alert(s)!",
+        color=discord.Color.dark_gold(),
+        timestamp=datetime.now(timezone.utc)
+    )
+
+    for alert in alerts[:20]:  # Cap at 20 to avoid embed limits
+        ts = f"<t:{alert['created_at']}:R>"
+        url_text = f"[View →]({alert['dealer_url']})" if alert['dealer_url'] else "No link"
+        embed.add_field(
+            name=f"{alert['dealer_flag']} {alert['dealer_name']}",
+            value=f"{url_text} · {ts}",
+            inline=False
+        )
+
+    if len(alerts) > 20:
+        embed.set_footer(text=f"Showing 20 of {len(alerts)} alerts · Alerts expire after 24 hours")
+    else:
+        embed.set_footer(text="Alerts expire after 24 hours · Adrian — The Relic Registry")
+
+    # Clear alerts after showing them
+    await db_clear_pending_alerts(user_id)
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
 @client.tree.command(name="profile", description="View your Adrian notification profile")
 async def profile_cmd(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
@@ -3160,6 +3301,7 @@ async def daily_cleanup():
     while not client.is_closed():
         await asyncio.sleep(24 * 3600)
         await db_cleanup_watchlist()
+        await db_cleanup_old_alerts()
 
 async def main():
     async with client:
