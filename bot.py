@@ -325,6 +325,7 @@ bot_state = {
     "question2_img_url": None,
     "question3_img_url": None,
     "question4_img_url": None,
+    "question5_img_url": None,
 }
 
 # ==================== DATA FUNCTIONS ====================
@@ -1570,35 +1571,81 @@ class ForumSelectView(discord.ui.View):
                 await interaction.response.send_message("⚠️ Something went wrong. Please try again.", ephemeral=True)
             except: pass
 
-    @discord.ui.button(label="🟥 WAF", style=discord.ButtonStyle.secondary, custom_id="forum_waf")
+    @discord.ui.button(emoji="🟥", style=discord.ButtonStyle.secondary, custom_id="forum_waf")
     async def forum_waf(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._save(interaction, "waf")
 
-    @discord.ui.button(label="🟩 USMF", style=discord.ButtonStyle.secondary, custom_id="forum_usmf")
+    @discord.ui.button(emoji="🟩", style=discord.ButtonStyle.secondary, custom_id="forum_usmf")
     async def forum_usmf(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._save(interaction, "usmf")
 
-    @discord.ui.button(label="🌐 Both", style=discord.ButtonStyle.primary, custom_id="forum_both")
+    @discord.ui.button(emoji="✅", style=discord.ButtonStyle.secondary, custom_id="forum_both")
     async def forum_both(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._save(interaction, "both")
 
-    @discord.ui.button(label="❌ None", style=discord.ButtonStyle.danger, custom_id="forum_none")
+    @discord.ui.button(emoji="❌", style=discord.ButtonStyle.secondary, custom_id="forum_none")
     async def forum_none(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._save(interaction, "none")
 
 async def show_all_done(interaction: discord.Interaction, edit=True):
-    """Show completion message after all questions answered."""
-    embed = discord.Embed(
-        title="✅ All Done!",
-        description="Your preferences have been saved! Adrian will now send you dealer notifications that match your selections.\n\nUse `/settings` anytime to update your preferences.",
-        color=discord.Color.green(),
-        timestamp=datetime.now(timezone.utc)
-    )
-    embed.set_footer(text="Adrian — The Relic Registry")
+    """Show final screen after all questions answered."""
+    embeds = []
+    if bot_state.get("question5_img_url"):
+        img_embed = discord.Embed(color=discord.Color.dark_gold())
+        img_embed.set_image(url=bot_state["question5_img_url"])
+        embeds.append(img_embed)
+
     if edit:
-        await interaction.response.edit_message(embeds=[embed], view=None)
+        await interaction.response.edit_message(embeds=embeds, view=FinalScreenView())
     else:
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.response.send_message(embeds=embeds, view=FinalScreenView(), ephemeral=True)
+
+class FinalScreenView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="⭐ Rate the Bot", style=discord.ButtonStyle.primary, custom_id="final_rate")
+    async def rate_bot(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message(
+            "⭐ Thanks for rating! Use `/ratedealer` to rate any dealer, or share your thoughts about the bot with the mods.",
+            ephemeral=True
+        )
+
+    @discord.ui.button(label="💬 Leave Feedback", style=discord.ButtonStyle.secondary, custom_id="final_feedback")
+    async def leave_feedback(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(FeedbackModal())
+
+    @discord.ui.button(label="💗 Buy Premium", style=discord.ButtonStyle.danger, custom_id="final_premium")
+    async def buy_premium(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message(
+            "💗 **Buy Premium** — Coming soon! Stay tuned.",
+            ephemeral=True
+        )
+
+class FeedbackModal(discord.ui.Modal, title="Leave Feedback for the Developer"):
+    feedback = discord.ui.TextInput(
+        label="Your Feedback",
+        placeholder="Tell us what you think about Adrian...",
+        style=discord.TextStyle.paragraph,
+        max_length=1000
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            log_channel = client.get_channel(REVIEW_LOG_CHANNEL_ID)
+            if log_channel:
+                embed = discord.Embed(
+                    title="💬 User Feedback",
+                    description=str(self.feedback),
+                    color=discord.Color.blurple(),
+                    timestamp=datetime.now(timezone.utc)
+                )
+                embed.set_footer(text=f"From: {interaction.user} ({interaction.user.id})")
+                await log_channel.send(embed=embed)
+            await interaction.response.send_message("💬 Thanks for your feedback! The developer will review it.", ephemeral=True)
+        except Exception as e:
+            logger.error(f"[Feedback] Error: {e}")
+            await interaction.response.send_message("⚠️ Something went wrong. Please try again.", ephemeral=True)
 
 async def show_question3(interaction: discord.Interaction, edit=True):
     """Show question 3 — country selection."""
@@ -2535,6 +2582,7 @@ async def on_ready():
     client.add_view(EraSelectView())
     client.add_view(CountrySelectView())
     client.add_view(ForumSelectView())
+    client.add_view(FinalScreenView())
     logger.info("Persistent views registered.")
 
     # Post welcome image to #Adrian on every startup
@@ -2556,7 +2604,7 @@ async def on_ready():
     try:
         img_host_channel = client.get_channel(IMAGE_HOST_CHANNEL_ID)
         if img_host_channel:
-            for q_file, key in [("adrain_1st_question.png", "question1_img_url"), ("adrain_2nd_question.png", "question2_img_url"), ("adrain_3rd_question.png", "question3_img_url"), ("adrain_4th_question.png", "question4_img_url")]:
+            for q_file, key in [("adrain_1st_question.png", "question1_img_url"), ("adrain_2nd_question.png", "question2_img_url"), ("adrain_3rd_question.png", "question3_img_url"), ("adrain_4th_question.png", "question4_img_url"), ("adrain_5th_question.png", "question5_img_url")]:
                 path = os.path.join(SCRIPT_DIR, "logos", q_file)
                 if os.path.exists(path):
                     msg = await img_host_channel.send(file=discord.File(path, filename=q_file))
