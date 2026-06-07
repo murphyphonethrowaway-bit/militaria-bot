@@ -39,6 +39,7 @@ BOT_FEEDBACK_CHANNEL_ID = 1513020767393288403  # #bot-feedback channel
 GUERRILLA_WARFARE_ROLE_ID = 1513027040927027350  # Guerrilla Warfare shame role
 ADRIAN_VERIFIED_ROLE_ID = 1513203231856001084  # Adrian Verified role — grants access to #Adrian
 ADRIAN_UPDATES_CHANNEL_ID = 1513210219126063325  # #adrian-updates announcement channel
+PRIVATE_LOG_CHANNEL_ID = 1513215269496029266  # Private mod log channel
 ESTATE_CHANNEL_ID = 1479610589931245608  # Estate forum channel
 ESTATE_SOLD_TAG_ID = 1479612959541170247  # Sold tag ID
 TRUSTED_REVIEWER_ROLE_ID = 1511487130189168802  # @Trusted Reviewer role
@@ -850,33 +851,46 @@ async def send_alert(channel, name, url, logo_file, test=False, waf=False):
     content_msg = f"<@&{WAF_ROLE_ID}> New WAF Estate listing!" if waf and not test else None
 
     follow_view = FollowDealerView(name)
-    try:
-        if file:
-            await channel.send(content=content_msg, file=file, embed=embed, view=follow_view)
-        else:
-            await channel.send(content=content_msg, embed=embed, view=follow_view)
-    except Exception as e:
-        logger.error(f"Failed to send message for {name}: {e}\n{traceback.format_exc()}")
 
-    # Save alert to pending DB and ping matched users in #Adrian
+    # Post full embed to #adrian-updates (verified members see this)
+    updates_channel = client.get_channel(ADRIAN_UPDATES_CHANNEL_ID)
+    try:
+        if updates_channel:
+            if file:
+                await updates_channel.send(content=content_msg, file=discord.File(logo_file, filename="logo.png") if os.path.exists(logo_file) else None, embed=embed, view=follow_view)
+            else:
+                await updates_channel.send(content=content_msg, embed=embed, view=follow_view)
+    except Exception as e:
+        logger.error(f"Failed to send to updates channel for {name}: {e}")
+
+    # Log full embed to private mod log channel
+    try:
+        log_channel = client.get_channel(PRIVATE_LOG_CHANNEL_ID)
+        if log_channel:
+            if file:
+                await log_channel.send(file=discord.File(logo_file, filename="logo.png") if os.path.exists(logo_file) else None, embed=embed)
+            else:
+                await log_channel.send(embed=embed)
+    except Exception as e:
+        logger.error(f"Failed to log alert for {name}: {e}")
+
+    # Save alert to pending DB and ping matched users in #adrian-updates
     if not test:
         try:
             dealer_eras = dealer_info.get("eras", [0]) if dealer_info else [0]
             dealer_countries = dealer_info.get("countries", ["Z"]) if dealer_info else ["Z"]
             matched_users = await db_get_users_for_dealer(dealer_region, dealer_eras, dealer_countries)
             logger.info(f"[Alert] Pinging {len(matched_users)} matched user(s) for {name}")
-            updates_channel = client.get_channel(ADRIAN_UPDATES_CHANNEL_ID) or channel
             for uid in matched_users:
                 try:
-                    # Save to pending alerts DB
                     await db_add_pending_alert(uid, name, url, flag)
-                    # Ping in #adrian-updates — auto-deletes after 8 seconds
-                    member = updates_channel.guild.get_member(int(uid))
-                    if member:
-                        await updates_channel.send(
-                            content=f"{member.mention} 🆕 **{name}** has new items! Type `/alerts` to see your updates.",
-                            delete_after=8
-                        )
+                    if updates_channel:
+                        member = updates_channel.guild.get_member(int(uid))
+                        if member:
+                            await updates_channel.send(
+                                content=f"{member.mention} 🆕 **{name}** has new items!",
+                                delete_after=8
+                            )
                 except Exception as alert_err:
                     logger.debug(f"[Alert] Could not ping user {uid}: {alert_err}")
         except Exception as e:
@@ -1168,31 +1182,43 @@ async def send_usmf_alert(channel, parsed):
         file = discord.File(logo_file, filename="logo.png")
         embed.set_thumbnail(url="attachment://logo.png")
 
+    # Post to #adrian-updates
+    usmf_updates_channel = client.get_channel(ADRIAN_UPDATES_CHANNEL_ID)
     try:
-        if file:
-            await channel.send(file=file, embed=embed)
-        else:
-            await channel.send(embed=embed)
-        logger.info(f"[USMF] Alert sent for: {parsed['item_title']}")
-        # Ping users who opted in to USMF
-        try:
-            usmf_updates_channel = client.get_channel(ADRIAN_UPDATES_CHANNEL_ID) or channel
-            usmf_users = await db_get_users_for_forum("usmf")
-            for uid in usmf_users:
-                try:
-                    await db_add_pending_alert(uid, f"USMF: {parsed['item_title']}", parsed.get('forum_url', ''), "🇺🇸")
+        if usmf_updates_channel:
+            if file:
+                await usmf_updates_channel.send(file=discord.File(logo_file, filename="logo.png") if os.path.exists(logo_file) else None, embed=embed)
+            else:
+                await usmf_updates_channel.send(embed=embed)
+            logger.info(f"[USMF] Alert sent for: {parsed['item_title']}")
+    except Exception as e:
+        logger.error(f"[USMF] Failed to send to updates channel: {e}")
+
+    # Log to private mod channel
+    try:
+        log_ch = client.get_channel(PRIVATE_LOG_CHANNEL_ID)
+        if log_ch:
+            await log_ch.send(embed=embed)
+    except Exception as e:
+        logger.error(f"[USMF] Failed to log: {e}")
+
+    # Ping matched users
+    try:
+        usmf_users = await db_get_users_for_forum("usmf")
+        for uid in usmf_users:
+            try:
+                await db_add_pending_alert(uid, f"USMF: {parsed['item_title']}", parsed.get('forum_url', ''), "🇺🇸")
+                if usmf_updates_channel:
                     member = usmf_updates_channel.guild.get_member(int(uid))
                     if member:
                         await usmf_updates_channel.send(
-                            content=f"{member.mention} 🇺🇸 New USMF listing! Type `/alerts` to see it.",
+                            content=f"{member.mention} 🇺🇸 New USMF listing!",
                             delete_after=8
                         )
-                except Exception as ping_err:
-                    logger.debug(f"[USMF Alert] Could not ping {uid}: {ping_err}")
-        except Exception as e:
-            logger.error(f"[USMF Alert] Failed: {e}")
+            except Exception as ping_err:
+                logger.debug(f"[USMF Alert] Could not ping {uid}: {ping_err}")
     except Exception as e:
-        logger.error(f"[USMF] Failed to send alert: {e}")
+        logger.error(f"[USMF Alert] Failed: {e}")
 
 async def send_waf_alert(channel, parsed, guild):
     """Send a formatted WAF Estate alert to members with the correct role."""
@@ -1236,29 +1262,45 @@ async def send_waf_alert(channel, parsed, guild):
 
     watch_view = WatchItemView(parsed["forum_url"], parsed["item_title"], price_str) if parsed["forum_url"] else None
 
+    # Post to #adrian-updates
+    waf_updates_channel = client.get_channel(ADRIAN_UPDATES_CHANNEL_ID)
     try:
-        if file:
-            await channel.send(content=content_msg, file=file, embed=embed, view=watch_view)
-        else:
-            await channel.send(content=content_msg, embed=embed, view=watch_view)
-        logger.info(f"[WAF] Alert sent for: {parsed['item_title']} | Price: {price_str} | Role: {role.name if role else 'Unknown'}")
-        # Ping users who opted in to WAF
-        try:
-            waf_updates_channel = client.get_channel(ADRIAN_UPDATES_CHANNEL_ID) or channel
-            waf_users = await db_get_users_for_forum("waf")
-            for uid in waf_users:
-                try:
-                    await db_add_pending_alert(uid, f"WAF: {parsed['item_title']}", parsed.get('forum_url', ''), "🎖️")
+        if waf_updates_channel:
+            if file:
+                await waf_updates_channel.send(content=content_msg, file=discord.File(logo_file, filename="logo.png") if os.path.exists(logo_file) else None, embed=embed, view=watch_view)
+            else:
+                await waf_updates_channel.send(content=content_msg, embed=embed, view=watch_view)
+            logger.info(f"[WAF] Alert sent for: {parsed['item_title']} | Price: {price_str} | Role: {role.name if role else 'Unknown'}")
+    except Exception as e:
+        logger.error(f"[WAF] Failed to send to updates channel: {e}")
+
+    # Log to private mod channel
+    try:
+        log_ch = client.get_channel(PRIVATE_LOG_CHANNEL_ID)
+        if log_ch:
+            await log_ch.send(embed=embed)
+    except Exception as e:
+        logger.error(f"[WAF] Failed to log: {e}")
+
+    # Ping matched users
+    try:
+        waf_users = await db_get_users_for_forum("waf")
+        for uid in waf_users:
+            try:
+                await db_add_pending_alert(uid, f"WAF: {parsed['item_title']}", parsed.get('forum_url', ''), "🎖️")
+                if waf_updates_channel:
                     member = waf_updates_channel.guild.get_member(int(uid))
                     if member:
                         await waf_updates_channel.send(
-                            content=f"{member.mention} 🎖️ New WAF listing! Type `/alerts` to see it.",
+                            content=f"{member.mention} 🎖️ New WAF listing!",
                             delete_after=8
                         )
-                except Exception as ping_err:
-                    logger.debug(f"[WAF Alert] Could not ping {uid}: {ping_err}")
-        except Exception as e:
-            logger.error(f"[WAF Alert] Failed: {e}")
+            except Exception as ping_err:
+                logger.debug(f"[WAF Alert] Could not ping {uid}: {ping_err}")
+    except Exception as e:
+        logger.error(f"[WAF Alert] Failed: {e}")
+
+    try:
         # Every 25 WAF notifications, send a Militaria Alert ad
         bot_state["waf_notification_count"] += 1
         if bot_state["waf_notification_count"] % 25 == 0:
