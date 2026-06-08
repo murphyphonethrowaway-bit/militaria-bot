@@ -419,6 +419,7 @@ bot_state = {
     "check_before_buy_img_url": None,
     "setup_img_url": None,
     "setup_q1_img_url": None,
+    "setup_q2_img_url": None,
     "error_404_img_url": None,
     "command_cooldowns": {},
     "health_status": "starting",
@@ -2849,7 +2850,49 @@ async def setup_cmd(interaction: discord.Interaction):
                 def __init__(self):
                     super().__init__(timeout=300)
 
-                @discord.ui.select(placeholder="Select your updates/alerts channel...", options=updates_options)
+                @discord.ui.button(label="🚀 Auto-create #adrian-updates for me", style=discord.ButtonStyle.success, row=0)
+                async def auto_create_updates(self, interaction3: discord.Interaction, button: discord.ui.Button):
+                    try:
+                        await interaction3.response.defer(ephemeral=True)
+                        guild = interaction3.guild
+                        updates_channel = discord.utils.get(guild.text_channels, name="adrian-updates")
+                        if not updates_channel:
+                            updates_channel = await guild.create_text_channel(
+                                name="adrian-updates",
+                                topic="New item alerts and marketplace updates from Adrian.",
+                                reason="Created by Adrian setup"
+                            )
+                            result = "✅ Created **#adrian-updates**"
+                        else:
+                            result = "✅ Found existing **#adrian-updates**"
+                        await db_save_server_config(str(interaction3.guild_id), updates_channel_id=str(updates_channel.id))
+                        embed3 = discord.Embed(
+                            title="⚙️ Last Step — Do you want a Marketplace?",
+                            description=(
+                                result + "\n\n"
+                                "**Turn your server into a trusted militaria marketplace!** 🏪\n\n"
+                                "🔍 **Seller profiles** — buyers check seller ratings before purchasing\n"
+                                "⭐ **Reputation system** — every transaction builds a global trust score\n"
+                                "🌐 **Cross-server listings** — sellers reach buyers across ALL Adrian servers\n"
+                                "🛡️ **Scam protection** — warning flags follow bad actors everywhere\n"
+                                "📊 **Transaction history** — full record of every completed sale\n\n"
+                                "It's completely free and takes 30 seconds to set up."
+                            ),
+                            color=discord.Color.dark_gold()
+                        )
+                        await interaction3.edit_original_response(embed=embed3, view=SetupEstateView())
+                    except discord.Forbidden:
+                        await interaction3.edit_original_response(
+                            embed=discord.Embed(
+                                title="⚠️ Missing Permissions",
+                                description="I don't have permission to create channels. Please give me **Manage Channels** permission and try again, or select an existing channel from the dropdown.",
+                                color=discord.Color.red()
+                            )
+                        )
+                    except Exception as e:
+                        logger.error(f"[Setup] Auto-create updates channel error: {e}")
+
+                @discord.ui.select(placeholder="Or pick an existing channel...", options=updates_options, row=1)
                 async def select_updates(self, interaction3: discord.Interaction, select2: discord.ui.Select):
                     updates_channel_id = int(select2.values[0])
                     updates_channel = interaction3.guild.get_channel(updates_channel_id)
@@ -2871,16 +2914,17 @@ async def setup_cmd(interaction: discord.Interaction):
                     await interaction3.response.edit_message(embed=embed3, view=SetupEstateView())
 
             embed2 = discord.Embed(
-                title="⚙️ Step 2 of 3 — Updates Channel",
+                title="⚙️ Step 2 of 3 — New Item Alerts Channel",
                 description=(
                     f"✅ Commands channel set to {commands_channel.mention}\n\n"
-                    "Now — which channel should Adrian post **dealer alerts** to?\n\n"
-                    "💡 We recommend a dedicated channel like `#militaria-alerts` or `#adrian-updates`."
+                    "Which channel should Adrian post **new item alerts** to?\n\n"
+                    "💡 We suggest naming it `#adrian-updates` — or let me create it for you!"
                 ),
                 color=discord.Color.dark_gold()
             )
+            if bot_state.get("setup_q2_img_url"):
+                embed2.set_thumbnail(url=bot_state["setup_q2_img_url"])
             await interaction2.response.edit_message(embed=embed2, view=UpdatesChannelSelect())
-
     await interaction.response.send_message(embeds=embeds, view=CommandsChannelSelect(), ephemeral=True)
 
 # ==================== OWNER COMMANDS (Murphy only, test server only) ====================
