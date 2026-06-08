@@ -5,14 +5,13 @@ from aiohttp import web
 import logging
 import traceback
 
-# ==================== LOGGING SETUP ====================
 logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
-logger = logging.getLogger("MilitariaBot")
 # Keep discord and aiohttp at INFO to avoid spam
+logger = logging.getLogger("MilitariaBot")
 logging.getLogger("discord").setLevel(logging.INFO)
 logging.getLogger("aiohttp").setLevel(logging.INFO)
 import asyncio
@@ -430,6 +429,7 @@ bot_state = {
     "setup_end_img_url": None,
     "setup_stop_img_url": None,
     "setup_estand_img_url": None,
+    "setup_crosspost_img_url": None,
     "error_404_img_url": None,
     "command_cooldowns": {},
     "health_status": "starting",
@@ -2619,8 +2619,8 @@ def _build_estate_forum_select(forum_options):
                     ),
                     color=discord.Color.dark_gold()
                 )
-                if bot_state.get("setup_estand_img_url"):
-                    embed.set_thumbnail(url=bot_state["setup_estand_img_url"])
+                if bot_state.get("setup_crosspost_img_url"):
+                    embed.set_thumbnail(url=bot_state["setup_crosspost_img_url"])
                 await interaction2.edit_original_response(embed=embed, view=SetupCrossPostView())
             except discord.Forbidden:
                 await interaction2.edit_original_response(embed=discord.Embed(
@@ -2653,8 +2653,8 @@ def _build_estate_forum_select(forum_options):
                 ),
                 color=discord.Color.dark_gold()
             )
-            if bot_state.get("setup_estand_img_url"):
-                embed.set_thumbnail(url=bot_state["setup_estand_img_url"])
+            if bot_state.get("setup_crosspost_img_url"):
+                embed.set_thumbnail(url=bot_state["setup_crosspost_img_url"])
             await interaction2.response.edit_message(embed=embed, view=SetupCrossPostView())
 
     return EstateForumSelect()
@@ -2735,11 +2735,14 @@ class SetupNoForumView(discord.ui.View):
         if not forum_channels:
             await interaction.response.send_message("⚠️ Still no forum channels found. Create one first.", ephemeral=True)
             return
-        await interaction.response.edit_message(embed=discord.Embed(
+        _embed = discord.Embed(
             title="🏪 Estand Marketplace — Buy & Sell Militaria",
             description="Which **forum channel** should be your Estand marketplace?",
             color=discord.Color.dark_gold()
-        ), view=SetupStep3EstateView())
+        )
+        if bot_state.get("setup_estand_img_url"):
+            _embed.set_thumbnail(url=bot_state["setup_estand_img_url"])
+        await interaction.response.edit_message(embed=_embed, view=SetupStep3EstateView())
 
     @discord.ui.button(label="❌ Skip Estate", style=discord.ButtonStyle.secondary, custom_id="setup_no_forum_skip")
     async def skip(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -2909,7 +2912,7 @@ async def setup_cmd(interaction: discord.Interaction):
                 )
 
                 embed3 = discord.Embed(
-                    title="🏪 Estate Marketplace — Buy & Sell Militaria",
+                    title="🏪 Estand Marketplace — Buy & Sell Militaria",
                     description=(
                         "\n".join(results) + "\n\n"
                         "**Turn your server into a trusted militaria marketplace!** 🏪\n\n"
@@ -2922,6 +2925,8 @@ async def setup_cmd(interaction: discord.Interaction):
                     ),
                     color=discord.Color.dark_gold()
                 )
+                if bot_state.get("setup_estand_img_url"):
+                    embed3.set_thumbnail(url=bot_state["setup_estand_img_url"])
                 await interaction2.edit_original_response(embed=embed3, view=SetupStep3EstateView())
 
             except discord.Forbidden:
@@ -2965,7 +2970,7 @@ async def setup_cmd(interaction: discord.Interaction):
                             result = "✅ Found existing **#adrian-updates**"
                         await db_save_server_config(str(interaction3.guild_id), updates_channel_id=str(updates_channel.id))
                         embed3 = discord.Embed(
-                            title="🏪 Estate Marketplace — Buy & Sell Militaria",
+                            title="🏪 Estand Marketplace — Buy & Sell Militaria",
                             description=(
                                 result + "\n\n"
                                 "**Turn your server into a trusted militaria marketplace!** 🏪\n\n"
@@ -2978,6 +2983,8 @@ async def setup_cmd(interaction: discord.Interaction):
                             ),
                             color=discord.Color.dark_gold()
                         )
+                        if bot_state.get("setup_estand_img_url"):
+                            embed3.set_thumbnail(url=bot_state["setup_estand_img_url"])
                         if bot_state.get("setup_q2_img_url"):
                             embed3.set_thumbnail(url=bot_state["setup_q2_img_url"])
                         await interaction3.edit_original_response(embed=embed3, view=SetupStep3EstateView())
@@ -2996,7 +3003,7 @@ async def setup_cmd(interaction: discord.Interaction):
                     updates_channel = interaction3.guild.get_channel(updates_channel_id)
                     await db_save_server_config(str(interaction3.guild_id), updates_channel_id=str(updates_channel_id))
                     embed3 = discord.Embed(
-                        title="🏪 Estate Marketplace — Buy & Sell Militaria",
+                        title="🏪 Estand Marketplace — Buy & Sell Militaria",
                         description=(
                             f"✅ Commands: {commands_channel.mention} | Updates: {updates_channel.mention}\n\n"
                             "**Turn your server into a trusted militaria marketplace!** 🏪\n\n"
@@ -3009,6 +3016,8 @@ async def setup_cmd(interaction: discord.Interaction):
                         ),
                         color=discord.Color.dark_gold()
                     )
+                    if bot_state.get("setup_estand_img_url"):
+                        embed3.set_thumbnail(url=bot_state["setup_estand_img_url"])
                     await interaction3.response.edit_message(embed=embed3, view=SetupStep3EstateView())
 
             embed2 = discord.Embed(
@@ -4754,7 +4763,7 @@ async def on_ready():
     try:
         img_host_channel = client.get_channel(IMAGE_HOST_CHANNEL_ID)
         if img_host_channel:
-            for q_file, key in [("adrian/adrain_1st_question.png", "question1_img_url"), ("adrian/adrain_2nd_question.png", "question2_img_url"), ("adrian/adrain_3rd_question.png", "question3_img_url"), ("adrian/adrain_4th_question.png", "question4_img_url"), ("adrian/adrain_5th_question.png", "question5_img_url"), ("adrian/thank_you_please_buy.png", "thankyou_img_url"), ("adrian/adrain_check_before_buy.png", "check_before_buy_img_url"), ("adrian/setup_1.png", "setup_img_url"), ("adrian/step_1_thumbnails.png", "setup_q1_img_url"), ("adrian/setup_2.png", "setup_q2_img_url"), ("adrian/setup_end.png", "setup_end_img_url"), ("adrian/adrain_stop.png", "setup_stop_img_url"), ("adrian/adrain_estand.png", "setup_estand_img_url"), ("adrian/404.png", "error_404_img_url")]:
+            for q_file, key in [("adrian/adrain_1st_question.png", "question1_img_url"), ("adrian/adrain_2nd_question.png", "question2_img_url"), ("adrian/adrain_3rd_question.png", "question3_img_url"), ("adrian/adrain_4th_question.png", "question4_img_url"), ("adrian/adrain_5th_question.png", "question5_img_url"), ("adrian/thank_you_please_buy.png", "thankyou_img_url"), ("adrian/adrain_check_before_buy.png", "check_before_buy_img_url"), ("adrian/setup_1.png", "setup_img_url"), ("adrian/step_1_thumbnails.png", "setup_q1_img_url"), ("adrian/setup_2.png", "setup_q2_img_url"), ("adrian/setup_end.png", "setup_end_img_url"), ("adrian/adrain_stop.png", "setup_stop_img_url"), ("adrian/adrain_estand.png", "setup_estand_img_url"), ("adrian/adrain_cross_platform.png", "setup_crosspost_img_url"), ("adrian/404.png", "error_404_img_url")]:
                 path = os.path.join(SCRIPT_DIR, "logos", q_file)
                 if os.path.exists(path):
                     msg = await img_host_channel.send(file=discord.File(path, filename=q_file))
