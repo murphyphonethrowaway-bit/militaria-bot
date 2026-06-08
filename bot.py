@@ -156,6 +156,8 @@ USMF_CHANNEL_ID = 1513271593273655387  # #adrian — test server
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
+intents.guilds = True
+intents.guild_messages = True
 
 class MilitariaBot(discord.Client):
     def __init__(self):
