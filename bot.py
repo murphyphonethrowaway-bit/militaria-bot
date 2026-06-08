@@ -272,6 +272,7 @@ class MilitariaBot(discord.Client):
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS user_preferences (
                     user_id TEXT PRIMARY KEY,
+                    estand_agreed INTEGER DEFAULT 0,
                     region TEXT DEFAULT 'both',
                     eras TEXT DEFAULT '',
                     updated_at BIGINT NOT NULL
@@ -323,6 +324,14 @@ class MilitariaBot(discord.Client):
                 logger.debug(f"[Silent] {_e}")
             try:
                 await conn.execute("ALTER TABLE server_config ADD COLUMN welcome_message_id TEXT")
+            except Exception:
+                pass
+            try:
+                await conn.execute("ALTER TABLE server_config ADD COLUMN estand_verified_role_id TEXT")
+            except Exception:
+                pass
+            try:
+                await conn.execute("ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS estand_agreed INTEGER DEFAULT 0")
             except Exception:
                 pass  # Column already exists
 
@@ -392,6 +401,7 @@ class MilitariaBot(discord.Client):
                     premium INTEGER DEFAULT 0,
                     view_all_channels INTEGER DEFAULT 0,
                     welcome_message_id TEXT,
+                    estand_verified_role_id TEXT,
                     image_cache_version INTEGER DEFAULT 0,
                     created_at BIGINT NOT NULL
                 )
@@ -1693,14 +1703,15 @@ async def cross_post_listing(thread, seller, starter_message=None):
                 )
 
                 # Add contact seller button with visible embed
-                contact_embed = discord.Embed(
-                    description="💬 Interested in this item? Click the button below to contact the seller directly via DM.",
+                mirror_embed_buttons = discord.Embed(
+                    title="🏪 Estand Listing",
+                    description="Use the buttons below to check the seller\'s profile, make an offer, or contact the seller.",
                     color=discord.Color.dark_gold()
                 )
-                contact_embed.set_footer(text="Adrian — Estand Marketplace | All negotiations happen via DM")
+                mirror_embed_buttons.set_footer(text="Adrian — Estand Marketplace")
                 await mirror_thread.send(
-                    embed=contact_embed,
-                    view=ContactSellerView(str(seller.id), None, thread.name, guild_name, str(thread.id))
+                    embed=mirror_embed_buttons,
+                    view=SellerProfileView(str(seller.id))
                 )
 
                 mirror_count += 1
@@ -2708,6 +2719,43 @@ class SellerProfileView(discord.ui.View):
                         class OwnerReportView(discord.ui.View):
                             def __init__(self):
                                 super().__init__(timeout=None)
+
+                            @discord.ui.button(label="⚠️ Warn Reporter", style=discord.ButtonStyle.secondary)
+                            async def warn_reporter(self3, interaction3: discord.Interaction, b: discord.ui.Button):
+                                class WarnModal(discord.ui.Modal, title="Send Warning to Reporter"):
+                                    custom_msg = discord.ui.TextInput(
+                                        label="Custom message (optional)",
+                                        style=discord.TextStyle.paragraph,
+                                        placeholder="Add a custom note or leave blank for default message...",
+                                        required=False,
+                                        max_length=500
+                                    )
+                                    async def on_submit(self4, interaction4: discord.Interaction):
+                                        try:
+                                            default_msg = "We have reviewed your report. At this time, no action will be taken because the server guidelines have not been violated."
+                                            final_msg = self4.custom_msg.value if self4.custom_msg.value else default_msg
+                                            warn_embed = discord.Embed(
+                                                title="⚠️ Report Review",
+                                                description=final_msg,
+                                                color=discord.Color.orange(),
+                                                timestamp=datetime.now(timezone.utc)
+                                            )
+                                            warn_embed.add_field(name="Server", value=guild.name if guild else "Unknown", inline=True)
+                                            warn_embed.set_footer(text="Adrian — Estand Marketplace")
+                                            await reporter.send(embed=warn_embed)
+                                            # Log warning on reporter's profile
+                                            await db_add_user_warning(
+                                                str(reporter.id),
+                                                f"False/invalid report: {listing_name}. {final_msg}",
+                                                warning_type="report_abuse",
+                                                issued_by=str(interaction4.user.id),
+                                                guild_id=str(guild.id) if guild else None
+                                            )
+                                            await interaction4.response.send_message("✅ Warning sent to reporter and logged on their profile.", ephemeral=True)
+                                            logger.info(f"[Report] Warning issued to reporter {reporter.id} by {interaction4.user.id}")
+                                        except discord.Forbidden:
+                                            await interaction4.response.send_message("⚠️ Could not DM the reporter.", ephemeral=True)
+                                await interaction3.response.send_modal(WarnModal())
 
                             @discord.ui.button(label="🗑️ Delete from my Estand", style=discord.ButtonStyle.danger)
                             async def delete_listing(self3, interaction3: discord.Interaction, b: discord.ui.Button):
@@ -3926,7 +3974,54 @@ async def setup_cmd(interaction: discord.Interaction):
     logger.info(f"[Setup] /setup started by {interaction.user} in {interaction.guild.name} ({interaction.guild_id})")
     await db_save_server_config(str(interaction.guild_id), guild_name=interaction.guild.name, owner_id=str(interaction.guild.owner_id))
 
-    # Build step 1 embed
+    # Build rules step (Step 0 — shown first)
+    rules_embed = discord.Embed(
+        title="📋 Before We Begin — Server Owner Agreement",
+        description=(
+            f"Welcome to **Adrian**! Before setting up, please read and agree to the following rules.\n\n"
+            "**As a server owner using Adrian\'s Estand Marketplace, you agree to:**\n\n"
+            "⚖️ **Moderate your Estand** — You are responsible for listings posted on your server. Remove fraudulent or rule-breaking listings promptly.\n\n"
+            "🚫 **No prohibited items** — Illegal items, stolen goods, or items prohibited by Discord\'s ToS are not allowed.\n\n"
+            "🛡️ **Protect your members** — Act on reports of scammers or bad actors promptly. Adrian provides tools — enforcement is your responsibility.\n\n"
+            "📊 **Reputation integrity** — Do not manipulate ratings or reviews. Abuse of the reputation system will result in removal from the Adrian network.\n\n"
+            "🌐 **Cross-posting responsibility** — If you accept cross-posts, you are responsible for those listings appearing on your server.\n\n"
+            "🔧 **Bot permissions** — Adrian requires certain permissions to function. Do not restrict the bot\'s access in ways that break its features.\n\n"
+            "By clicking **I Agree**, you confirm you have read and will abide by these rules."
+        ),
+        color=discord.Color.dark_gold()
+    )
+    if bot_state.get("setup_q1_img_url"):
+        rules_embed.set_thumbnail(url=bot_state["setup_q1_img_url"])
+    rules_embed.set_footer(text="Adrian — Server Owner Agreement")
+
+    class SetupRulesView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=300)
+
+        @discord.ui.button(label="✅ I Agree — Let's Set Up", style=discord.ButtonStyle.success)
+        async def agree(self, interaction2: discord.Interaction, button: discord.ui.Button):
+            await interaction2.response.defer(ephemeral=True)
+            logger.info(f"[Setup] {interaction2.user} agreed to server owner rules in {interaction2.guild.name}")
+            # Proceed to step 1 — commands channel
+            await _show_setup_step1(interaction2)
+
+        @discord.ui.button(label="❌ Cancel Setup", style=discord.ButtonStyle.danger)
+        async def cancel(self, interaction2: discord.Interaction, button: discord.ui.Button):
+            await interaction2.response.edit_message(
+                embed=discord.Embed(
+                    title="Setup Cancelled",
+                    description="No problem! Run `/setup` again whenever you\'re ready.",
+                    color=discord.Color.red()
+                ),
+                view=None
+            )
+
+    await interaction.response.send_message(embed=rules_embed, view=SetupRulesView(), ephemeral=True)
+    return
+
+    # Build step 1 embed — also called from SetupRulesView after agreement
+
+async def _show_setup_step1(interaction):
     single_embed = discord.Embed(
         title="👋 Hey! I\'m Adrian — Discord\'s #1 Militaria Bot",
         description=(
@@ -4112,7 +4207,7 @@ async def setup_cmd(interaction: discord.Interaction):
                 embed2.set_thumbnail(url=bot_state["setup_q2_img_url"])
             await interaction2.response.edit_message(embed=embed2, view=UpdatesChannelSelect())
 
-    await interaction.response.send_message(embed=single_embed, view=CommandsChannelSelect(), ephemeral=True)
+    await interaction.edit_original_response(embed=single_embed, view=CommandsChannelSelect())
 
 
 async def complete_setup(interaction):
@@ -4141,6 +4236,22 @@ async def complete_setup(interaction):
             results.append(f"⚠️ Could not create Adrian Verified role: {e}")
     else:
         results.append("✅ **Adrian Verified** role already exists")
+
+    # Create Estand Verified role
+    estand_verified_role = discord.utils.get(guild.roles, name="Estand Verified")
+    if not estand_verified_role:
+        try:
+            estand_verified_role = await guild.create_role(
+                name="Estand Verified",
+                color=discord.Color.green(),
+                reason="Created by Adrian setup — grants access to Estand marketplace"
+            )
+            results.append("✅ Created **Estand Verified** role")
+            await db_save_server_config(str(guild.id), estand_verified_role_id=str(estand_verified_role.id))
+        except Exception as e:
+            results.append(f"⚠️ Could not create Estand Verified role: {e}")
+    else:
+        results.append("✅ **Estand Verified** role already exists")
 
     # Create Guerrilla Warfare role
     gw_role = discord.utils.get(guild.roles, name="Guerrilla Warfare")
@@ -4453,8 +4564,70 @@ async def start_cmd(interaction: discord.Interaction):
         await interaction.response.send_message(f"⏳ Please wait {remaining}s before using `/start` again.", ephemeral=True)
         return
     existing = await db_get_user_region(str(interaction.user.id))
-    region_str = {"NA": "🇺🇸 North America Only", "EU": "🇪🇺 Europe Only", "both": "🌍 All Dealers"}.get(existing, "Not set yet")
 
+    # Check if user has already agreed to Estand rules
+    async with client.db.acquire() as conn:
+        rules_row = await conn.fetchrow("SELECT estand_agreed FROM user_preferences WHERE user_id=$1", str(interaction.user.id))
+        estand_agreed = rules_row["estand_agreed"] if rules_row and "estand_agreed" in rules_row else None
+
+    if not estand_agreed:
+        # Show Estand rules agreement first
+        rules_embed = discord.Embed(
+            title="📋 Estand Marketplace Rules",
+            description=(
+                "Before creating your collector profile, please read and agree to the **Estand Marketplace Rules**:\n\n"
+                "🤝 **Honest listings** — Accurately describe items including condition, provenance and any known issues.\n\n"
+                "🚫 **No prohibited items** — Illegal items, stolen goods, or items banned by Discord\'s ToS are strictly prohibited.\n\n"
+                "💬 **Respectful communication** — Treat all buyers and sellers with respect. Harassment will not be tolerated.\n\n"
+                "⭐ **Complete your transactions** — If you agree to a sale, follow through. Backing out repeatedly will affect your reputation.\n\n"
+                "🛡️ **No scamming** — Fraud, fake items, or misrepresentation will result in a permanent ban from the Adrian network.\n\n"
+                "📊 **Honest reviews** — Only leave reviews for transactions you actually completed. Fake reviews are prohibited.\n\n"
+                "By clicking **I Agree**, you confirm you have read and will follow these rules."
+            ),
+            color=discord.Color.dark_gold()
+        )
+        rules_embed.set_footer(text="Adrian — Estand Marketplace Rules")
+
+        class EstandRulesView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=300)
+
+            @discord.ui.button(label="✅ I Agree", style=discord.ButtonStyle.success)
+            async def agree(self2, interaction2: discord.Interaction, button: discord.ui.Button):
+                await interaction2.response.defer(ephemeral=True)
+                # Save agreement
+                try:
+                    async with client.db.acquire() as conn2:
+                        await conn2.execute(
+                            "INSERT INTO user_preferences (user_id, estand_agreed) VALUES ($1, 1) ON CONFLICT (user_id) DO UPDATE SET estand_agreed=1",
+                            str(interaction2.user.id)
+                        )
+                except Exception:
+                    pass
+                logger.info(f"[Start] {interaction2.user} agreed to Estand rules")
+                # Proceed to onboarding
+                await _show_start_onboarding(interaction2)
+
+            @discord.ui.button(label="❌ Decline", style=discord.ButtonStyle.danger)
+            async def decline(self2, interaction2: discord.Interaction, button: discord.ui.Button):
+                await interaction2.response.edit_message(
+                    embed=discord.Embed(
+                        title="No problem!",
+                        description="You can run `/start` again whenever you\'re ready to join the Estand marketplace.",
+                        color=discord.Color.red()
+                    ),
+                    view=None
+                )
+
+        await interaction.response.send_message(embed=rules_embed, view=EstandRulesView(), ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    await _show_start_onboarding(interaction)
+
+async def _show_start_onboarding(interaction):
+    existing = await db_get_user_region(str(interaction.user.id))
+    region_str = {"NA": "🇺🇸 North America Only", "EU": "🇪🇺 Europe Only", "both": "🌍 All Dealers"}.get(existing, "Not set yet")
     embeds = []
     if bot_state.get("question1_img_url"):
         img_embed = discord.Embed(color=discord.Color.dark_gold())
@@ -4464,9 +4637,9 @@ async def start_cmd(interaction: discord.Interaction):
     if existing:
         description += f"\n\n**Current Setting:** {region_str}"
     text_embed = discord.Embed(description=description, color=discord.Color.dark_gold())
-    text_embed.set_footer(text="Adrian — Discord's #1 Militaria Bot")
+    text_embed.set_footer(text="Adrian — Discord\'s #1 Militaria Bot")
     embeds.append(text_embed)
-    await interaction.response.send_message(embeds=embeds, view=RegionSelectView(), ephemeral=True)
+    await interaction.edit_original_response(embeds=embeds, view=RegionSelectView())
 
 @client.tree.command(name="settings", description="Update your notification preferences")
 async def settings_cmd(interaction: discord.Interaction):
