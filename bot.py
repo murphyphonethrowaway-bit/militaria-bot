@@ -2522,60 +2522,15 @@ class RegionSelectView(discord.ui.View):
 
 # ==================== SETUP FLOW VIEWS ====================
 
-
-
-class SetupPermissionsView(discord.ui.View):
-    """Ask server owner to grant View All Channels permission."""
+class SetupStep3EstateView(discord.ui.View):
+    """Step 3 — Estate marketplace pitch."""
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="✅ Yes — I'll grant View All Channels", style=discord.ButtonStyle.success, custom_id="setup_perms_yes")
-    async def perms_yes(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await db_save_server_config(str(interaction.guild_id), view_all_channels=1)
-        embed = discord.Embed(
-            title="🏪 Estate Marketplace — Buy & Sell Militaria",
-            description=(
-                "✅ Got it — thank you!\n\n"
-                "**Turn your server into a trusted militaria marketplace!** 🏪\n\n"
-                "🔍 **Seller profiles** — buyers check seller ratings before purchasing\n"
-                "⭐ **Reputation system** — every transaction builds a global trust score\n"
-                "🌐 **Cross-server listings** — sellers reach buyers across ALL Adrian servers\n"
-                "🛡️ **Scam protection** — warning flags follow bad actors everywhere\n"
-                "📊 **Transaction history** — full record of every completed sale\n\n"
-                "It's completely free and takes 30 seconds to set up."
-            ),
-            color=discord.Color.dark_gold()
-        )
-        await interaction.response.edit_message(embed=embed, view=SetupEstateView())
-
-    @discord.ui.button(label="❌ No — Keep permissions as is", style=discord.ButtonStyle.secondary, custom_id="setup_perms_no")
-    async def perms_no(self, interaction: discord.Interaction, button: discord.ui.Button):
-        embed = discord.Embed(
-            title="🏪 Estate Marketplace — Buy & Sell Militaria",
-            description=(
-                "No problem — I'll work with the channels I can see.\n\n"
-                "**Turn your server into a trusted militaria marketplace!** 🏪\n\n"
-                "🔍 **Seller profiles** — buyers check seller ratings before purchasing\n"
-                "⭐ **Reputation system** — every transaction builds a global trust score\n"
-                "🌐 **Cross-server listings** — sellers reach buyers across ALL Adrian servers\n"
-                "🛡️ **Scam protection** — warning flags follow bad actors everywhere\n\n"
-                "It's completely free and takes 30 seconds to set up."
-            ),
-            color=discord.Color.dark_gold()
-        )
-        await interaction.response.edit_message(embed=embed, view=SetupEstateView())
-
-class SetupEstateView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="✅ Yes — Add the Marketplace", style=discord.ButtonStyle.success, custom_id="setup_estate_yes")
+    @discord.ui.button(label="✅ Yes — Add the Marketplace", style=discord.ButtonStyle.success, custom_id="setup_s3_yes")
     async def yes(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Check if server has any forum channels
         forum_channels = [c for c in interaction.guild.channels if isinstance(c, discord.ForumChannel)]
-
         if not forum_channels:
-            # No forum channels exist — inform them
             embed = discord.Embed(
                 title="⚠️ Forum Channel Required",
                 description=(
@@ -2585,17 +2540,16 @@ class SetupEstateView(discord.ui.View):
                     "2. Click **Channels** → **New Channel**\n"
                     "3. Select **Forum** as the channel type\n"
                     "4. Name it something like `#estate` or `#marketplace`\n"
-                    "5. Run `/setup` again once it\'s created\n\n"
-                    "Forum channels let members create individual posts for each listing, making it much easier to buy and sell."
+                    "5. Click the button below once it\'s created\n\n"
+                    "Forum channels let members create individual posts for each listing."
                 ),
                 color=discord.Color.orange()
             )
             await interaction.response.edit_message(embed=embed, view=SetupNoForumView())
             return
 
-        # Forum channels exist — show dropdown to pick one
         forum_options = [
-            discord.SelectOption(label=f"#{c.name}", value=str(c.id))
+            discord.SelectOption(label=f"#{c.name}"[:100], value=str(c.id))
             for c in sorted(forum_channels, key=lambda x: x.position)
         ][:25]
 
@@ -2604,15 +2558,12 @@ class SetupEstateView(discord.ui.View):
                 super().__init__(timeout=300)
 
             @discord.ui.button(label="🚀 Auto-create Estate channel for me", style=discord.ButtonStyle.success, row=0)
-            async def auto_create_estate(self, interaction2: discord.Interaction, button: discord.ui.Button):
+            async def auto_create(self, interaction2: discord.Interaction, button: discord.ui.Button):
                 try:
                     await interaction2.response.defer(ephemeral=True)
                     guild = interaction2.guild
-
-                    # Create the forum channel
                     estate_channel = discord.utils.get(guild.forums, name="estate")
                     if not estate_channel:
-                        # Create tags first
                         tags = [
                             discord.ForumTag(name="Active", emoji=discord.PartialEmoji(name="🟢")),
                             discord.ForumTag(name="Sold", emoji=discord.PartialEmoji(name="🔴")),
@@ -2621,36 +2572,26 @@ class SetupEstateView(discord.ui.View):
                         ]
                         estate_channel = await guild.create_forum(
                             name="estate",
-                            topic="Buy and sell militaria with verified members. Use /start to create your profile and build your reputation.",
+                            topic="Buy and sell militaria with verified members. Use /start to create your profile.",
                             available_tags=tags,
                             reason="Created by Adrian setup"
                         )
-                        result = "✅ Created **#estate** forum channel with tags: 🟢 Active, 🔴 Sold, 🟡 On Hold, 🌐 Cross-Posted"
+                        result = "✅ Created **#estate** with tags: 🟢 Active, 🔴 Sold, 🟡 On Hold, 🌐 Cross-Posted"
                     else:
                         result = "✅ Found existing **#estate** forum channel"
 
-                    # Save sold tag ID if we can find it
                     sold_tag = next((t for t in estate_channel.available_tags if t.name.lower() == "sold"), None)
-                    if sold_tag:
-                        await db_save_server_config(
-                            str(interaction2.guild_id),
-                            estate_channel_id=str(estate_channel.id),
-                            estate_sold_tag_id=str(sold_tag.id),
-                            estate_name="Estate"
-                        )
-                    else:
-                        await db_save_server_config(
-                            str(interaction2.guild_id),
-                            estate_channel_id=str(estate_channel.id),
-                            estate_name="Estate"
-                        )
-
+                    await db_save_server_config(
+                        str(interaction2.guild_id),
+                        estate_channel_id=str(estate_channel.id),
+                        estate_sold_tag_id=str(sold_tag.id) if sold_tag else None,
+                        estate_name="Estate"
+                    )
                     embed = discord.Embed(
-                        title="⚙️ Almost Done — Cross-Server Listings",
+                        title="🏪 Estate Marketplace — Buy & Sell Militaria",
                         description=(
                             result + "\n\n"
                             "Do you want to **accept cross-posted listings** from other Adrian servers?\n\n"
-                            "When enabled, sellers from other militaria communities can post their items directly in your estate channel.\n\n"
                             "📈 **More listings** — your members see a wider selection\n"
                             "🤝 **Community growth** — builds connections between servers\n"
                             "🆓 **Completely free**"
@@ -2658,15 +2599,12 @@ class SetupEstateView(discord.ui.View):
                         color=discord.Color.dark_gold()
                     )
                     await interaction2.edit_original_response(embed=embed, view=SetupCrossPostView())
-
                 except discord.Forbidden:
-                    await interaction2.edit_original_response(
-                        embed=discord.Embed(
-                            title="⚠️ Missing Permissions",
-                            description="I don't have permission to create channels. Please give me **Manage Channels** permission and try again, or select an existing forum channel below.",
-                            color=discord.Color.red()
-                        )
-                    )
+                    await interaction2.edit_original_response(embed=discord.Embed(
+                        title="⚠️ Missing Permissions",
+                        description="I don\'t have permission to create channels. Please give me **Manage Channels** permission and try again.",
+                        color=discord.Color.red()
+                    ))
                 except Exception as e:
                     logger.error(f"[Setup] Auto-create estate error: {e}\n{traceback.format_exc()}")
 
@@ -2674,19 +2612,18 @@ class SetupEstateView(discord.ui.View):
             async def select_forum(self, interaction2: discord.Interaction, select: discord.ui.Select):
                 estate_channel_id = int(select.values[0])
                 estate_channel = interaction2.guild.get_channel(estate_channel_id)
-                # Try to find sold tag automatically
                 sold_tag = next((t for t in estate_channel.available_tags if t.name.lower() == "sold"), None) if hasattr(estate_channel, "available_tags") else None
-                if sold_tag:
-                    await db_save_server_config(str(interaction2.guild_id), estate_channel_id=str(estate_channel_id), estate_sold_tag_id=str(sold_tag.id), estate_name=estate_channel.name)
-                else:
-                    await db_save_server_config(str(interaction2.guild_id), estate_channel_id=str(estate_channel_id), estate_name=estate_channel.name)
-
+                await db_save_server_config(
+                    str(interaction2.guild_id),
+                    estate_channel_id=str(estate_channel_id),
+                    estate_sold_tag_id=str(sold_tag.id) if sold_tag else None,
+                    estate_name=estate_channel.name
+                )
                 embed = discord.Embed(
-                    title="⚙️ Almost Done — Cross-Server Listings",
+                    title="🏪 Estate Marketplace — Buy & Sell Militaria",
                     description=(
                         f"✅ Estate channel set to {estate_channel.mention}\n\n"
                         "Do you want to **accept cross-posted listings** from other Adrian servers?\n\n"
-                        "When enabled, sellers from other militaria communities can post their items directly in your estate channel.\n\n"
                         "📈 **More listings** — your members see a wider selection\n"
                         "🤝 **Community growth** — builds connections between servers\n"
                         "🆓 **Completely free**"
@@ -2696,204 +2633,143 @@ class SetupEstateView(discord.ui.View):
                 await interaction2.response.edit_message(embed=embed, view=SetupCrossPostView())
 
         embed = discord.Embed(
-            title="⚙️ Select Your Estate Channel",
+            title="🏪 Estate Marketplace — Buy & Sell Militaria",
             description=(
                 "Which **forum channel** should be your estate marketplace?\n\n"
-                "🚀 **Let me create one** — I'll set up the channel with the right tags automatically\n"
+                "🚀 **Let me create one** — I\'ll set up the channel with the right tags automatically\n"
                 "📋 **Pick an existing one** — select from the dropdown below"
             ),
             color=discord.Color.dark_gold()
         )
         await interaction.response.edit_message(embed=embed, view=EstateForumSelect())
-    @discord.ui.button(label="❌ No Thanks", style=discord.ButtonStyle.secondary, custom_id="setup_estate_no")
+
+    @discord.ui.button(label="❌ No Thanks", style=discord.ButtonStyle.secondary, custom_id="setup_s3_no")
     async def no(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await db_save_server_config(str(interaction.guild_id), setup_complete=1)
-        await complete_setup(interaction)
+        await db_save_server_config(str(interaction.guild_id), setup_complete=0)
+        await _show_permissions_step(interaction)
+
 
 class SetupNoForumView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="✅ I created one — go back", style=discord.ButtonStyle.success, custom_id="setup_no_forum_retry")
+    @discord.ui.button(label="✅ I created one — continue", style=discord.ButtonStyle.success, custom_id="setup_no_forum_retry")
     async def retry(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Re-trigger the estate yes flow
         forum_channels = [c for c in interaction.guild.channels if isinstance(c, discord.ForumChannel)]
         if not forum_channels:
-            await interaction.response.send_message("⚠️ Still no forum channels found. Create one in Discord first then click the button again.", ephemeral=True)
+            await interaction.response.send_message("⚠️ Still no forum channels found. Create one first.", ephemeral=True)
             return
         await interaction.response.edit_message(embed=discord.Embed(
-            title="⚙️ Select Your Estate Channel",
+            title="🏪 Estate Marketplace — Buy & Sell Militaria",
             description="Which **forum channel** should be your estate marketplace?",
             color=discord.Color.dark_gold()
-        ), view=SetupEstateView())
+        ), view=SetupStep3EstateView())
 
     @discord.ui.button(label="❌ Skip Estate", style=discord.ButtonStyle.secondary, custom_id="setup_no_forum_skip")
     async def skip(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await db_save_server_config(str(interaction.guild_id), setup_complete=1)
-        await complete_setup(interaction)
+        await _show_permissions_step(interaction)
 
 
 class SetupCrossPostView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    async def _save(self, interaction, accept):
-        # Find the cross-posts channel if it exists
+    async def _save_and_continue(self, interaction, accept):
         cross_channel = discord.utils.get(interaction.guild.channels, name="estate-cross-posts")
         if cross_channel:
-            await db_save_server_config(
-                str(interaction.guild_id),
-                accept_cross_posts=accept,
-                estate_cross_posts_channel_id=str(cross_channel.id),
-                setup_complete=1
-            )
+            await db_save_server_config(str(interaction.guild_id), accept_cross_posts=accept, estate_cross_posts_channel_id=str(cross_channel.id))
         else:
-            await db_save_server_config(str(interaction.guild_id), accept_cross_posts=accept, setup_complete=1)
-        await complete_setup(interaction)
-
+            await db_save_server_config(str(interaction.guild_id), accept_cross_posts=accept)
+        await _show_permissions_step(interaction)
 
     @discord.ui.button(label="✅ Yes — Accept Cross-Posts", style=discord.ButtonStyle.success, custom_id="setup_crosspost_yes")
-    async def yes(self, i, b): await self._save(i, 1)
-    @discord.ui.button(label="❌ No — Local Only", style=discord.ButtonStyle.danger, custom_id="setup_crosspost_no")
-    async def no(self, i, b): await self._save(i, 0)
+    async def yes(self, i, b): await self._save_and_continue(i, 1)
 
-async def complete_setup(interaction, accept_cross_posts=None):
-    """Handle setup completion — set permissions and post welcome image."""
-    guild = interaction.guild
-    config = await db_get_server_config(str(guild.id))
-    if not config:
-        return
+    @discord.ui.button(label="❌ No — Local Only", style=discord.ButtonStyle.secondary, custom_id="setup_crosspost_no")
+    async def no(self, i, b): await self._save_and_continue(i, 0)
 
-    results = []
 
-    # Get channels and roles
-    commands_channel_id = config.get("channel_id")
-    updates_channel_id = config.get("updates_channel_id")
-    commands_channel = guild.get_channel(int(commands_channel_id)) if commands_channel_id else None
-    updates_channel = guild.get_channel(int(updates_channel_id)) if updates_channel_id else None
-
-    # Find or create Adrian Verified role
-    verified_role = None
-    for role in guild.roles:
-        if role.name == "Adrian Verified":
-            verified_role = role
-            break
-    if not verified_role:
-        try:
-            verified_role = await guild.create_role(
-                name="Adrian Verified",
-                color=discord.Color.blue(),
-                reason="Created by Adrian setup"
-            )
-            results.append("✅ Created **Adrian Verified** role")
-            await db_save_server_config(str(guild.id), verified_role_id=str(verified_role.id))
-        except Exception as e:
-            results.append(f"⚠️ Could not create Adrian Verified role: {e}")
-
-    # Find or create Guerrilla Warfare role
-    gw_role = None
-    for role in guild.roles:
-        if role.name == "Guerrilla Warfare":
-            gw_role = role
-            break
-    if not gw_role:
-        try:
-            gw_role = await guild.create_role(
-                name="Guerrilla Warfare",
-                color=discord.Color.red(),
-                reason="Created by Adrian setup"
-            )
-            results.append("✅ Created **Guerrilla Warfare** role")
-            await db_save_server_config(str(guild.id), guerrilla_role_id=str(gw_role.id))
-        except Exception as e:
-            results.append(f"⚠️ Could not create Guerrilla Warfare role: {e}")
-
-    # Set permissions on commands channel — everyone can see and use
-    if commands_channel and verified_role:
-        try:
-            await commands_channel.set_permissions(guild.default_role, view_channel=True, send_messages=False)
-            await commands_channel.set_permissions(guild.me, view_channel=True, send_messages=True)
-            results.append(f"✅ Set permissions on {commands_channel.mention}")
-        except Exception as e:
-            results.append(f"⚠️ Could not set permissions on commands channel: {e}")
-
-    # Set permissions on updates channel — only Adrian Verified can see
-    if updates_channel and verified_role:
-        try:
-            await updates_channel.set_permissions(guild.default_role, view_channel=False)
-            await updates_channel.set_permissions(verified_role, view_channel=True, send_messages=False)
-            await updates_channel.set_permissions(guild.me, view_channel=True, send_messages=True)
-            results.append(f"✅ Set permissions on {updates_channel.mention} — only **Adrian Verified** members can see it")
-        except Exception as e:
-            results.append(f"⚠️ Could not set permissions on updates channel: {e}")
-
-    # Post welcome image to commands channel
-    if commands_channel:
-        try:
-            welcome_file = os.path.join(SCRIPT_DIR, "logos", "adrian", "Adrian_welcome.png")
-            if os.path.exists(welcome_file):
-                await commands_channel.send(
-                    file=discord.File(welcome_file, filename="Adrian_welcome.png"),
-                    view=WelcomeView()
-                )
-                results.append(f"✅ Posted welcome image to {commands_channel.mention}")
-        except Exception as e:
-            results.append(f"⚠️ Could not post welcome image: {e}")
-
-    results_text = "\n".join(results)
+async def _show_permissions_step(interaction):
+    """Show step 4 — View All Channels permission."""
     embed = discord.Embed(
-        title="🎖️ Adrian is Ready!",
+        title="⚙️ Step 4 of 4 — Permissions",
         description=(
-            f"Setup complete! Here\'s what I did automatically:\n\n"
-            f"{results_text}\n\n"
-            f"**Your members can now type `/start` in {commands_channel.mention if commands_channel else '#adrian'} to create their profile and start receiving alerts!**"
+            "**Can I have permission to View All Channels?**\n\n"
+            "This lets me:\n"
+            "👁️ **Monitor estate listings** across all your channels\n"
+            "🛡️ **Detect scam activity** anywhere in the server\n"
+            "📢 **Mirror community channels** to the Adrian network\n"
+            "🔧 **Troubleshoot issues** without manual intervention\n\n"
+            "If you click **Yes**, I\'ll grant myself View All Channels automatically right now."
         ),
-        color=discord.Color.green()
+        color=discord.Color.dark_gold()
     )
-    embed.set_footer(text="Adrian — Discord\'s #1 Militaria Bot")
-    if bot_state.get("setup_end_img_url"):
-        embed.set_image(url=bot_state["setup_end_img_url"])
-    await interaction.response.edit_message(embed=embed, view=None)
+    if interaction.response.is_done():
+        await interaction.edit_original_response(embed=embed, view=SetupPermissionsView())
+    else:
+        await interaction.response.edit_message(embed=embed, view=SetupPermissionsView())
+
+
+class SetupPermissionsView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="✅ Yes — Grant View All Channels", style=discord.ButtonStyle.success, custom_id="setup_perms_yes")
+    async def perms_yes(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            # Grant bot View All Channels in every channel
+            guild = interaction.guild
+            bot_member = guild.me
+            granted = 0
+            failed = 0
+            for channel in guild.channels:
+                try:
+                    await channel.set_permissions(bot_member, view_channel=True)
+                    granted += 1
+                except Exception:
+                    failed += 1
+            await db_save_server_config(str(interaction.guild_id), view_all_channels=1, setup_complete=1)
+            logger.info(f"[Setup] View All Channels granted on {granted} channels in {guild.name}")
+        except Exception as e:
+            logger.error(f"[Setup] Permissions error: {e}")
+        await complete_setup(interaction)
+
+    @discord.ui.button(label="❌ No — Skip", style=discord.ButtonStyle.secondary, custom_id="setup_perms_no")
+    async def perms_no(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await db_save_server_config(str(interaction.guild_id), setup_complete=1)
+        await complete_setup(interaction)
+
 
 # ==================== SETUP COMMAND ====================
 
 @client.tree.command(name="setup", description="Set up Adrian on your server")
 async def setup_cmd(interaction: discord.Interaction):
-    # Only server owner or admin can run setup
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("🚫 Only server administrators can run `/setup`.", ephemeral=True)
         return
 
     logger.info(f"[Setup] /setup started by {interaction.user} in {interaction.guild.name} ({interaction.guild_id})")
-    # Save basic server info
-    await db_save_server_config(
-        str(interaction.guild_id),
-        guild_name=interaction.guild.name,
-        owner_id=str(interaction.guild.owner_id)
-    )
+    await db_save_server_config(str(interaction.guild_id), guild_name=interaction.guild.name, owner_id=str(interaction.guild.owner_id))
 
-    embeds = []
+    # Build step 1 embed
     single_embed = discord.Embed(
-        title="Hey! I'm Adrian — Discord's #1 Militaria Bot",
+        title="👋 Hey! I\'m Adrian — Discord\'s #1 Militaria Bot",
         description=(
             f"Thanks for adding me to **{interaction.guild.name}**!\n\n"
-            "Here\'s what I\'ll do automatically during setup:\n"
-            "📌 **Assign channels** for commands and dealer alerts\n"
-            "🔒 **Set permissions** — so only the right members see alerts\n"
-            "🎖️ **Create Adrian Verified role** — this is how I build each member a custom profile and personalized dealer feed. Members earn it by completing `/start`\n"
-            "🖼️ **Post the welcome image** in your commands channel\n\n"
-            "You won\'t need to touch any settings — I handle everything.\n\n"
-            "**Step 1 of 3 — Commands Channel**\n"
-            "Pick the channel where members type `/start` and use bot commands.\n"
-            "💡 We suggest naming it `#adrian` — or let me create it for you!"
+            "Here\'s everything I\'m going to set up for you automatically:\n\n"
+            "📬 **Dealer Alert Channels** — dedicated channels so your members never miss a new item drop\n"
+            "🏪 **Estate Marketplace** — a trusted buy & sell system with seller profiles, ratings and scam protection\n"
+            "🎖️ **Adrian Verified Role** — how I build each member a custom profile and personalized alert feed\n"
+            "🔒 **Channel Permissions** — I\'ll lock everything down so only verified members see the right channels\n\n"
+            "**Step 1 of 4 — Commands Channel**\n"
+            "Pick the channel where members type `/start` and interact with me.\n"
+            "💡 We suggest naming it `#adrian` — or hit the button and I\'ll create it for you!"
         ),
         color=discord.Color.dark_gold()
     )
     if bot_state.get("setup_q1_img_url"):
         single_embed.set_thumbnail(url=bot_state["setup_q1_img_url"])
-    elif bot_state.get("setup_img_url"):
-        single_embed.set_thumbnail(url=bot_state["setup_img_url"])
-    embeds.append(single_embed)
+
     text_channels = [c for c in interaction.guild.channels if isinstance(c, discord.TextChannel)]
     commands_options = [
         discord.SelectOption(label=f"#{c.name}"[:100], value=str(c.id))
@@ -2906,13 +2782,11 @@ async def setup_cmd(interaction: discord.Interaction):
 
         @discord.ui.button(label="🚀 Auto-create channels for me", style=discord.ButtonStyle.success, row=0)
         async def auto_create(self, interaction2: discord.Interaction, button: discord.ui.Button):
-            """Auto-create #adrian and #adrian-updates channels with correct permissions."""
             try:
                 await interaction2.response.defer(ephemeral=True)
                 guild = interaction2.guild
                 results = []
 
-                # Create #adrian channel
                 adrian_channel = discord.utils.get(guild.text_channels, name="adrian")
                 if not adrian_channel:
                     adrian_channel = await guild.create_text_channel(
@@ -2924,26 +2798,23 @@ async def setup_cmd(interaction: discord.Interaction):
                 else:
                     results.append("✅ Found existing **#adrian**")
 
-                # Create #adrian-updates channel
                 updates_channel = discord.utils.get(guild.text_channels, name="adrian-updates")
                 if not updates_channel:
                     updates_channel = await guild.create_text_channel(
                         name="adrian-updates",
-                        topic="Dealer alerts and marketplace updates from Adrian.",
+                        topic="New item alerts and marketplace updates from Adrian.",
                         reason="Created by Adrian setup"
                     )
                     results.append("✅ Created **#adrian-updates**")
                 else:
                     results.append("✅ Found existing **#adrian-updates**")
 
-                # Save to config
                 await db_save_server_config(
                     str(guild.id),
                     channel_id=str(adrian_channel.id),
                     updates_channel_id=str(updates_channel.id)
                 )
 
-                # Move straight to estate step
                 embed3 = discord.Embed(
                     title="🏪 Estate Marketplace — Buy & Sell Militaria",
                     description=(
@@ -2958,18 +2829,16 @@ async def setup_cmd(interaction: discord.Interaction):
                     ),
                     color=discord.Color.dark_gold()
                 )
-                await interaction2.edit_original_response(embed=embed3, view=SetupPermissionsView())
+                await interaction2.edit_original_response(embed=embed3, view=SetupStep3EstateView())
 
             except discord.Forbidden:
-                await interaction2.edit_original_response(
-                    embed=discord.Embed(
-                        title="⚠️ Missing Permissions",
-                        description="I don\'t have permission to create channels. Please give me **Manage Channels** permission and try again, or select your channels manually from the dropdown below.",
-                        color=discord.Color.red()
-                    )
-                )
+                await interaction2.edit_original_response(embed=discord.Embed(
+                    title="⚠️ Missing Permissions",
+                    description="I don\'t have permission to create channels. Please give me **Manage Channels** permission and try again, or select channels manually.",
+                    color=discord.Color.red()
+                ))
             except Exception as e:
-                logger.error(f"[Setup] Auto-create channels error: {e}\n{traceback.format_exc()}")
+                logger.error(f"[Setup] Auto-create error: {e}\n{traceback.format_exc()}")
 
         @discord.ui.select(placeholder="Or pick an existing channel...", options=commands_options, row=1)
         async def select_commands(self, interaction2: discord.Interaction, select: discord.ui.Select):
@@ -3012,21 +2881,21 @@ async def setup_cmd(interaction: discord.Interaction):
                                 "🌐 **Cross-server listings** — sellers reach buyers across ALL Adrian servers\n"
                                 "🛡️ **Scam protection** — warning flags follow bad actors everywhere\n"
                                 "📊 **Transaction history** — full record of every completed sale\n\n"
-                                "It's completely free and takes 30 seconds to set up."
+                                "It\'s completely free and takes 30 seconds to set up."
                             ),
                             color=discord.Color.dark_gold()
                         )
-                        await interaction3.edit_original_response(embed=embed3, view=SetupPermissionsView())
+                        if bot_state.get("setup_q2_img_url"):
+                            embed3.set_thumbnail(url=bot_state["setup_q2_img_url"])
+                        await interaction3.edit_original_response(embed=embed3, view=SetupStep3EstateView())
                     except discord.Forbidden:
-                        await interaction3.edit_original_response(
-                            embed=discord.Embed(
-                                title="⚠️ Missing Permissions",
-                                description="I don't have permission to create channels. Please give me **Manage Channels** permission and try again, or select an existing channel from the dropdown.",
-                                color=discord.Color.red()
-                            )
-                        )
+                        await interaction3.edit_original_response(embed=discord.Embed(
+                            title="⚠️ Missing Permissions",
+                            description="I don\'t have permission to create channels.",
+                            color=discord.Color.red()
+                        ))
                     except Exception as e:
-                        logger.error(f"[Setup] Auto-create updates channel error: {e}")
+                        logger.error(f"[Setup] Auto-create updates error: {e}")
 
                 @discord.ui.select(placeholder="Or pick an existing channel...", options=updates_options, row=1)
                 async def select_updates(self, interaction3: discord.Interaction, select2: discord.ui.Select):
@@ -3034,23 +2903,23 @@ async def setup_cmd(interaction: discord.Interaction):
                     updates_channel = interaction3.guild.get_channel(updates_channel_id)
                     await db_save_server_config(str(interaction3.guild_id), updates_channel_id=str(updates_channel_id))
                     embed3 = discord.Embed(
-                        title="⚙️ Step 3 of 4 — Permissions",
+                        title="🏪 Estate Marketplace — Buy & Sell Militaria",
                         description=(
-                            "**Can I have permission to View All Channels?**\n\n"
-                            "This allows me to:\n"
-                            "👁️ **Monitor estate listings** across all your channels\n"
-                            "🛡️ **Detect scam activity** in any channel\n"
-                            "📢 **Mirror community channels** to the Adrian network\n"
-                            "🔧 **Troubleshoot issues** without needing manual intervention\n\n"
-                            "To grant this: **Server Settings → Roles → Adrian → Permissions → View Channels ✅**\n\n"
-                            "This is optional but strongly recommended for the best experience."
+                            f"✅ Commands: {commands_channel.mention} | Updates: {updates_channel.mention}\n\n"
+                            "**Turn your server into a trusted militaria marketplace!** 🏪\n\n"
+                            "🔍 **Seller profiles** — buyers check seller ratings before purchasing\n"
+                            "⭐ **Reputation system** — every transaction builds a global trust score\n"
+                            "🌐 **Cross-server listings** — sellers reach buyers across ALL Adrian servers\n"
+                            "🛡️ **Scam protection** — warning flags follow bad actors everywhere\n"
+                            "📊 **Transaction history** — full record of every completed sale\n\n"
+                            "It\'s completely free and takes 30 seconds to set up."
                         ),
                         color=discord.Color.dark_gold()
                     )
-                    await interaction3.response.edit_message(embed=embed3, view=SetupPermissionsView())
+                    await interaction3.response.edit_message(embed=embed3, view=SetupStep3EstateView())
 
             embed2 = discord.Embed(
-                title="⚙️ Step 2 of 3 — New Item Alerts Channel",
+                title="⚙️ Step 2 of 4 — New Item Alerts Channel",
                 description=(
                     f"✅ Commands channel set to {commands_channel.mention}\n\n"
                     "Which channel should Adrian post **new item alerts** to?\n\n"
@@ -3061,7 +2930,8 @@ async def setup_cmd(interaction: discord.Interaction):
             if bot_state.get("setup_q2_img_url"):
                 embed2.set_thumbnail(url=bot_state["setup_q2_img_url"])
             await interaction2.response.edit_message(embed=embed2, view=UpdatesChannelSelect())
-    await interaction.response.send_message(embeds=embeds, view=CommandsChannelSelect(), ephemeral=True)
+
+    await interaction.response.send_message(embed=single_embed, view=CommandsChannelSelect(), ephemeral=True)
 
 # ==================== OWNER COMMANDS (Murphy only, test server only) ====================
 
@@ -4664,9 +4534,10 @@ async def on_ready():
     client.add_view(BuyerIdentifyView("placeholder", "placeholder"))
     client.add_view(SellerProfileView("placeholder"))
     client.add_view(EstateRatingView("placeholder", "placeholder", "placeholder"))
-    client.add_view(SetupPermissionsView())
-    client.add_view(SetupEstateView())
+    client.add_view(SetupStep3EstateView())
+    client.add_view(SetupNoForumView())
     client.add_view(SetupCrossPostView())
+    client.add_view(SetupPermissionsView())
     client.add_view(WelcomeView())
     logger.info("Persistent views registered.")
 
