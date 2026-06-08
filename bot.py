@@ -3873,6 +3873,10 @@ async def on_guild_remove(guild):
 async def on_message(message):
     """Detect the first message in a forum thread (estate listing) and post check before you buy."""
     try:
+        # Debug — log every message type
+        if not message.author.bot:
+            logger.debug(f"[Message] channel={type(message.channel).__name__} | author={message.author} | content={message.content[:50] if message.content else 'no content'}")
+
         # Only care about threads
         if not isinstance(message.channel, discord.Thread):
             return
@@ -3881,6 +3885,7 @@ async def on_message(message):
             return
         # Only care about forum threads (not regular threads)
         if not isinstance(message.channel.parent, discord.ForumChannel):
+            logger.debug(f"[Estate] Thread parent is {type(message.channel.parent).__name__} not ForumChannel")
             return
 
         thread = message.channel
