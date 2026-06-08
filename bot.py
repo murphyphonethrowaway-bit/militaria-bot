@@ -2933,6 +2933,99 @@ async def setup_cmd(interaction: discord.Interaction):
 
     await interaction.response.send_message(embed=single_embed, view=CommandsChannelSelect(), ephemeral=True)
 
+
+async def complete_setup(interaction):
+    """Handle setup completion — create roles, set permissions, post welcome image."""
+    guild = interaction.guild
+    config = await db_get_server_config(str(guild.id))
+    results = []
+
+    commands_channel_id = get_config_value(config, "channel_id") if config else None
+    updates_channel_id = get_config_value(config, "updates_channel_id") if config else None
+    commands_channel = guild.get_channel(commands_channel_id) if commands_channel_id else None
+    updates_channel = guild.get_channel(updates_channel_id) if updates_channel_id else None
+
+    # Create Adrian Verified role
+    verified_role = discord.utils.get(guild.roles, name="Adrian Verified")
+    if not verified_role:
+        try:
+            verified_role = await guild.create_role(
+                name="Adrian Verified",
+                color=discord.Color.blue(),
+                reason="Created by Adrian setup"
+            )
+            results.append("✅ Created **Adrian Verified** role")
+            await db_save_server_config(str(guild.id), verified_role_id=str(verified_role.id))
+        except Exception as e:
+            results.append(f"⚠️ Could not create Adrian Verified role: {e}")
+    else:
+        results.append("✅ **Adrian Verified** role already exists")
+
+    # Create Guerrilla Warfare role
+    gw_role = discord.utils.get(guild.roles, name="Guerrilla Warfare")
+    if not gw_role:
+        try:
+            gw_role = await guild.create_role(
+                name="Guerrilla Warfare",
+                color=discord.Color.red(),
+                reason="Created by Adrian setup"
+            )
+            results.append("✅ Created **Guerrilla Warfare** role")
+            await db_save_server_config(str(guild.id), guerrilla_role_id=str(gw_role.id))
+        except Exception as e:
+            results.append(f"⚠️ Could not create Guerrilla Warfare role: {e}")
+
+    # Set permissions on commands channel
+    if commands_channel and verified_role:
+        try:
+            await commands_channel.set_permissions(guild.default_role, view_channel=True, send_messages=False)
+            await commands_channel.set_permissions(guild.me, view_channel=True, send_messages=True)
+            results.append(f"✅ Set permissions on {commands_channel.mention}")
+        except Exception as e:
+            results.append(f"⚠️ Could not set permissions on commands channel: {e}")
+
+    # Set permissions on updates channel
+    if updates_channel and verified_role:
+        try:
+            await updates_channel.set_permissions(guild.default_role, view_channel=False)
+            await updates_channel.set_permissions(verified_role, view_channel=True, send_messages=False)
+            await updates_channel.set_permissions(guild.me, view_channel=True, send_messages=True)
+            results.append(f"✅ Set permissions on {updates_channel.mention} — only **Adrian Verified** can see it")
+        except Exception as e:
+            results.append(f"⚠️ Could not set permissions on updates channel: {e}")
+
+    # Post welcome image
+    if commands_channel:
+        try:
+            welcome_file = os.path.join(SCRIPT_DIR, "logos", "adrian", "Adrian_welcome.png")
+            if os.path.exists(welcome_file):
+                await commands_channel.send(
+                    file=discord.File(welcome_file, filename="Adrian_welcome.png"),
+                    view=WelcomeView()
+                )
+                results.append(f"✅ Posted welcome image to {commands_channel.mention}")
+        except Exception as e:
+            results.append(f"⚠️ Could not post welcome image: {e}")
+
+    results_text = "\n".join(results)
+    embed = discord.Embed(
+        title="🎖️ Adrian is Ready!",
+        description=(
+            f"Setup complete! Here's what I did automatically:\n\n"
+            f"{results_text}\n\n"
+            f"**Your members can now type `/start` in {commands_channel.mention if commands_channel else '#adrian'} to create their profile and start receiving alerts!**"
+        ),
+        color=discord.Color.green()
+    )
+    if bot_state.get("setup_end_img_url"):
+        embed.set_image(url=bot_state["setup_end_img_url"])
+    embed.set_footer(text="Adrian — Discord's #1 Militaria Bot")
+
+    try:
+        await interaction.response.edit_message(embed=embed, view=None)
+    except discord.InteractionResponded:
+        await interaction.edit_original_response(embed=embed, view=None)
+
 # ==================== OWNER COMMANDS (Murphy only, test server only) ====================
 
 def is_bot_owner(user):
