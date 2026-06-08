@@ -273,6 +273,7 @@ class MilitariaBot(discord.Client):
                 CREATE TABLE IF NOT EXISTS user_preferences (
                     user_id TEXT PRIMARY KEY,
                     estand_agreed INTEGER DEFAULT 0,
+                    created_at BIGINT DEFAULT 0,
                     region TEXT DEFAULT 'both',
                     eras TEXT DEFAULT '',
                     updated_at BIGINT NOT NULL
@@ -332,6 +333,10 @@ class MilitariaBot(discord.Client):
                 pass
             try:
                 await conn.execute("ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS estand_agreed INTEGER DEFAULT 0")
+            except Exception:
+                pass
+            try:
+                await conn.execute("ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS created_at BIGINT DEFAULT 0")
             except Exception:
                 pass  # Column already exists
 
@@ -1005,9 +1010,13 @@ async def db_get_user_region(user_id):
 
 async def db_set_user_region(user_id, region):
     async with client.db.acquire() as conn:
+        now = int(datetime.now(timezone.utc).timestamp())
         await conn.execute(
-            "INSERT INTO user_preferences (user_id, region, updated_at) VALUES ($1,$2,$3) ON CONFLICT (user_id) DO UPDATE SET region=$2, updated_at=$3",
-            str(user_id), region, int(datetime.now(timezone.utc).timestamp())
+            """INSERT INTO user_preferences (user_id, region, updated_at, created_at)
+               VALUES ($1,$2,$3,$3)
+               ON CONFLICT (user_id) DO UPDATE SET region=$2, updated_at=$3,
+               created_at=COALESCE(NULLIF(user_preferences.created_at, 0), $3)""",
+            str(user_id), region, now
         )
 
 async def db_get_user_eras(user_id):
@@ -1870,6 +1879,57 @@ async def check_gmail_async():
     return triggered
 
 # ==================== BACKGROUND TASKS ====================
+async def onboarding_reminder_task():
+    """Every 24 hours, remind users who started /start but never finished."""
+    await client.wait_until_ready()
+    await asyncio.sleep(3600)  # Wait 1 hour after startup before first check
+    while not client.is_closed():
+        try:
+            logger.info("[Reminder] Running onboarding reminder check")
+            async with client.db.acquire() as conn:
+                # Find users with a row in user_preferences but no region set
+                rows = await conn.fetch(
+                    """SELECT user_id FROM user_preferences
+                       WHERE region IS NULL
+                       AND created_at IS NOT NULL
+                       AND created_at < $1""",
+                    int((datetime.now(timezone.utc).timestamp())) - 86400  # older than 24 hours
+                )
+
+            reminded = 0
+            for row in rows:
+                try:
+                    user = await client.fetch_user(int(row["user_id"]))
+                    if user:
+                        embed = discord.Embed(
+                            title="👋 Hey! You never finished setting up your profile.",
+                            description=(
+                                "You started creating your Adrian collector profile but didn\'t finish!\n\n"
+                                "It only takes 2 minutes and unlocks:\n"
+                                "📬 **Personalized dealer alerts** — only items matching your interests\n"
+                                "🏪 **Estand marketplace** — buy and sell with verified collectors\n"
+                                "⭐ **Global reputation** — build your collector rank across every Adrian server\n\n"
+                                "Head back to the **#adrian** channel on any server and click **👋 Get Started** to finish!"
+                            ),
+                            color=discord.Color.dark_gold()
+                        )
+                        embed.set_footer(text="Adrian — Discord\'s #1 Militaria Bot")
+                        await user.send(embed=embed)
+                        reminded += 1
+                        await asyncio.sleep(1)  # Rate limit
+                except discord.Forbidden:
+                    pass
+                except Exception as e:
+                    logger.debug(f"[Reminder] Could not remind user {row['user_id']}: {e}")
+
+            if reminded > 0:
+                logger.info(f"[Reminder] Sent onboarding reminders to {reminded} user(s)")
+
+        except Exception as e:
+            logger.error(f"[Reminder] Onboarding reminder error: {e}\n{traceback.format_exc()}")
+
+        await asyncio.sleep(86400)  # Run every 24 hours
+
 async def check_all_dealers():
     await client.wait_until_ready()
     while not client.is_closed():
@@ -3608,6 +3668,83 @@ class EraSelectView(discord.ui.View):
 
 # ==================== REGION SELECT VIEW ====================
 
+async def _show_estand_rules(interaction, edit=False):
+    """Show Estand rules agreement — called from both /start and skip path."""
+    rules_embed = discord.Embed(
+        title="📋 Estand Marketplace Rules",
+        description=(
+            "Before accessing the Estand, please read and agree to the **Estand Marketplace Rules**:\n\n"
+            "🤝 **Honest listings** — Accurately describe items including condition, provenance and any known issues.\n\n"
+            "🚫 **No prohibited items** — Illegal items, stolen goods, or items banned by Discord\'s ToS are strictly prohibited.\n\n"
+            "💬 **Respectful communication** — Treat all buyers and sellers with respect. Harassment will not be tolerated.\n\n"
+            "⭐ **Complete your transactions** — If you agree to a sale, follow through. Backing out repeatedly will affect your reputation.\n\n"
+            "🛡️ **No scamming** — Fraud, fake items, or misrepresentation will result in a permanent ban from the Adrian network.\n\n"
+            "📊 **Honest reviews** — Only leave reviews for transactions you actually completed. Fake reviews are prohibited.\n\n"
+            "By clicking **I Agree**, you confirm you have read and will follow these rules."
+        ),
+        color=discord.Color.dark_gold()
+    )
+    rules_embed.set_footer(text="Adrian — Estand Marketplace Rules")
+
+    class EstandRulesView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=300)
+
+        @discord.ui.button(label="✅ I Agree", style=discord.ButtonStyle.success, custom_id="estand_rules_agree")
+        async def agree(self2, interaction2: discord.Interaction, button: discord.ui.Button):
+            await interaction2.response.defer(ephemeral=True)
+            try:
+                async with client.db.acquire() as conn:
+                    await conn.execute(
+                        "INSERT INTO user_preferences (user_id, estand_agreed, created_at) VALUES ($1, 1, $2) ON CONFLICT (user_id) DO UPDATE SET estand_agreed=1",
+                        str(interaction2.user.id), int(datetime.now(timezone.utc).timestamp())
+                    )
+                # Grant Estand Verified role if available
+                if interaction2.guild:
+                    config = await db_get_server_config(str(interaction2.guild.id))
+                    estand_role_id = get_config_value(config, "estand_verified_role_id") if config else None
+                    if estand_role_id:
+                        estand_role = interaction2.guild.get_role(int(estand_role_id))
+                        if estand_role:
+                            member = interaction2.guild.get_member(interaction2.user.id)
+                            if member and estand_role not in member.roles:
+                                await member.add_roles(estand_role, reason="Agreed to Estand rules")
+                                logger.info(f"[Estand] Granted Estand Verified to {interaction2.user} in {interaction2.guild.name}")
+            except Exception as e:
+                logger.error(f"[Estand] Rules agree error: {e}")
+
+            done_embed = discord.Embed(
+                title="✅ Welcome to the Estand!",
+                description=(
+                    "You now have access to the **Estand Marketplace**!\n\n"
+                    "🏪 Browse listings in the Estand channel\n"
+                    "📦 Post your own items for sale\n"
+                    "⭐ Build your buyer and seller reputation\n\n"
+                    "If you\'d like to also receive **dealer alerts**, run `/start` and complete your collector profile."
+                ),
+                color=discord.Color.green()
+            )
+            done_embed.set_footer(text="Adrian — Estand Marketplace")
+            await interaction2.edit_original_response(embed=done_embed, view=None)
+            logger.info(f"[Estand] {interaction2.user} agreed to Estand rules")
+
+        @discord.ui.button(label="❌ Decline", style=discord.ButtonStyle.danger, custom_id="estand_rules_decline")
+        async def decline(self2, interaction2: discord.Interaction, button: discord.ui.Button):
+            await interaction2.response.edit_message(
+                embed=discord.Embed(
+                    title="No problem!",
+                    description="You can run `/start` again whenever you\'re ready to join the Estand marketplace.",
+                    color=discord.Color.red()
+                ),
+                view=None
+            )
+
+    if edit:
+        await interaction.response.edit_message(embed=rules_embed, view=EstandRulesView())
+    else:
+        await interaction.edit_original_response(embed=rules_embed, view=EstandRulesView())
+
+
 class RegionSelectView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -3641,6 +3778,17 @@ class RegionSelectView(discord.ui.View):
             await show_question2(interaction, edit=True)
         except Exception as e:
             logger.error(f"[RegionSelect] Both error: {e}\n{traceback.format_exc()}")
+            try:
+                await interaction.response.send_message("⚠️ Something went wrong. Please try again.", ephemeral=True)
+            except: pass
+
+    @discord.ui.button(label="⏭️ Skip — Just the Estand", style=discord.ButtonStyle.secondary, custom_id="region_select_skip")
+    async def skip_to_estand(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            logger.info(f"[Start] {interaction.user} skipped alerts, going straight to Estand rules")
+            await _show_estand_rules(interaction, edit=True)
+        except Exception as e:
+            logger.error(f"[RegionSelect] Skip error: {e}\n{traceback.format_exc()}")
             try:
                 await interaction.response.send_message("⚠️ Something went wrong. Please try again.", ephemeral=True)
             except: pass
@@ -4571,7 +4719,11 @@ async def start_cmd(interaction: discord.Interaction):
         estand_agreed = rules_row["estand_agreed"] if rules_row and "estand_agreed" in rules_row else None
 
     if not estand_agreed:
-        # Show Estand rules agreement first
+        # Show Estand rules agreement first — uses shared _show_estand_rules
+        # After agreement, user will need to run /start again to complete full onboarding
+        # We temporarily patch the agree button to go to onboarding instead of Estand welcome
+        await interaction.response.defer(ephemeral=True)
+
         rules_embed = discord.Embed(
             title="📋 Estand Marketplace Rules",
             description=(
@@ -4588,27 +4740,35 @@ async def start_cmd(interaction: discord.Interaction):
         )
         rules_embed.set_footer(text="Adrian — Estand Marketplace Rules")
 
-        class EstandRulesView(discord.ui.View):
+        class StartRulesView(discord.ui.View):
             def __init__(self):
                 super().__init__(timeout=300)
 
-            @discord.ui.button(label="✅ I Agree", style=discord.ButtonStyle.success)
+            @discord.ui.button(label="✅ I Agree", style=discord.ButtonStyle.success, custom_id="start_estand_rules_agree")
             async def agree(self2, interaction2: discord.Interaction, button: discord.ui.Button):
                 await interaction2.response.defer(ephemeral=True)
-                # Save agreement
                 try:
                     async with client.db.acquire() as conn2:
+                        now = int(datetime.now(timezone.utc).timestamp())
                         await conn2.execute(
-                            "INSERT INTO user_preferences (user_id, estand_agreed) VALUES ($1, 1) ON CONFLICT (user_id) DO UPDATE SET estand_agreed=1",
-                            str(interaction2.user.id)
+                            "INSERT INTO user_preferences (user_id, estand_agreed, created_at) VALUES ($1, 1, $2) ON CONFLICT (user_id) DO UPDATE SET estand_agreed=1",
+                            str(interaction2.user.id), now
                         )
-                except Exception:
-                    pass
-                logger.info(f"[Start] {interaction2.user} agreed to Estand rules")
-                # Proceed to onboarding
+                    if interaction2.guild:
+                        config = await db_get_server_config(str(interaction2.guild.id))
+                        estand_role_id = get_config_value(config, "estand_verified_role_id") if config else None
+                        if estand_role_id:
+                            estand_role = interaction2.guild.get_role(int(estand_role_id))
+                            if estand_role:
+                                member = interaction2.guild.get_member(interaction2.user.id)
+                                if member and estand_role not in member.roles:
+                                    await member.add_roles(estand_role, reason="Agreed to Estand rules via /start")
+                except Exception as e:
+                    logger.error(f"[Start] Estand rules save error: {e}")
+                logger.info(f"[Start] {interaction2.user} agreed to Estand rules — proceeding to onboarding")
                 await _show_start_onboarding(interaction2)
 
-            @discord.ui.button(label="❌ Decline", style=discord.ButtonStyle.danger)
+            @discord.ui.button(label="❌ Decline", style=discord.ButtonStyle.danger, custom_id="start_estand_rules_decline")
             async def decline(self2, interaction2: discord.Interaction, button: discord.ui.Button):
                 await interaction2.response.edit_message(
                     embed=discord.Embed(
@@ -4619,7 +4779,7 @@ async def start_cmd(interaction: discord.Interaction):
                     view=None
                 )
 
-        await interaction.response.send_message(embed=rules_embed, view=EstandRulesView(), ephemeral=True)
+        await interaction.edit_original_response(embed=rules_embed, view=StartRulesView())
         return
 
     await interaction.response.defer(ephemeral=True)
@@ -5923,6 +6083,89 @@ async def on_guild_join(guild):
     except Exception as e:
         logger.error(f"[Guild] on_guild_join error: {e}\n{traceback.format_exc()}")
 @client.event
+async def on_member_update(before: discord.Member, after: discord.Member):
+    """Watch for Estand Verified role being manually assigned."""
+    try:
+        # Check if Estand Verified role was just added
+        before_roles = {r.id for r in before.roles}
+        after_roles = {r.id for r in after.roles}
+        added_roles = after_roles - before_roles
+        if not added_roles:
+            return
+
+        config = await db_get_server_config(str(after.guild.id))
+        estand_role_id = get_config_value(config, "estand_verified_role_id") if config else None
+        if not estand_role_id:
+            return
+
+        if int(estand_role_id) not in added_roles:
+            return
+
+        logger.info(f"[Estand] Estand Verified role added to {after} ({after.id}) in {after.guild.name}")
+
+        estand_role = after.guild.get_role(int(estand_role_id))
+        if not estand_role:
+            return
+
+        # Check 1 — has user agreed to Estand rules in DB?
+        async with client.db.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT estand_agreed FROM user_preferences WHERE user_id=$1",
+                str(after.id)
+            )
+        estand_agreed = row["estand_agreed"] if row else 0
+
+        if not estand_agreed:
+            await after.remove_roles(estand_role, reason="Estand rules not agreed to via /start")
+            try:
+                embed = discord.Embed(
+                    title="⚠️ Estand Verified Role Removed",
+                    description=(
+                        f"You were given the **Estand Verified** role on **{after.guild.name}** "
+                        f"but you haven\'t agreed to the Estand Marketplace Rules yet.\n\n"
+                        f"Run `/start` in the **#adrian** channel to agree to the rules and get proper access."
+                    ),
+                    color=discord.Color.orange()
+                )
+                embed.set_footer(text="Adrian — Estand Marketplace")
+                await after.send(embed=embed)
+            except discord.Forbidden:
+                pass
+            logger.info(f"[Estand] Removed Estand Verified from {after} — no DB agreement")
+            return
+
+        # Check 2 — has user been globally banned?
+        async with client.db.acquire() as conn:
+            ban_row = await conn.fetchrow(
+                "SELECT id FROM user_warnings WHERE user_id=$1 AND warning_type IN ('ban', 'scammer')",
+                str(after.id)
+            )
+
+        if ban_row:
+            await after.remove_roles(estand_role, reason="User is globally banned from Estand")
+            try:
+                embed = discord.Embed(
+                    title="🚫 Estand Access Denied",
+                    description=(
+                        "Your account has been flagged in the Adrian network and you are not permitted "
+                        "to access the Estand Marketplace.\n\n"
+                        "If you believe this is an error, please contact the server owner."
+                    ),
+                    color=discord.Color.red()
+                )
+                embed.set_footer(text="Adrian — Estand Marketplace")
+                await after.send(embed=embed)
+            except discord.Forbidden:
+                pass
+            logger.info(f"[Estand] Removed Estand Verified from {after} — globally banned/flagged")
+            return
+
+        logger.info(f"[Estand] Estand Verified confirmed for {after} — agreement and ban check passed")
+
+    except Exception as e:
+        logger.error(f"[Estand] on_member_update error: {e}\n{traceback.format_exc()}")
+
+@client.event
 async def on_guild_remove(guild):
     logger.info(f"[Guild] Bot removed from: {guild.name} ({guild.id})")
     """When bot is removed from a server, log it."""
@@ -6408,6 +6651,29 @@ async def on_thread_delete(thread):
         except Exception as e:
             logger.error(f"[Estate] Could not DM seller: {e}")
 
+        # Clean up cross-post mirrors
+        try:
+            mirrors = await db_mark_mirror_sold(str(thread.id))
+            for mirror in mirrors:
+                try:
+                    mirror_channel = client.get_channel(int(mirror["mirror_channel_id"]))
+                    if mirror_channel and mirror["mirror_thread_id"]:
+                        mirror_thread = mirror_channel.guild.get_thread(int(mirror["mirror_thread_id"]))
+                        if mirror_thread:
+                            await mirror_thread.send(
+                                embed=discord.Embed(
+                                    title="🔴 This listing has been removed",
+                                    description=f"The original listing in **{thread.guild.name}** is no longer available.",
+                                    color=discord.Color.red()
+                                )
+                            )
+                            await mirror_thread.edit(archived=True, locked=True)
+                            logger.info(f"[CrossPost] Mirror archived in {mirror_channel.guild.name} after deletion")
+                except Exception as me:
+                    logger.debug(f"[CrossPost] Could not clean up mirror: {me}")
+        except Exception as e:
+            logger.error(f"[CrossPost] Mirror cleanup error on delete: {e}")
+
     except Exception as e:
         logger.error(f"[Estate] on_thread_delete error: {e}\n{traceback.format_exc()}")
 
@@ -6806,6 +7072,7 @@ async def main():
     try:
         async with client:
             tasks.append(asyncio.create_task(check_all_dealers()))
+            tasks.append(asyncio.create_task(onboarding_reminder_task()))
             tasks.append(asyncio.create_task(check_email_dealers()))
             tasks.append(asyncio.create_task(send_promo()))
             tasks.append(asyncio.create_task(start_web_server()))
