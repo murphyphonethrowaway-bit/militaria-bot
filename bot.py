@@ -4390,8 +4390,10 @@ class WelcomeView(discord.ui.View):
     @discord.ui.button(label="🪪 View My Profile", style=discord.ButtonStyle.primary, custom_id="welcome_view_profile")
     async def view_profile(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
-        region = await db_get_user_region(str(interaction.user.id))
-        if not region:
+        # Check if user exists in DB at all (not just if region is set)
+        async with client.db.acquire() as conn:
+            row = await conn.fetchrow("SELECT user_id FROM user_preferences WHERE user_id=$1", str(interaction.user.id))
+        if not row:
             await interaction.followup.send(
                 "You don't have a profile yet! Click **👋 Get Started** to create one.",
                 ephemeral=True
@@ -4580,25 +4582,7 @@ async def _send_profile(interaction, user):
                 ephemeral=True
             )
 
-        @discord.ui.button(label="🩷 Buy Premium", style=discord.ButtonStyle.danger)
-        async def buy_premium(self, interaction2: discord.Interaction, button: discord.ui.Button):
-            await interaction2.response.send_message(
-                embed=discord.Embed(
-                    title="💎 Adrian Premium",
-                    description=(
-                        "Premium is coming soon!\n\n"
-                        "**What you'll get:**\n"
-                        "⚡ Instant DM alerts before channel posts\n"
-                        "🔑 Custom keyword alerts\n"
-                        "📋 Unlimited watchlist & follows\n"
-                        "💰 Price drop notifications\n"
-                        "🏅 Premium badge on your profile\n\n"
-                        "Stay tuned for the launch!"
-                    ),
-                    color=discord.Color.gold()
-                ),
-                ephemeral=True
-            )
+
 
     await interaction.followup.send(embed=embed, view=ProfileActionsView(), ephemeral=True)
 
