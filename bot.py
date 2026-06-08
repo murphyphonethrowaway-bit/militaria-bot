@@ -823,7 +823,9 @@ async def db_get_top_percent(user_id):
     async with client.db.acquire() as conn:
         # Get all users with at least 1 point
         tx_users = await conn.fetch(
-            "SELECT user_id, COUNT(*) as cnt FROM estate_transactions WHERE status='completed' GROUP BY user_id"
+            """SELECT unnest(ARRAY[seller_id, buyer_id]) as user_id, COUNT(*) as cnt
+               FROM estate_transactions WHERE status='completed'
+               GROUP BY user_id"""
         )
         review_users = await conn.fetch(
             "SELECT user_id, COUNT(*) as cnt FROM reviews WHERE status='approved' GROUP BY user_id"
