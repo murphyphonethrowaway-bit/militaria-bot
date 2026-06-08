@@ -2531,9 +2531,143 @@ class SetupEstateConfirmView(discord.ui.View):
 
     @discord.ui.button(label="✅ Yes — Add the Estand", style=discord.ButtonStyle.success, custom_id="setup_estate_confirm_yes")
     async def confirm_yes(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Rebuild the full estate yes flow
         forum_channels = [c for c in interaction.guild.channels if isinstance(c, discord.ForumChannel)]
+        if not forum_channels:
+            embed = discord.Embed(
+                title="⚠️ Forum Channel Required",
+                description=(
+                    "The Estand marketplace only works with **Forum Channels** — not regular text channels.\n\n"
+                    "**Here\'s how to create one:**\n"
+                    "1. Go to your server settings\n"
+                    "2. Click **Channels** → **New Channel**\n"
+                    "3. Select **Forum** as the channel type\n"
+                    "4. Name it something like `#estand` or `#marketplace`\n"
+                    "5. Click the button below once it\'s created"
+                ),
+                color=discord.Color.orange()
+            )
+            await interaction.response.edit_message(embed=embed, view=SetupNoForumView())
+            return
+        forum_options = [
+            discord.SelectOption(label=f"#{c.name}"[:100], value=str(c.id))
+            for c in sorted(forum_channels, key=lambda x: x.position)
+        ][:25]
+        embed = discord.Embed(
+            title="🏪 Estand Marketplace — Buy & Sell Militaria",
+            description=(
+                "Which **forum channel** should be your Estand marketplace?\n\n"
+                "🚀 **Let me create one** — I\'ll set up the channel with the right tags automatically\n"
+                "📋 **Pick an existing one** — select from the dropdown below"
+            ),
+            color=discord.Color.dark_gold()
+        )
+        if bot_state.get("setup_estand_img_url"):
+            embed.set_thumbnail(url=bot_state["setup_estand_img_url"])
+        view = _build_estate_forum_select(forum_options)
+        await interaction.response.edit_message(embed=embed, view=view)
 
+    @discord.ui.button(label="❌ No, skip for now", style=discord.ButtonStyle.secondary, custom_id="setup_estate_confirm_no")
+    async def confirm_no(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        await db_save_server_config(str(interaction.guild_id), setup_complete=0)
+        await _show_permissions_step(interaction)
+
+
+def _build_estate_forum_select(forum_options):
+    """Build the forum channel select view for estate setup."""
+    class EstateForumSelect(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=300)
+
+        @discord.ui.button(label="🚀 Auto-create Estand channel for me", style=discord.ButtonStyle.success, row=0)
+        async def auto_create(self, interaction2: discord.Interaction, button: discord.ui.Button):
+            try:
+                await interaction2.response.defer(ephemeral=True)
+                guild = interaction2.guild
+                estate_channel = discord.utils.get(guild.forums, name="estand")
+                if not estate_channel:
+                    tags = [
+                        discord.ForumTag(name="Active", emoji=discord.PartialEmoji(name="🟢")),
+                        discord.ForumTag(name="Sold", emoji=discord.PartialEmoji(name="🔴")),
+                        discord.ForumTag(name="On Hold", emoji=discord.PartialEmoji(name="🟡")),
+                        discord.ForumTag(name="Cross-Posted", emoji=discord.PartialEmoji(name="🌐")),
+                    ]
+                    estate_channel = await guild.create_forum(
+                        name="estand",
+                        topic="Buy and sell militaria with verified members. Use /start to create your profile.",
+                        available_tags=tags,
+                        reason="Created by Adrian setup"
+                    )
+                    result = "✅ Created **#estand** with tags: 🟢 Active, 🔴 Sold, 🟡 On Hold, 🌐 Cross-Posted"
+                else:
+                    result = "✅ Found existing **#estand** forum channel"
+                sold_tag = next((t for t in estate_channel.available_tags if t.name.lower() == "sold"), None)
+                await db_save_server_config(
+                    str(interaction2.guild_id),
+                    estate_channel_id=str(estate_channel.id),
+                    estate_sold_tag_id=str(sold_tag.id) if sold_tag else None,
+                    estate_name="Estand"
+                )
+                embed = discord.Embed(
+                    title="🏪 Estand Marketplace — Buy & Sell Militaria",
+                    description=(
+                        result + "\n\n"
+                        "Do you want to **accept cross-posted listings** from other Adrian servers?\n\n"
+                        "📈 **More listings** — your members see a wider selection\n"
+                        "🤝 **Community growth** — builds connections between servers\n"
+                        "🆓 **Completely free**"
+                    ),
+                    color=discord.Color.dark_gold()
+                )
+                if bot_state.get("setup_estand_img_url"):
+                    embed.set_thumbnail(url=bot_state["setup_estand_img_url"])
+                await interaction2.edit_original_response(embed=embed, view=SetupCrossPostView())
+            except discord.Forbidden:
+                await interaction2.edit_original_response(embed=discord.Embed(
+                    title="⚠️ Missing Permissions",
+                    description="I don\'t have permission to create channels.",
+                    color=discord.Color.red()
+                ))
+            except Exception as e:
+                logger.error(f"[Setup] Auto-create estand error: {e}\n{traceback.format_exc()}")
+
+        @discord.ui.select(placeholder="Or pick an existing forum channel...", options=forum_options, row=1)
+        async def select_forum(self, interaction2: discord.Interaction, select: discord.ui.Select):
+            estate_channel_id = int(select.values[0])
+            estate_channel = interaction2.guild.get_channel(estate_channel_id)
+            sold_tag = next((t for t in estate_channel.available_tags if t.name.lower() == "sold"), None) if hasattr(estate_channel, "available_tags") else None
+            await db_save_server_config(
+                str(interaction2.guild_id),
+                estate_channel_id=str(estate_channel_id),
+                estate_sold_tag_id=str(sold_tag.id) if sold_tag else None,
+                estate_name=estate_channel.name
+            )
+            embed = discord.Embed(
+                title="🏪 Estand Marketplace — Buy & Sell Militaria",
+                description=(
+                    f"✅ Estand channel set to {estate_channel.mention}\n\n"
+                    "Do you want to **accept cross-posted listings** from other Adrian servers?\n\n"
+                    "📈 **More listings** — your members see a wider selection\n"
+                    "🤝 **Community growth** — builds connections between servers\n"
+                    "🆓 **Completely free**"
+                ),
+                color=discord.Color.dark_gold()
+            )
+            if bot_state.get("setup_estand_img_url"):
+                embed.set_thumbnail(url=bot_state["setup_estand_img_url"])
+            await interaction2.response.edit_message(embed=embed, view=SetupCrossPostView())
+
+    return EstateForumSelect()
+
+
+class SetupStep3EstateView(discord.ui.View):
+    """Step 3 — Estate marketplace pitch."""
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="✅ Yes — Add the Estand", style=discord.ButtonStyle.success, custom_id="setup_s3_yes")
+    async def yes(self, interaction: discord.Interaction, button: discord.ui.Button):
+        forum_channels = [c for c in interaction.guild.channels if isinstance(c, discord.ForumChannel)]
         if not forum_channels:
             embed = discord.Embed(
                 title="⚠️ Forum Channel Required",
@@ -2551,95 +2685,10 @@ class SetupEstateConfirmView(discord.ui.View):
             )
             await interaction.response.edit_message(embed=embed, view=SetupNoForumView())
             return
-
         forum_options = [
             discord.SelectOption(label=f"#{c.name}"[:100], value=str(c.id))
             for c in sorted(forum_channels, key=lambda x: x.position)
         ][:25]
-
-        class EstateForumSelectFromConfirm(discord.ui.View):
-            def __init__(self):
-                super().__init__(timeout=300)
-
-            @discord.ui.button(label="🚀 Auto-create Estand channel for me", style=discord.ButtonStyle.success, row=0)
-            async def auto_create(self, interaction2: discord.Interaction, button: discord.ui.Button):
-                try:
-                    await interaction2.response.defer(ephemeral=True)
-                    guild = interaction2.guild
-                    estate_channel = discord.utils.get(guild.forums, name="estand")
-                    if not estate_channel:
-                        tags = [
-                            discord.ForumTag(name="Active", emoji=discord.PartialEmoji(name="🟢")),
-                            discord.ForumTag(name="Sold", emoji=discord.PartialEmoji(name="🔴")),
-                            discord.ForumTag(name="On Hold", emoji=discord.PartialEmoji(name="🟡")),
-                            discord.ForumTag(name="Cross-Posted", emoji=discord.PartialEmoji(name="🌐")),
-                        ]
-                        estate_channel = await guild.create_forum(
-                            name="estand",
-                            topic="Buy and sell militaria with verified members. Use /start to create your profile.",
-                            available_tags=tags,
-                            reason="Created by Adrian setup"
-                        )
-                        result = "✅ Created **#estand** with tags: 🟢 Active, 🔴 Sold, 🟡 On Hold, 🌐 Cross-Posted"
-                    else:
-                        result = "✅ Found existing **#estand** forum channel"
-
-                    sold_tag = next((t for t in estate_channel.available_tags if t.name.lower() == "sold"), None)
-                    await db_save_server_config(
-                        str(interaction2.guild_id),
-                        estate_channel_id=str(estate_channel.id),
-                        estate_sold_tag_id=str(sold_tag.id) if sold_tag else None,
-                        estate_name="Estand"
-                    )
-                    embed = discord.Embed(
-                        title="🏪 Estand Marketplace — Buy & Sell Militaria",
-                        description=(
-                            result + "\n\n"
-                            "Do you want to **accept cross-posted listings** from other Adrian servers?\n\n"
-                            "📈 **More listings** — your members see a wider selection\n"
-                            "🤝 **Community growth** — builds connections between servers\n"
-                            "🆓 **Completely free**"
-                        ),
-                        color=discord.Color.dark_gold()
-                    )
-                    if bot_state.get("setup_estand_img_url"):
-                        embed.set_thumbnail(url=bot_state["setup_estand_img_url"])
-                    await interaction2.edit_original_response(embed=embed, view=SetupCrossPostView())
-                except discord.Forbidden:
-                    await interaction2.edit_original_response(embed=discord.Embed(
-                        title="⚠️ Missing Permissions",
-                        description="I don\'t have permission to create channels.",
-                        color=discord.Color.red()
-                    ))
-                except Exception as e:
-                    logger.error(f"[Setup] Auto-create estand error: {e}\n{traceback.format_exc()}")
-
-            @discord.ui.select(placeholder="Or pick an existing forum channel...", options=forum_options, row=1)
-            async def select_forum(self, interaction2: discord.Interaction, select: discord.ui.Select):
-                estate_channel_id = int(select.values[0])
-                estate_channel = interaction2.guild.get_channel(estate_channel_id)
-                sold_tag = next((t for t in estate_channel.available_tags if t.name.lower() == "sold"), None) if hasattr(estate_channel, "available_tags") else None
-                await db_save_server_config(
-                    str(interaction2.guild_id),
-                    estate_channel_id=str(estate_channel_id),
-                    estate_sold_tag_id=str(sold_tag.id) if sold_tag else None,
-                    estate_name=estate_channel.name
-                )
-                embed = discord.Embed(
-                    title="🏪 Estand Marketplace — Buy & Sell Militaria",
-                    description=(
-                        f"✅ Estand channel set to {estate_channel.mention}\n\n"
-                        "Do you want to **accept cross-posted listings** from other Adrian servers?\n\n"
-                        "📈 **More listings** — your members see a wider selection\n"
-                        "🤝 **Community growth** — builds connections between servers\n"
-                        "🆓 **Completely free**"
-                    ),
-                    color=discord.Color.dark_gold()
-                )
-                if bot_state.get("setup_estand_img_url"):
-                    embed.set_thumbnail(url=bot_state["setup_estand_img_url"])
-                await interaction2.response.edit_message(embed=embed, view=SetupCrossPostView())
-
         embed = discord.Embed(
             title="🏪 Estand Marketplace — Buy & Sell Militaria",
             description=(
@@ -2651,134 +2700,7 @@ class SetupEstateConfirmView(discord.ui.View):
         )
         if bot_state.get("setup_estand_img_url"):
             embed.set_thumbnail(url=bot_state["setup_estand_img_url"])
-        await interaction.response.edit_message(embed=embed, view=EstateForumSelectFromConfirm())
-
-    @discord.ui.button(label="❌ No, skip for now", style=discord.ButtonStyle.secondary, custom_id="setup_estate_confirm_no")
-    async def confirm_no(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
-        await db_save_server_config(str(interaction.guild_id), setup_complete=0)
-        await _show_permissions_step(interaction)
-
-class SetupStep3EstateView(discord.ui.View):
-    """Step 3 — Estate marketplace pitch."""
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="✅ Yes — Add the Marketplace", style=discord.ButtonStyle.success, custom_id="setup_s3_yes")
-    async def yes(self, interaction: discord.Interaction, button: discord.ui.Button):
-        forum_channels = [c for c in interaction.guild.channels if isinstance(c, discord.ForumChannel)]
-        if not forum_channels:
-            embed = discord.Embed(
-                title="⚠️ Forum Channel Required",
-                description=(
-                    "The Estate marketplace only works with **Forum Channels** — not regular text channels.\n\n"
-                    "**Here\'s how to create one:**\n"
-                    "1. Go to your server settings\n"
-                    "2. Click **Channels** → **New Channel**\n"
-                    "3. Select **Forum** as the channel type\n"
-                    "4. Name it something like `#estate` or `#marketplace`\n"
-                    "5. Click the button below once it\'s created\n\n"
-                    "Forum channels let members create individual posts for each listing."
-                ),
-                color=discord.Color.orange()
-            )
-            await interaction.response.edit_message(embed=embed, view=SetupNoForumView())
-            return
-
-        forum_options = [
-            discord.SelectOption(label=f"#{c.name}"[:100], value=str(c.id))
-            for c in sorted(forum_channels, key=lambda x: x.position)
-        ][:25]
-
-        class EstateForumSelect(discord.ui.View):
-            def __init__(self):
-                super().__init__(timeout=300)
-
-            @discord.ui.button(label="🚀 Auto-create Estate channel for me", style=discord.ButtonStyle.success, row=0)
-            async def auto_create(self, interaction2: discord.Interaction, button: discord.ui.Button):
-                try:
-                    await interaction2.response.defer(ephemeral=True)
-                    guild = interaction2.guild
-                    estate_channel = discord.utils.get(guild.forums, name="estate")
-                    if not estate_channel:
-                        tags = [
-                            discord.ForumTag(name="Active", emoji=discord.PartialEmoji(name="🟢")),
-                            discord.ForumTag(name="Sold", emoji=discord.PartialEmoji(name="🔴")),
-                            discord.ForumTag(name="On Hold", emoji=discord.PartialEmoji(name="🟡")),
-                            discord.ForumTag(name="Cross-Posted", emoji=discord.PartialEmoji(name="🌐")),
-                        ]
-                        estate_channel = await guild.create_forum(
-                            name="estate",
-                            topic="Buy and sell militaria with verified members. Use /start to create your profile.",
-                            available_tags=tags,
-                            reason="Created by Adrian setup"
-                        )
-                        result = "✅ Created **#estate** with tags: 🟢 Active, 🔴 Sold, 🟡 On Hold, 🌐 Cross-Posted"
-                    else:
-                        result = "✅ Found existing **#estate** forum channel"
-
-                    sold_tag = next((t for t in estate_channel.available_tags if t.name.lower() == "sold"), None)
-                    await db_save_server_config(
-                        str(interaction2.guild_id),
-                        estate_channel_id=str(estate_channel.id),
-                        estate_sold_tag_id=str(sold_tag.id) if sold_tag else None,
-                        estate_name="Estate"
-                    )
-                    embed = discord.Embed(
-                        title="🏪 Estate Marketplace — Buy & Sell Militaria",
-                        description=(
-                            result + "\n\n"
-                            "Do you want to **accept cross-posted listings** from other Adrian servers?\n\n"
-                            "📈 **More listings** — your members see a wider selection\n"
-                            "🤝 **Community growth** — builds connections between servers\n"
-                            "🆓 **Completely free**"
-                        ),
-                        color=discord.Color.dark_gold()
-                    )
-                    await interaction2.edit_original_response(embed=embed, view=SetupCrossPostView())
-                except discord.Forbidden:
-                    await interaction2.edit_original_response(embed=discord.Embed(
-                        title="⚠️ Missing Permissions",
-                        description="I don\'t have permission to create channels. Please give me **Manage Channels** permission and try again.",
-                        color=discord.Color.red()
-                    ))
-                except Exception as e:
-                    logger.error(f"[Setup] Auto-create estate error: {e}\n{traceback.format_exc()}")
-
-            @discord.ui.select(placeholder="Or pick an existing forum channel...", options=forum_options, row=1)
-            async def select_forum(self, interaction2: discord.Interaction, select: discord.ui.Select):
-                estate_channel_id = int(select.values[0])
-                estate_channel = interaction2.guild.get_channel(estate_channel_id)
-                sold_tag = next((t for t in estate_channel.available_tags if t.name.lower() == "sold"), None) if hasattr(estate_channel, "available_tags") else None
-                await db_save_server_config(
-                    str(interaction2.guild_id),
-                    estate_channel_id=str(estate_channel_id),
-                    estate_sold_tag_id=str(sold_tag.id) if sold_tag else None,
-                    estate_name=estate_channel.name
-                )
-                embed = discord.Embed(
-                    title="🏪 Estate Marketplace — Buy & Sell Militaria",
-                    description=(
-                        f"✅ Estate channel set to {estate_channel.mention}\n\n"
-                        "Do you want to **accept cross-posted listings** from other Adrian servers?\n\n"
-                        "📈 **More listings** — your members see a wider selection\n"
-                        "🤝 **Community growth** — builds connections between servers\n"
-                        "🆓 **Completely free**"
-                    ),
-                    color=discord.Color.dark_gold()
-                )
-                await interaction2.response.edit_message(embed=embed, view=SetupCrossPostView())
-
-        embed = discord.Embed(
-            title="🏪 Estate Marketplace — Buy & Sell Militaria",
-            description=(
-                "Which **forum channel** should be your estate marketplace?\n\n"
-                "🚀 **Let me create one** — I\'ll set up the channel with the right tags automatically\n"
-                "📋 **Pick an existing one** — select from the dropdown below"
-            ),
-            color=discord.Color.dark_gold()
-        )
-        await interaction.response.edit_message(embed=embed, view=EstateForumSelect())
+        await interaction.response.edit_message(embed=embed, view=_build_estate_forum_select(forum_options))
 
     @discord.ui.button(label="❌ No Thanks", style=discord.ButtonStyle.secondary, custom_id="setup_s3_no")
     async def no(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -2814,8 +2736,8 @@ class SetupNoForumView(discord.ui.View):
             await interaction.response.send_message("⚠️ Still no forum channels found. Create one first.", ephemeral=True)
             return
         await interaction.response.edit_message(embed=discord.Embed(
-            title="🏪 Estate Marketplace — Buy & Sell Militaria",
-            description="Which **forum channel** should be your estate marketplace?",
+            title="🏪 Estand Marketplace — Buy & Sell Militaria",
+            description="Which **forum channel** should be your Estand marketplace?",
             color=discord.Color.dark_gold()
         ), view=SetupStep3EstateView())
 
@@ -2841,7 +2763,6 @@ class SetupCrossPostView(discord.ui.View):
 
     @discord.ui.button(label="❌ No — Local Only", style=discord.ButtonStyle.secondary, custom_id="setup_crosspost_no")
     async def no(self, i, b): await self._save_and_continue(i, 0)
-
 
 async def _show_permissions_step(interaction):
     """Show step 4 — View All Channels permission."""
