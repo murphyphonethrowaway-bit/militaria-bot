@@ -2519,16 +2519,93 @@ class SetupEstateView(discord.ui.View):
 
     @discord.ui.button(label="✅ Yes — Add the Marketplace", style=discord.ButtonStyle.success, custom_id="setup_estate_yes")
     async def yes(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Check if server has any forum channels
+        forum_channels = [c for c in interaction.guild.channels if isinstance(c, discord.ForumChannel)]
+
+        if not forum_channels:
+            # No forum channels exist — inform them
+            embed = discord.Embed(
+                title="⚠️ Forum Channel Required",
+                description=(
+                    "The Estate marketplace only works with **Forum Channels** — not regular text channels.\n\n"
+                    "**Here\'s how to create one:**\n"
+                    "1. Go to your server settings\n"
+                    "2. Click **Channels** → **New Channel**\n"
+                    "3. Select **Forum** as the channel type\n"
+                    "4. Name it something like `#estate` or `#marketplace`\n"
+                    "5. Run `/setup` again once it\'s created\n\n"
+                    "Forum channels let members create individual posts for each listing, making it much easier to buy and sell."
+                ),
+                color=discord.Color.orange()
+            )
+            await interaction.response.edit_message(embed=embed, view=SetupNoForumView())
+            return
+
+        # Forum channels exist — show dropdown to pick one
+        forum_options = [
+            discord.SelectOption(label=f"#{c.name}", value=str(c.id))
+            for c in sorted(forum_channels, key=lambda x: x.position)
+        ][:25]
+
+        class EstateForumSelect(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=300)
+
+            @discord.ui.select(placeholder="Select your estate/marketplace forum channel...", options=forum_options)
+            async def select_forum(self, interaction2: discord.Interaction, select: discord.ui.Select):
+                estate_channel_id = int(select.values[0])
+                estate_channel = interaction2.guild.get_channel(estate_channel_id)
+                await db_save_server_config(str(interaction2.guild_id), estate_channel_id=str(estate_channel_id))
+
+                embed = discord.Embed(
+                    title="⚙️ Almost Done — Cross-Server Listings",
+                    description=(
+                        f"✅ Estate channel set to {estate_channel.mention}\n\n"
+                        "Do you want to **accept cross-posted listings** from other Adrian servers?\n\n"
+                        "When enabled, sellers from other militaria communities can post their items directly in your estate channel.\n\n"
+                        "📈 **More listings** — your members see a wider selection\n"
+                        "🤝 **Community growth** — builds connections between servers\n"
+                        "🆓 **Completely free**"
+                    ),
+                    color=discord.Color.dark_gold()
+                )
+                await interaction2.response.edit_message(embed=embed, view=SetupCrossPostView())
+
         embed = discord.Embed(
-            title="⚙️ Setup — Step 3b of 3",
-            description="Do you want to **accept cross-posted listings** from other Adrian servers in your estate channel?\n\nThis lets sellers from other servers post their items here too.\n\n✅ **Yes** — Accept cross-posts\n❌ **No** — Local listings only",
+            title="⚙️ Select Your Estate Channel",
+            description=(
+                "Which **forum channel** should be your estate marketplace?\n\n"
+                "💡 If you already have an estate channel, select it below.\n"
+                "If you want to create a new one, close this and create a **Forum Channel** in Discord first, then run `/setup` again."
+            ),
             color=discord.Color.dark_gold()
         )
-        embed.set_footer(text="Adrian Setup — The Relic Registry")
-        await interaction.response.edit_message(embed=embed, view=SetupCrossPostView())
+        await interaction.response.edit_message(embed=embed, view=EstateForumSelect())
 
     @discord.ui.button(label="❌ No Thanks", style=discord.ButtonStyle.secondary, custom_id="setup_estate_no")
     async def no(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await db_save_server_config(str(interaction.guild_id), setup_complete=1)
+        await complete_setup(interaction)
+
+class SetupNoForumView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="✅ I created one — go back", style=discord.ButtonStyle.success, custom_id="setup_no_forum_retry")
+    async def retry(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Re-trigger the estate yes flow
+        forum_channels = [c for c in interaction.guild.channels if isinstance(c, discord.ForumChannel)]
+        if not forum_channels:
+            await interaction.response.send_message("⚠️ Still no forum channels found. Create one in Discord first then click the button again.", ephemeral=True)
+            return
+        await interaction.response.edit_message(embed=discord.Embed(
+            title="⚙️ Select Your Estate Channel",
+            description="Which **forum channel** should be your estate marketplace?",
+            color=discord.Color.dark_gold()
+        ), view=SetupEstateView())
+
+    @discord.ui.button(label="❌ Skip Estate", style=discord.ButtonStyle.secondary, custom_id="setup_no_forum_skip")
+    async def skip(self, interaction: discord.Interaction, button: discord.ui.Button):
         await db_save_server_config(str(interaction.guild_id), setup_complete=1)
         await complete_setup(interaction)
 
