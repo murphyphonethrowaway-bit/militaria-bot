@@ -763,6 +763,97 @@ async def db_get_completed_transactions(user_id):
         )
         return seller_count or 0, buyer_count or 0
 
+# ==================== RANK SYSTEM ====================
+
+RANKS = [
+    (0,     "🪖 Private"),
+    (30,    "🪖 Private 1st Class"),
+    (100,   "⚔️ Corporal"),
+    (300,   "⚔️ Sergeant"),
+    (600,   "⚔️ Sergeant Major"),
+    (1000,  "🎖️ Warrant Officer"),
+    (1500,  "🎖️ Lieutenant"),
+    (2000,  "🎖️ Captain"),
+    (3000,  "🏅 Major"),
+    (5000,  "🏅 Colonel"),
+    (10000, "👑 Maréchal d'Empire"),
+]
+
+async def db_get_user_points(user_id):
+    """Calculate total rank points for a user."""
+    async with client.db.acquire() as conn:
+        # Points from completed transactions (30 each)
+        tx_count = await conn.fetchval(
+            "SELECT COUNT(*) FROM estate_transactions WHERE (seller_id=$1 OR buyer_id=$1) AND status='completed'",
+            str(user_id)
+        ) or 0
+        # Points from dealer reviews (10 each)
+        review_count = await conn.fetchval(
+            "SELECT COUNT(*) FROM reviews WHERE reviewer_id=$1 AND status='approved'",
+            str(user_id)
+        ) or 0
+        return (tx_count * 30) + (review_count * 10)
+
+async def db_get_user_warnings(user_id):
+    """Check if user has active warnings."""
+    async with client.db.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT COUNT(*) as cnt FROM warnings WHERE user_id=$1",
+            str(user_id)
+        )
+        return row["cnt"] if row else 0
+
+def get_rank(points, has_warnings=False):
+    """Get rank name based on points. Warnings block above Corporal."""
+    rank_name = RANKS[0][1]
+    for threshold, name in RANKS:
+        if points >= threshold:
+            rank_name = name
+        else:
+            break
+    # Warnings block progression past Corporal
+    if has_warnings:
+        corporal_rank = RANKS[2][1]
+        rank_index = [r[1] for r in RANKS].index(rank_name)
+        if rank_index > 2:
+            rank_name = corporal_rank + " ⚠️"
+    return rank_name
+
+async def db_get_top_percent(user_id):
+    """Calculate what percentile a user is in globally."""
+    user_points = await db_get_user_points(str(user_id))
+    if user_points == 0:
+        return None
+    async with client.db.acquire() as conn:
+        # Get all users with at least 1 point
+        tx_users = await conn.fetch(
+            "SELECT user_id, COUNT(*) as cnt FROM estate_transactions WHERE status='completed' GROUP BY user_id"
+        )
+        review_users = await conn.fetch(
+            "SELECT reviewer_id as user_id, COUNT(*) as cnt FROM reviews WHERE status='approved' GROUP BY reviewer_id"
+        )
+        # Build points map
+        points_map = {}
+        for row in tx_users:
+            points_map[row["user_id"]] = points_map.get(row["user_id"], 0) + (row["cnt"] * 30)
+        for row in review_users:
+            points_map[row["user_id"]] = points_map.get(row["user_id"], 0) + (row["cnt"] * 10)
+
+        if not points_map:
+            return None
+
+        all_points = sorted(points_map.values(), reverse=True)
+        total = len(all_points)
+        # Find where user ranks
+        rank_pos = sum(1 for p in all_points if p > user_points)
+        percentile = (rank_pos / total) * 100
+
+        if percentile <= 1:
+            return "🌟 Top 1%"
+        elif percentile <= 5:
+            return "🏆 Top 5%"
+        return None
+
 # ==================== USER PREFERENCES DB ====================
 async def db_get_user_region(user_id):
     async with client.db.acquire() as conn:
@@ -4350,11 +4441,15 @@ class WelcomeView(discord.ui.View):
             known = [country_names.get(c) for c in countries_list if c in country_names]
             countries_str = ", ".join(known) if known else "Not set"
 
-        # Get reputation data
+        # Get reputation and rank data
         seller_avg, seller_count = await db_get_seller_rating(str(interaction.user.id))
         buyer_avg, buyer_count = await db_get_buyer_rating(str(interaction.user.id))
         seller_sales, buyer_purchases = await db_get_completed_transactions(str(interaction.user.id))
         reviews = await db_get_user_reviews(str(interaction.user.id))
+        points = await db_get_user_points(str(interaction.user.id))
+        warnings = await db_get_user_warnings(str(interaction.user.id))
+        rank = get_rank(points, warnings > 0)
+        top_percent = await db_get_top_percent(str(interaction.user.id))
 
         def stars(avg):
             if avg is None:
@@ -4364,12 +4459,22 @@ class WelcomeView(discord.ui.View):
             empty = 5 - full - half
             return "⭐" * full + "✨" * half + "☆" * empty + f" ({avg})"
 
+        # Build title with top % badge
+        title = f"🎖️ {interaction.user.display_name}\'s Collector Profile"
+        if top_percent:
+            title += f"  {top_percent}"
+
         embed = discord.Embed(
-            title=f"🎖️ {interaction.user.display_name}\'s Collector Profile",
+            title=title,
             color=discord.Color.dark_gold(),
             timestamp=datetime.now(timezone.utc)
         )
         embed.set_thumbnail(url=interaction.user.display_avatar.url)
+
+        # Rank
+        embed.add_field(name="🎗️ Rank", value=f"{rank}\n{points:,} pts", inline=True)
+        embed.add_field(name="\u200b", value="\u200b", inline=True)
+        embed.add_field(name="\u200b", value="\u200b", inline=True)
 
         # Preferences
         embed.add_field(name="📍 Region", value=region_display, inline=True)
