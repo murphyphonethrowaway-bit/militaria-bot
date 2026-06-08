@@ -828,6 +828,52 @@ async def db_get_users_for_dealer(dealer_region, dealer_eras, dealer_countries):
         matched.append(user_id)
     return matched
 
+# ==================== SERVER CONFIG HELPERS ====================
+
+async def get_server_channel(guild_id, channel_key, fallback_id=None):
+    """Get a channel for a specific server from config, with fallback."""
+    config = await db_get_server_config(str(guild_id))
+    channel_id = get_config_value(config, channel_key) if config else None
+    if channel_id:
+        channel = client.get_channel(channel_id)
+        if channel:
+            return channel
+    # Fallback to hardcoded ID
+    if fallback_id:
+        return client.get_channel(fallback_id)
+    return None
+
+async def get_server_role(guild, role_key, fallback_id=None):
+    """Get a role for a specific server from config, with fallback."""
+    config = await db_get_server_config(str(guild.id))
+    role_id = get_config_value(config, role_key) if config else None
+    if role_id:
+        role = guild.get_role(role_id)
+        if role:
+            return role
+    if fallback_id:
+        return guild.get_role(fallback_id)
+    return None
+
+async def get_all_server_channels(channel_key, fallback_id=None):
+    """Get a specific channel from ALL servers — for broadcasting alerts."""
+    servers = await db_get_all_servers()
+    channels = []
+    for server in servers:
+        if server.get("setup_complete") != "1":
+            continue
+        channel_id = get_config_value(server, channel_key)
+        if channel_id:
+            channel = client.get_channel(channel_id)
+            if channel:
+                channels.append(channel)
+    # Also include fallback channel if not already included
+    if fallback_id:
+        fallback = client.get_channel(fallback_id)
+        if fallback and fallback not in channels:
+            channels.append(fallback)
+    return channels
+
 # ==================== RATE LIMITING ====================
 
 COMMAND_COOLDOWNS = {
@@ -987,29 +1033,29 @@ async def send_alert(channel, name, url, logo_file, test=False, waf=False):
 
     follow_view = FollowDealerView(name)
 
-    # Post full embed to #adrian-updates (verified members see this)
-    updates_channel = client.get_channel(ADRIAN_UPDATES_CHANNEL_ID)
-    try:
-        if updates_channel:
-            if file:
-                await updates_channel.send(content=content_msg, file=discord.File(logo_file, filename="logo.png") if os.path.exists(logo_file) else None, embed=embed, view=follow_view)
+    # Post full embed to ALL servers' updates channels
+    updates_channels = await get_all_server_channels("updates_channel_id", ADRIAN_UPDATES_CHANNEL_ID)
+    for updates_channel in updates_channels:
+        try:
+            if file and os.path.exists(logo_file):
+                await updates_channel.send(content=content_msg, file=discord.File(logo_file, filename="logo.png"), embed=embed, view=follow_view)
             else:
                 await updates_channel.send(content=content_msg, embed=embed, view=follow_view)
-    except Exception as e:
-        logger.error(f"Failed to send to updates channel for {name}: {e}")
+        except Exception as e:
+            logger.error(f"[Alert] Failed to send to {updates_channel.guild.name}: {e}")
 
-    # Log full embed to private mod log channel
+    # Log to private mod log channel
     try:
         log_channel = client.get_channel(PRIVATE_LOG_CHANNEL_ID)
         if log_channel:
-            if file:
-                await log_channel.send(file=discord.File(logo_file, filename="logo.png") if os.path.exists(logo_file) else None, embed=embed)
+            if file and os.path.exists(logo_file):
+                await log_channel.send(file=discord.File(logo_file, filename="logo.png"), embed=embed)
             else:
                 await log_channel.send(embed=embed)
     except Exception as e:
-        logger.error(f"Failed to log alert for {name}: {e}")
+        logger.error(f"[Alert] Failed to log alert for {name}: {e}")
 
-    # Save alert to pending DB and ping matched users in #adrian-updates
+    # Save alert to pending DB and ping matched users across all servers
     if not test:
         try:
             dealer_eras = dealer_info.get("eras", [0]) if dealer_info else [0]
@@ -1019,13 +1065,15 @@ async def send_alert(channel, name, url, logo_file, test=False, waf=False):
             for uid in matched_users:
                 try:
                     await db_add_pending_alert(uid, name, url, flag)
-                    if updates_channel:
+                    # Ping in their server's updates channel
+                    for updates_channel in updates_channels:
                         member = updates_channel.guild.get_member(int(uid))
                         if member:
                             await updates_channel.send(
                                 content=f"{member.mention} 🆕 **{name}** has new items!",
                                 delete_after=8
                             )
+                            break  # Only ping once per user
                 except Exception as alert_err:
                     logger.debug(f"[Alert] Could not ping user {uid}: {alert_err}")
         except Exception as e:
@@ -1332,16 +1380,16 @@ async def send_usmf_alert(channel, parsed):
         embed.set_thumbnail(url="attachment://logo.png")
 
     # Post to #adrian-updates
-    usmf_updates_channel = client.get_channel(ADRIAN_UPDATES_CHANNEL_ID)
-    try:
-        if usmf_updates_channel:
-            if file:
-                await usmf_updates_channel.send(file=discord.File(logo_file, filename="logo.png") if os.path.exists(logo_file) else None, embed=embed)
+    usmf_updates_channels = await get_all_server_channels("updates_channel_id", ADRIAN_UPDATES_CHANNEL_ID)
+    for usmf_updates_channel in usmf_updates_channels:
+        try:
+            if file and os.path.exists(logo_file):
+                await usmf_updates_channel.send(file=discord.File(logo_file, filename="logo.png"), embed=embed)
             else:
                 await usmf_updates_channel.send(embed=embed)
-            logger.info(f"[USMF] Alert sent for: {parsed['item_title']}")
-    except Exception as e:
-        logger.error(f"[USMF] Failed to send to updates channel: {e}")
+            logger.info(f"[USMF] Alert sent to {usmf_updates_channel.guild.name}: {parsed['item_title']}")
+        except Exception as e:
+            logger.error(f"[USMF] Failed to send to {usmf_updates_channel.guild.name}: {e}")
 
     # Log to private mod channel
     try:
@@ -1357,13 +1405,14 @@ async def send_usmf_alert(channel, parsed):
         for uid in usmf_users:
             try:
                 await db_add_pending_alert(uid, f"USMF: {parsed['item_title']}", parsed.get('forum_url', ''), "🇺🇸")
-                if usmf_updates_channel:
-                    member = usmf_updates_channel.guild.get_member(int(uid))
-                    if member:
-                        await usmf_updates_channel.send(
-                            content=f"{member.mention} 🇺🇸 New USMF listing!",
-                            delete_after=8
-                        )
+                for usmf_updates_channel in usmf_updates_channels:
+                        member = usmf_updates_channel.guild.get_member(int(uid))
+                        if member:
+                            await usmf_updates_channel.send(
+                                content=f"{member.mention} 🇺🇸 New USMF listing!",
+                                delete_after=8
+                            )
+                            break
             except Exception as ping_err:
                 logger.debug(f"[USMF Alert] Could not ping {uid}: {ping_err}")
     except Exception as e:
@@ -1412,16 +1461,16 @@ async def send_waf_alert(channel, parsed, guild):
     watch_view = WatchItemView(parsed["forum_url"], parsed["item_title"], price_str) if parsed["forum_url"] else None
 
     # Post to #adrian-updates
-    waf_updates_channel = client.get_channel(ADRIAN_UPDATES_CHANNEL_ID)
-    try:
-        if waf_updates_channel:
-            if file:
-                await waf_updates_channel.send(content=content_msg, file=discord.File(logo_file, filename="logo.png") if os.path.exists(logo_file) else None, embed=embed, view=watch_view)
+    waf_updates_channels = await get_all_server_channels("updates_channel_id", ADRIAN_UPDATES_CHANNEL_ID)
+    for waf_updates_channel in waf_updates_channels:
+        try:
+            if file and os.path.exists(logo_file):
+                await waf_updates_channel.send(content=content_msg, file=discord.File(logo_file, filename="logo.png"), embed=embed, view=watch_view)
             else:
                 await waf_updates_channel.send(content=content_msg, embed=embed, view=watch_view)
-            logger.info(f"[WAF] Alert sent for: {parsed['item_title']} | Price: {price_str} | Role: {role.name if role else 'Unknown'}")
-    except Exception as e:
-        logger.error(f"[WAF] Failed to send to updates channel: {e}")
+            logger.info(f"[WAF] Alert sent to {waf_updates_channel.guild.name}: {parsed['item_title']}")
+        except Exception as e:
+            logger.error(f"[WAF] Failed to send to {waf_updates_channel.guild.name}: {e}")
 
     # Log to private mod channel
     try:
@@ -1437,13 +1486,14 @@ async def send_waf_alert(channel, parsed, guild):
         for uid in waf_users:
             try:
                 await db_add_pending_alert(uid, f"WAF: {parsed['item_title']}", parsed.get('forum_url', ''), "🎖️")
-                if waf_updates_channel:
-                    member = waf_updates_channel.guild.get_member(int(uid))
-                    if member:
-                        await waf_updates_channel.send(
-                            content=f"{member.mention} 🎖️ New WAF listing!",
-                            delete_after=8
-                        )
+                for waf_updates_channel in waf_updates_channels:
+                        member = waf_updates_channel.guild.get_member(int(uid))
+                        if member:
+                            await waf_updates_channel.send(
+                                content=f"{member.mention} 🎖️ New WAF listing!",
+                                delete_after=8
+                            )
+                            break
             except Exception as ping_err:
                 logger.debug(f"[WAF Alert] Could not ping {uid}: {ping_err}")
     except Exception as e:
@@ -2134,13 +2184,13 @@ class ForumSelectView(discord.ui.View):
 
 async def show_all_done(interaction: discord.Interaction, edit=True):
     """Show final screen after all questions answered."""
-    # Assign Adrian Verified role
+    # Assign Adrian Verified role — use server config ID first, fallback to hardcoded
     try:
         if interaction.guild:
-            verified_role = interaction.guild.get_role(ADRIAN_VERIFIED_ROLE_ID)
+            verified_role = await get_server_role(interaction.guild, "verified_role_id", ADRIAN_VERIFIED_ROLE_ID)
             if verified_role and verified_role not in interaction.user.roles:
                 await interaction.user.add_roles(verified_role, reason="Completed /start onboarding")
-                logger.info(f"[Adrian] Verified role assigned to {interaction.user}")
+                logger.info(f"[Adrian] Verified role assigned to {interaction.user} in {interaction.guild.name}")
     except Exception as e:
         logger.error(f"[Adrian] Could not assign verified role: {e}")
 
@@ -2246,10 +2296,10 @@ class FeedbackModal(discord.ui.Modal, title="Leave Feedback for the Developer"):
                 # Assign the Guerrilla Warfare role
                 try:
                     if interaction.guild:
-                        gw_role = interaction.guild.get_role(GUERRILLA_WARFARE_ROLE_ID)
+                        gw_role = await get_server_role(interaction.guild, "guerrilla_role_id", GUERRILLA_WARFARE_ROLE_ID)
                         if gw_role:
                             await interaction.user.add_roles(gw_role, reason="Triggered feedback filter")
-                            logger.info(f"[Feedback] Guerrilla Warfare role assigned to {interaction.user}")
+                            logger.info(f"[Feedback] Guerrilla Warfare role assigned to {interaction.user} in {interaction.guild.name}")
                 except Exception as role_err:
                     logger.error(f"[Feedback] Could not assign role: {role_err}")
             else:
@@ -2532,6 +2582,24 @@ async def complete_setup(interaction, accept_cross_posts=None):
         except Exception as e:
             results.append(f"⚠️ Could not create Adrian Verified role: {e}")
 
+    # Find or create Guerrilla Warfare role
+    gw_role = None
+    for role in guild.roles:
+        if role.name == "Guerrilla Warfare":
+            gw_role = role
+            break
+    if not gw_role:
+        try:
+            gw_role = await guild.create_role(
+                name="Guerrilla Warfare",
+                color=discord.Color.red(),
+                reason="Created by Adrian setup"
+            )
+            results.append("✅ Created **Guerrilla Warfare** role")
+            await db_save_server_config(str(guild.id), guerrilla_role_id=str(gw_role.id))
+        except Exception as e:
+            results.append(f"⚠️ Could not create Guerrilla Warfare role: {e}")
+
     # Set permissions on commands channel — everyone can see and use
     if commands_channel and verified_role:
         try:
@@ -2600,6 +2668,7 @@ async def setup_cmd(interaction: discord.Interaction):
             "📌 **Assign channels** for commands and dealer alerts\n"
             "🔒 **Set permissions** — only verified members see the alerts channel\n"
             "🎖️ **Create Adrian Verified role** — given to members after `/start`\n"
+            "⚔️ **Create Guerrilla Warfare role** — assigned to members who violate guidelines\n"
             "🖼️ **Post the welcome image** in your commands channel\n\n"
             "You won't need to touch any settings — I handle everything.\n\n"
             "**Step 1 of 3 — Commands Channel**\n"
@@ -3804,7 +3873,10 @@ async def on_guild_remove(guild):
 async def on_thread_create(thread):
     """When a new listing is posted in the estate channel, bot posts a check before you buy message."""
     try:
-        if thread.parent_id != ESTATE_CHANNEL_ID:
+        # Check if this thread belongs to any server's estate channel
+        config = await db_get_server_config(str(thread.guild.id))
+        estate_channel_id = get_config_value(config, "estate_channel_id") if config else ESTATE_CHANNEL_ID
+        if thread.parent_id != estate_channel_id:
             return
 
         seller_id = thread.owner_id
@@ -3836,14 +3908,19 @@ async def on_thread_update(before, after):
     """Detect when the Sold tag is applied to an estate listing."""
     try:
         # Only watch the estate channel
-        if after.parent_id != ESTATE_CHANNEL_ID:
+        # Check if this thread belongs to any server's estate channel
+        config = await db_get_server_config(str(after.guild.id))
+        estate_channel_id = get_config_value(config, "estate_channel_id") if config else ESTATE_CHANNEL_ID
+        sold_tag_id = get_config_value(config, "estate_sold_tag_id") if config else ESTATE_SOLD_TAG_ID
+
+        if after.parent_id != estate_channel_id:
             return
 
         before_tag_ids = {t.id for t in before.applied_tags} if before.applied_tags else set()
         after_tag_ids = {t.id for t in after.applied_tags} if after.applied_tags else set()
 
         # Check if Sold tag was just added
-        if ESTATE_SOLD_TAG_ID in after_tag_ids and ESTATE_SOLD_TAG_ID not in before_tag_ids:
+        if sold_tag_id in after_tag_ids and sold_tag_id not in before_tag_ids:
             logger.info(f"[Estate] Sold tag detected on thread: {after.name} ({after.id})")
 
             # Get the thread owner (seller) from the starter message
