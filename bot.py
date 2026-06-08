@@ -795,13 +795,9 @@ async def db_get_user_points(user_id):
         return (tx_count * 30) + (review_count * 10)
 
 async def db_get_user_warnings(user_id):
-    """Check if user has active warnings."""
-    async with client.db.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT COUNT(*) as cnt FROM warnings WHERE user_id=$1",
-            str(user_id)
-        )
-        return row["cnt"] if row else 0
+    """Check if user has active warnings — returns 0 until user warning system is built."""
+    # User warning system not yet implemented — warnings table is for dealers only
+    return 0
 
 def get_rank(points, has_warnings=False):
     """Get rank name based on points. Warnings block above Corporal."""
