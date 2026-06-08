@@ -327,6 +327,15 @@ class MilitariaBot(discord.Client):
                 pass  # Column already exists
 
             await conn.execute('''
+                CREATE TABLE IF NOT EXISTS listing_blocks (
+                    id SERIAL PRIMARY KEY,
+                    seller_id TEXT NOT NULL,
+                    buyer_id TEXT NOT NULL,
+                    thread_id TEXT NOT NULL,
+                    created_at BIGINT NOT NULL
+                )
+            ''')
+            await conn.execute('''
                 CREATE TABLE IF NOT EXISTS cross_post_mirrors (
                     id SERIAL PRIMARY KEY,
                     original_thread_id TEXT NOT NULL,
@@ -801,6 +810,24 @@ async def db_get_completed_transactions(user_id):
             str(user_id)
         )
         return seller_count or 0, buyer_count or 0
+
+# ==================== LISTING NEGOTIATION DB ====================
+
+async def db_block_buyer(seller_id, buyer_id, thread_id):
+    async with client.db.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO listing_blocks (seller_id, buyer_id, thread_id, created_at) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING",
+            str(seller_id), str(buyer_id), str(thread_id),
+            int(datetime.now(timezone.utc).timestamp())
+        )
+
+async def db_is_buyer_blocked(seller_id, buyer_id, thread_id):
+    async with client.db.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT 1 FROM listing_blocks WHERE seller_id=$1 AND buyer_id=$2 AND thread_id=$3",
+            str(seller_id), str(buyer_id), str(thread_id)
+        )
+        return row is not None
 
 # ==================== CROSS-POST DB ====================
 
@@ -1384,47 +1411,232 @@ async def cross_post_listing(thread, seller, starter_message=None):
                 continue
 
             try:
-                # Build contact seller view
+                # Build negotiation view
                 _seller_id = str(seller.id)
+                _thread_id = str(thread.id)
+                _item_title = thread.name
+                _guild_name = thread.guild.name
+
                 class ContactSellerView(discord.ui.View):
-                    def __init__(self, seller_id, item_title, original_guild_name):
+                    def __init__(self, seller_id, buyer_id, item_title, guild_name, thread_id):
                         super().__init__(timeout=None)
                         self.seller_id = seller_id
+                        self.buyer_id = buyer_id
                         self.item_title = item_title
-                        self.original_guild_name = original_guild_name
+                        self.guild_name = guild_name
+                        self.thread_id = thread_id
 
-                    @discord.ui.button(label="📨 Contact Seller", style=discord.ButtonStyle.primary, custom_id=f"contact_seller_{_seller_id}_{thread.id}")
+                    @discord.ui.button(label="📨 Contact Seller", style=discord.ButtonStyle.primary, custom_id=f"contact_seller_{_seller_id}_{_thread_id}")
                     async def contact_seller(self, interaction: discord.Interaction, button: discord.ui.Button):
                         try:
-                            seller_user = await client.fetch_user(int(self.seller_id))
-                            if seller_user:
-                                # DM the seller
-                                dm_embed = discord.Embed(
-                                    title="💬 Someone is interested in your listing!",
-                                    description=(
-                                        f"**{interaction.user.display_name}** from **{interaction.guild.name}** "
-                                        f"is interested in your listing:\n\n"
-                                        f"**{self.item_title}**\n\n"
-                                        f"They\'d like to negotiate via DM. Feel free to reach out to them!"
-                                    ),
-                                    color=discord.Color.dark_gold(),
-                                    timestamp=datetime.now(timezone.utc)
-                                )
-                                dm_embed.set_thumbnail(url=interaction.user.display_avatar.url)
-                                dm_embed.add_field(name="Interested Buyer", value=f"{interaction.user.mention} ({interaction.user.display_name})", inline=True)
-                                dm_embed.set_footer(text="Adrian — Estand Marketplace")
-                                await seller_user.send(embed=dm_embed)
+                            # Check if buyer is blocked
+                            if await db_is_buyer_blocked(self.seller_id, str(interaction.user.id), self.thread_id):
                                 await interaction.response.send_message(
-                                    f"✅ The seller has been notified! They\'ll reach out to you via DM.",
+                                    "🚫 The seller has declined contact for this listing.",
                                     ephemeral=True
                                 )
-                        except discord.Forbidden:
+                                return
+
+                            seller_user = await client.fetch_user(int(self.seller_id))
+                            if not seller_user:
+                                await interaction.response.send_message("⚠️ Could not find the seller.", ephemeral=True)
+                                return
+
+                            buyer = interaction.user
+                            dm_embed = discord.Embed(
+                                title="💬 Someone is interested in your listing!",
+                                description=(
+                                    f"**{buyer.display_name}** from **{interaction.guild.name}** "
+                                    f"is interested in:\n\n**{self.item_title}**"
+                                ),
+                                color=discord.Color.dark_gold(),
+                                timestamp=datetime.now(timezone.utc)
+                            )
+                            dm_embed.set_thumbnail(url=buyer.display_avatar.url)
+                            dm_embed.add_field(name="Buyer", value=f"{buyer.mention} ({buyer.display_name})", inline=True)
+                            dm_embed.set_footer(text="Adrian — Estand Marketplace")
+
+                            class SellerResponseView(discord.ui.View):
+                                def __init__(self):
+                                    super().__init__(timeout=86400)  # 24 hours
+
+                                async def _disable(self, interaction):
+                                    for child in self.children:
+                                        child.disabled = True
+                                    await interaction.message.edit(view=self)
+
+                                @discord.ui.button(label="✅ Accept Interest", style=discord.ButtonStyle.success)
+                                async def accept(self, interaction2: discord.Interaction, button: discord.ui.Button):
+                                    await self._disable(interaction2)
+                                    try:
+                                        buyer_user = await client.fetch_user(int(buyer.id))
+                                        accept_embed = discord.Embed(
+                                            title="✅ Seller is interested!",
+                                            description=(
+                                                f"The seller of **{self.view.item_title if hasattr(self, 'view') else _item_title}** has accepted your interest!\n\n"
+                                                f"You can now DM the seller directly to negotiate."
+                                            ),
+                                            color=discord.Color.green()
+                                        )
+                                        accept_embed.add_field(name="Seller", value=f"<@{seller_user.id}> ({seller_user.display_name})", inline=True)
+                                        accept_embed.set_footer(text="Adrian — Estand Marketplace")
+                                        await buyer_user.send(embed=accept_embed)
+                                        await interaction2.response.send_message("✅ You accepted their interest. They've been notified and can DM you now!", ephemeral=True)
+                                    except discord.Forbidden:
+                                        await interaction2.response.send_message("⚠️ Could not DM the buyer — they may have DMs disabled.", ephemeral=True)
+
+                                @discord.ui.button(label="💰 Counter Offer", style=discord.ButtonStyle.primary)
+                                async def counter(self, interaction2: discord.Interaction, button: discord.ui.Button):
+                                    class CounterModal(discord.ui.Modal, title="Send Counter Offer"):
+                                        price = discord.ui.TextInput(label="Your asking price", placeholder="e.g. $350", max_length=50)
+                                        message = discord.ui.TextInput(label="Message to buyer (optional)", style=discord.TextStyle.paragraph, placeholder="Any additional details...", required=False, max_length=500)
+
+                                        async def on_submit(self, interaction3: discord.Interaction):
+                                            await self._disable_parent(interaction2)
+                                            try:
+                                                buyer_user = await client.fetch_user(int(buyer.id))
+                                                counter_embed = discord.Embed(
+                                                    title="💰 Counter Offer Received!",
+                                                    description=f"The seller of **{_item_title}** has sent you a counter offer.",
+                                                    color=discord.Color.gold(),
+                                                    timestamp=datetime.now(timezone.utc)
+                                                )
+                                                counter_embed.add_field(name="Asking Price", value=self.price.value, inline=True)
+                                                if self.message.value:
+                                                    counter_embed.add_field(name="Message from Seller", value=self.message.value, inline=False)
+                                                counter_embed.add_field(name="Seller", value=f"<@{seller_user.id}>", inline=True)
+                                                counter_embed.set_footer(text="Adrian — Estand Marketplace")
+
+                                                class BuyerResponseView(discord.ui.View):
+                                                    def __init__(self):
+                                                        super().__init__(timeout=86400)
+
+                                                    async def _disable(self, interaction):
+                                                        for child in self.children:
+                                                            child.disabled = True
+                                                        await interaction.message.edit(view=self)
+
+                                                    @discord.ui.button(label="✅ Accept Counter", style=discord.ButtonStyle.success)
+                                                    async def accept_counter(self, interaction4: discord.Interaction, button: discord.ui.Button):
+                                                        await self._disable(interaction4)
+                                                        try:
+                                                            seller_notify = discord.Embed(
+                                                                title="🎉 Buyer accepted your counter offer!",
+                                                                description=f"**{buyer.display_name}** accepted your offer of **{self.price.value if hasattr(self, 'price') else 'your price'}** for **{_item_title}**!\n\nYou can now finalize the sale via DM.",
+                                                                color=discord.Color.green()
+                                                            )
+                                                            seller_notify.add_field(name="Buyer", value=f"<@{buyer.id}> ({buyer.display_name})", inline=True)
+                                                            seller_notify.set_footer(text="Adrian — Estand Marketplace")
+                                                            await seller_user.send(embed=seller_notify)
+                                                            await interaction4.response.send_message("✅ You accepted the counter offer! The seller has been notified.", ephemeral=True)
+                                                        except discord.Forbidden:
+                                                            await interaction4.response.send_message("⚠️ Could not notify the seller.", ephemeral=True)
+
+                                                    @discord.ui.button(label="💰 Counter Back", style=discord.ButtonStyle.primary)
+                                                    async def counter_back(self, interaction4: discord.Interaction, button: discord.ui.Button):
+                                                        class BuyerCounterModal(discord.ui.Modal, title="Send Your Counter"):
+                                                            price = discord.ui.TextInput(label="Your offer price", placeholder="e.g. $300", max_length=50)
+                                                            message = discord.ui.TextInput(label="Message (optional)", style=discord.TextStyle.paragraph, required=False, max_length=500)
+
+                                                            async def on_submit(self, interaction5: discord.Interaction):
+                                                                await BuyerResponseView._disable(self, interaction4)
+                                                                try:
+                                                                    back_embed = discord.Embed(
+                                                                        title="💰 Buyer Counter Offer",
+                                                                        description=f"**{buyer.display_name}** countered your offer on **{_item_title}**.",
+                                                                        color=discord.Color.gold()
+                                                                    )
+                                                                    back_embed.add_field(name="Their Offer", value=self.price.value, inline=True)
+                                                                    if self.message.value:
+                                                                        back_embed.add_field(name="Message", value=self.message.value, inline=False)
+                                                                    back_embed.set_footer(text="Adrian — Estand Marketplace")
+                                                                    await seller_user.send(embed=back_embed)
+                                                                    await interaction5.response.send_message("✅ Your counter has been sent to the seller!", ephemeral=True)
+                                                                except discord.Forbidden:
+                                                                    await interaction5.response.send_message("⚠️ Could not reach the seller.", ephemeral=True)
+
+                                                        await interaction4.response.send_modal(BuyerCounterModal())
+
+                                                    @discord.ui.button(label="❌ Decline", style=discord.ButtonStyle.danger)
+                                                    async def decline_counter(self, interaction4: discord.Interaction, button: discord.ui.Button):
+                                                        await self._disable(interaction4)
+                                                        try:
+                                                            decline_embed = discord.Embed(
+                                                                title="❌ Buyer declined your counter offer",
+                                                                description=f"**{buyer.display_name}** passed on your counter offer for **{_item_title}**.",
+                                                                color=discord.Color.red()
+                                                            )
+                                                            decline_embed.set_footer(text="Adrian — Estand Marketplace")
+                                                            await seller_user.send(embed=decline_embed)
+                                                            await interaction4.response.send_message("You declined the counter offer. The seller has been notified.", ephemeral=True)
+                                                        except discord.Forbidden:
+                                                            await interaction4.response.send_message("⚠️ Could not notify the seller.", ephemeral=True)
+
+                                                await buyer_user.send(embed=counter_embed, view=BuyerResponseView())
+                                                await interaction3.response.send_message("✅ Your counter offer has been sent!", ephemeral=True)
+                                            except discord.Forbidden:
+                                                await interaction3.response.send_message("⚠️ Could not DM the buyer.", ephemeral=True)
+
+                                        async def _disable_parent(self, original_interaction):
+                                            try:
+                                                for child in original_interaction.message.components:
+                                                    pass
+                                            except Exception:
+                                                pass
+
+                                    await interaction2.response.send_modal(CounterModal())
+
+                                @discord.ui.button(label="💬 Send Message", style=discord.ButtonStyle.secondary)
+                                async def send_message_btn(self, interaction2: discord.Interaction, button: discord.ui.Button):
+                                    class MessageModal(discord.ui.Modal, title="Send Message to Buyer"):
+                                        message = discord.ui.TextInput(label="Your message", style=discord.TextStyle.paragraph, placeholder="Type your message to the buyer...", max_length=1000)
+
+                                        async def on_submit(self, interaction3: discord.Interaction):
+                                            try:
+                                                buyer_user = await client.fetch_user(int(buyer.id))
+                                                msg_embed = discord.Embed(
+                                                    title=f"💬 Message from the seller of {_item_title}",
+                                                    description=self.message.value,
+                                                    color=discord.Color.dark_gold(),
+                                                    timestamp=datetime.now(timezone.utc)
+                                                )
+                                                msg_embed.add_field(name="Seller", value=f"<@{seller_user.id}>", inline=True)
+                                                msg_embed.set_footer(text="Adrian — Estand Marketplace")
+                                                await buyer_user.send(embed=msg_embed)
+                                                await interaction3.response.send_message("✅ Message sent to the buyer!", ephemeral=True)
+                                            except discord.Forbidden:
+                                                await interaction3.response.send_message("⚠️ Could not DM the buyer.", ephemeral=True)
+
+                                    await interaction2.response.send_modal(MessageModal())
+
+                                @discord.ui.button(label="🚫 Block", style=discord.ButtonStyle.danger)
+                                async def block_buyer(self, interaction2: discord.Interaction, button: discord.ui.Button):
+                                    await self._disable(interaction2)
+                                    await db_block_buyer(str(seller_user.id), str(buyer.id), _thread_id)
+                                    try:
+                                        buyer_user = await client.fetch_user(int(buyer.id))
+                                        block_embed = discord.Embed(
+                                            title="🚫 Seller declined contact",
+                                            description=f"The seller of **{_item_title}** has declined further contact for this listing.",
+                                            color=discord.Color.red()
+                                        )
+                                        block_embed.set_footer(text="Adrian — Estand Marketplace")
+                                        await buyer_user.send(embed=block_embed)
+                                    except discord.Forbidden:
+                                        pass
+                                    await interaction2.response.send_message("🚫 Buyer has been blocked from contacting you about this listing.", ephemeral=True)
+                                    logger.info(f"[Negotiation] Seller {seller_user.id} blocked buyer {buyer.id} on listing {_thread_id}")
+
+                            await seller_user.send(embed=dm_embed, view=SellerResponseView())
                             await interaction.response.send_message(
-                                "⚠️ Could not contact the seller — they may have DMs disabled.",
+                                "✅ The seller has been notified! They'll respond to you via DM.",
                                 ephemeral=True
                             )
+                            logger.info(f"[Negotiation] Buyer {buyer.id} contacted seller {seller_user.id} about listing {_thread_id}")
+                        except discord.Forbidden:
+                            await interaction.response.send_message("⚠️ Could not contact the seller — they may have DMs disabled.", ephemeral=True)
                         except Exception as e:
-                            logger.error(f"[CrossPost] Contact seller error: {e}")
+                            logger.error(f"[Negotiation] Contact seller error: {e}\n{traceback.format_exc()}")
                             await interaction.response.send_message("⚠️ Something went wrong.", ephemeral=True)
 
                 # Build mirror embed
