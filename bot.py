@@ -789,7 +789,7 @@ async def db_get_user_points(user_id):
         ) or 0
         # Points from dealer reviews (10 each)
         review_count = await conn.fetchval(
-            "SELECT COUNT(*) FROM reviews WHERE reviewer_id=$1 AND status='approved'",
+            "SELECT COUNT(*) FROM reviews WHERE user_id=$1 AND status='approved'",
             str(user_id)
         ) or 0
         return (tx_count * 30) + (review_count * 10)
@@ -830,7 +830,7 @@ async def db_get_top_percent(user_id):
             "SELECT user_id, COUNT(*) as cnt FROM estate_transactions WHERE status='completed' GROUP BY user_id"
         )
         review_users = await conn.fetch(
-            "SELECT reviewer_id as user_id, COUNT(*) as cnt FROM reviews WHERE status='approved' GROUP BY reviewer_id"
+            "SELECT user_id, COUNT(*) as cnt FROM reviews WHERE status='approved' GROUP BY user_id"
         )
         # Build points map
         points_map = {}
@@ -5074,8 +5074,8 @@ async def on_ready():
                 # Save message ID for reaction watching
                 await db_save_server_config(str(GUILD_ID), welcome_message_id=str(welcome_msg.id))
                 logger.info("[Startup] Welcome image posted to #Adrian with buttons.")
+            else:
                 logger.warning("[Startup] Adrian_welcome.png not found in logos folder.")
-        else:
             logger.warning("[Startup] Could not find #Adrian channel.")
     except Exception as e:
         logger.error(f"[Startup] Failed to post welcome image: {e}")
