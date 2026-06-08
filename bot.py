@@ -1385,6 +1385,7 @@ async def cross_post_listing(thread, seller, starter_message=None):
 
             try:
                 # Build contact seller view
+                _seller_id = str(seller.id)
                 class ContactSellerView(discord.ui.View):
                     def __init__(self, seller_id, item_title, original_guild_name):
                         super().__init__(timeout=None)
@@ -1392,7 +1393,7 @@ async def cross_post_listing(thread, seller, starter_message=None):
                         self.item_title = item_title
                         self.original_guild_name = original_guild_name
 
-                    @discord.ui.button(label="📨 Contact Seller", style=discord.ButtonStyle.primary, custom_id=f"contact_seller_{seller_id}_{thread.id}")
+                    @discord.ui.button(label="📨 Contact Seller", style=discord.ButtonStyle.primary, custom_id=f"contact_seller_{_seller_id}_{thread.id}")
                     async def contact_seller(self, interaction: discord.Interaction, button: discord.ui.Button):
                         try:
                             seller_user = await client.fetch_user(int(self.seller_id))
