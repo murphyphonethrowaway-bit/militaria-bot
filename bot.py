@@ -2690,7 +2690,17 @@ class SetupCrossPostView(discord.ui.View):
         super().__init__(timeout=None)
 
     async def _save(self, interaction, accept):
-        await db_save_server_config(str(interaction.guild_id), accept_cross_posts=accept, setup_complete=1)
+        # Find the cross-posts channel if it exists
+        cross_channel = discord.utils.get(interaction.guild.channels, name="estate-cross-posts")
+        if cross_channel:
+            await db_save_server_config(
+                str(interaction.guild_id),
+                accept_cross_posts=accept,
+                estate_cross_posts_channel_id=str(cross_channel.id),
+                setup_complete=1
+            )
+        else:
+            await db_save_server_config(str(interaction.guild_id), accept_cross_posts=accept, setup_complete=1)
         await complete_setup(interaction)
 
 
@@ -3126,7 +3136,7 @@ async def debug_cmd(interaction: discord.Interaction):
     embed.set_footer(text="Adrian Owner Dashboard")
     await interaction.followup.send(embed=embed, ephemeral=True)
 
-@client.tree.command(name="watch", description="[Owner] Mirror a channel from another server to this one")
+@client.tree.command(name="channelfeed", description="[Owner] Mirror a channel from another server to this one")
 async def watch_cmd(interaction: discord.Interaction):
     if not is_bot_owner(interaction.user):
         await interaction.response.send_message("❓ Unknown command.", ephemeral=True)
@@ -4150,12 +4160,14 @@ class WelcomeView(discord.ui.View):
                 ephemeral=True
             )
             return
-        prefs = await db_get_user_prefs(str(interaction.user.id))
+        eras_raw = await db_get_user_eras(str(interaction.user.id))
+        countries_raw = await db_get_user_countries(str(interaction.user.id))
+        forums_raw = await db_get_user_forums(str(interaction.user.id))
         era_names = {0: "All Eras", 1: "Pre-1914", 2: "WWI", 3: "WWII", 4: "Korean War", 5: "Vietnam", 6: "Cold War", 7: "GWOT"}
         country_names = {"Z": "All Countries", "A": "🇺🇸 US", "B": "🇬🇧 British", "C": "🇨🇦 Canadian", "D": "🇩🇪 German", "E": "🇷🇺 Soviet", "F": "🇫🇷 French", "G": "🇯🇵 Japanese", "H": "🇮🇹 Italian"}
-        eras_str = ", ".join([era_names.get(int(e), str(e)) for e in (prefs.get("eras") or "0").split(",")]) if prefs else "Not set"
-        countries_str = ", ".join([country_names.get(c, c) for c in (prefs.get("countries") or "Z").split(",")]) if prefs else "Not set"
-        forums_str = (prefs.get("forums") or "None").upper() if prefs else "Not set"
+        eras_str = ", ".join([era_names.get(int(e), str(e)) for e in (eras_raw or [0])]) if eras_raw else "Not set"
+        countries_str = ", ".join([country_names.get(c, c) for c in (countries_raw or ["Z"])]) if countries_raw else "Not set"
+        forums_str = (forums_raw or "None").upper() if forums_raw else "Not set"
         embed = discord.Embed(
             title=f"🎖️ {interaction.user.display_name}'s Profile",
             color=discord.Color.dark_gold(),
@@ -4337,13 +4349,25 @@ async def on_thread_create(thread):
         # Check if this thread belongs to any server's estate channel
         config = await db_get_server_config(str(thread.guild.id))
         estate_channel_id = get_config_value(config, "estate_channel_id") if config else None
+
         # Fall back to hardcoded ID if not in DB
         if not estate_channel_id:
             estate_channel_id = ESTATE_CHANNEL_ID
-        logger.info(f"[Estate] Config estate_channel_id={estate_channel_id} | thread.parent_id={thread.parent_id}")
+
+        # Last resort — check if parent is ANY forum channel on this server
+        # (handles case where /setup estate step was skipped but forum exists)
         if thread.parent_id != estate_channel_id:
-            logger.info(f"[Estate] Skipping — channel mismatch")
-            return
+            logger.info(f"[Estate] Channel mismatch — config={estate_channel_id} actual={thread.parent_id}")
+            # Check all servers' estate channels
+            all_servers = await db_get_all_servers()
+            matched = any(
+                get_config_value(s, "estate_channel_id") == thread.parent_id
+                for s in all_servers
+            )
+            if not matched and thread.parent_id != ESTATE_CHANNEL_ID:
+                logger.info(f"[Estate] Skipping — not a registered estate channel")
+                return
+            logger.info(f"[Estate] Matched via server list lookup")
 
         seller_id = thread.owner_id
         logger.info(f"[Estate] New listing: {thread.name} by {seller_id}")
@@ -4399,14 +4423,28 @@ async def on_thread_update(before, after):
         if not sold_tag_id:
             sold_tag_id = ESTATE_SOLD_TAG_ID
 
+        # Check all servers if this server's config is missing
         if after.parent_id != estate_channel_id:
-            return
+            all_servers = await db_get_all_servers()
+            matched_server = next(
+                (s for s in all_servers if get_config_value(s, "estate_channel_id") == after.parent_id),
+                None
+            )
+            if matched_server:
+                estate_channel_id = after.parent_id
+                sold_tag_id = get_config_value(matched_server, "estate_sold_tag_id") or ESTATE_SOLD_TAG_ID
+            elif after.parent_id != ESTATE_CHANNEL_ID:
+                return
 
         before_tag_ids = {t.id for t in before.applied_tags} if before.applied_tags else set()
         after_tag_ids = {t.id for t in after.applied_tags} if after.applied_tags else set()
 
+        # Convert sold_tag_id to int for comparison
+        sold_tag_id_int = int(sold_tag_id) if sold_tag_id else ESTATE_SOLD_TAG_ID
+        logger.info(f"[Estate] Thread update — tags before={before_tag_ids} after={after_tag_ids} sold_tag={sold_tag_id_int}")
+
         # Check if Sold tag was just added
-        if sold_tag_id in after_tag_ids and sold_tag_id not in before_tag_ids:
+        if sold_tag_id_int in after_tag_ids and sold_tag_id_int not in before_tag_ids:
             logger.info(f"[Estate] Sold tag detected on thread: {after.name} ({after.id})")
 
             # Get the thread owner (seller) from the starter message
