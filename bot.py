@@ -1569,19 +1569,35 @@ async def check_dealer(session, dealer, seen, channel):
     else:
         print(f"[{name}] No new items ({len(current_items)} items unchanged).")
 
-async def check_gmail_async():
-    triggered = []
+def _fetch_gmail_sync():
+    """Synchronous Gmail IMAP fetch — run in thread to avoid blocking event loop."""
+    raw_emails = []
     try:
-        mail = imaplib.IMAP4_SSL("imap.gmail.com")
+        mail = imaplib.IMAP4_SSL("imap.gmail.com", timeout=20)
         mail.login(GMAIL_USER, GMAIL_APP_PASSWORD)
         mail.select("inbox")
         _, messages = mail.search(None, "UNSEEN")
         email_ids = messages[0].split()
-        logger.info(f"[Gmail] Found {len(email_ids)} unread email(s).")
         for eid in email_ids:
             _, msg_data = mail.fetch(eid, "(RFC822)")
-            msg = email.message_from_bytes(msg_data[0][1])
-            msg_id = msg.get("Message-ID", str(eid))
+            raw_emails.append(msg_data[0][1])
+        try:
+            mail.logout()
+        except Exception:
+            pass
+    except Exception as e:
+        logger.error(f"[Gmail] IMAP error: {e}")
+    return raw_emails
+
+async def check_gmail_async():
+    triggered = []
+    try:
+        # Run blocking IMAP in a thread to avoid blocking the event loop
+        raw_emails = await asyncio.to_thread(_fetch_gmail_sync)
+        logger.info(f"[Gmail] Found {len(raw_emails)} unread email(s).")
+        for raw in raw_emails:
+            msg = email.message_from_bytes(raw)
+            msg_id = msg.get("Message-ID", "")
             logger.debug(f"[Gmail] Checking msg_id: {msg_id}")
             if await db_is_email_seen(msg_id):
                 logger.info(f"[Gmail] Skipping already seen email: {msg_id}")
@@ -1618,7 +1634,6 @@ async def check_gmail_async():
                     break
             if not matched:
                 logger.info(f"[Gmail] No dealer matched for: {subject}")
-        mail.logout()
     except Exception as e:
         logger.error(f"[Gmail] Error checking email: {e}\n{traceback.format_exc()}")
     return triggered
@@ -5237,6 +5252,14 @@ async def on_thread_create(thread):
 
         if not isinstance(thread.parent, discord.ForumChannel):
             logger.info(f"[Estate] Skipping — not a forum channel")
+            return
+
+        # Skip mirror threads created by the bot — prevents infinite cross-post loop
+        if thread.owner_id == client.user.id:
+            logger.info(f"[Estate] Skipping — thread created by bot (mirror)")
+            return
+        if thread.name.startswith("🌐"):
+            logger.info(f"[Estate] Skipping — mirror thread (starts with 🌐)")
             return
 
         # Check if this thread belongs to any server's estate channel
