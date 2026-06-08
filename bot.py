@@ -1593,7 +1593,7 @@ async def send_usmf_alert(channel, parsed):
         color=discord.Color.dark_blue(),
         timestamp=datetime.now(timezone.utc)
     )
-    embed.set_footer(text="Adrian — Forum Alert")
+    embed.set_footer(text="Adrian — Forum Alert | You may need to make a free forum account to see this listing")
 
     logo_file = os.path.join(SCRIPT_DIR, "logos", "usmf.png")
     file = None
@@ -1667,7 +1667,7 @@ async def send_waf_alert(channel, parsed, guild):
         color=discord.Color.dark_gold(),
         timestamp=datetime.now(timezone.utc)
     )
-    embed.set_footer(text="Adrian — Estand")
+    embed.set_footer(text="Adrian — Forum Alert | You may need to make a free forum account to see this listing")
 
     logo_file = os.path.join(SCRIPT_DIR, "logos", "waf.png")
     file = None
@@ -1916,7 +1916,7 @@ class SellerProfileView(discord.ui.View):
                     value="No transactions yet",
                     inline=False
                 )
-            embed.set_footer(text="Adrian — Estand")
+            embed.set_footer(text="Adrian — Forum Alert | You may need to make a free forum account to see this listing")
 
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -1959,7 +1959,7 @@ class BuyerIdentifyView(discord.ui.View):
                         color=discord.Color.dark_gold(),
                         timestamp=datetime.now(timezone.utc)
                     )
-                    rating_embed.set_footer(text="Adrian — Estand")
+                    rating_embed.set_footer(text="Adrian — Forum Alert | You may need to make a free forum account to see this listing")
                     await seller.send(embed=rating_embed, view=EstateRatingView(self.thread_id, str(interaction.user.id), self.seller_id))
             except Exception as e:
                 logger.error(f"[Estate] Could not DM seller: {e}")
@@ -4498,7 +4498,7 @@ async def reputation_cmd(interaction: discord.Interaction, member: discord.Membe
         stars = "⭐" * int(rating) + ("✨" if rating % 1 >= 0.5 else "")
         embed.add_field(name="Rating", value=f"{stars} {rating}/5", inline=True)
         embed.add_field(name="Transactions", value=f"📦 {count}", inline=True)
-    embed.set_footer(text="Adrian — Estand")
+    embed.set_footer(text="Adrian — Forum Alert | You may need to make a free forum account to see this listing")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @client.tree.command(name="nextemail", description="🔒 Shows countdown to next email check")
@@ -5038,7 +5038,7 @@ async def on_thread_create(thread):
         embed = discord.Embed(color=discord.Color.dark_gold())
         if bot_state.get("check_before_buy_img_url"):
             embed.set_image(url=bot_state["check_before_buy_img_url"])
-        embed.set_footer(text="Adrian — Estand")
+        embed.set_footer(text="Adrian — Forum Alert | You may need to make a free forum account to see this listing")
 
         view = SellerProfileView(str(seller_id))
         await thread.send(embed=embed, view=view)
@@ -5052,7 +5052,7 @@ async def on_thread_create(thread):
             embed = discord.Embed(color=discord.Color.dark_gold())
             if bot_state.get("check_before_buy_img_url"):
                 embed.set_image(url=bot_state["check_before_buy_img_url"])
-            embed.set_footer(text="Adrian — Estand")
+            embed.set_footer(text="Adrian — Forum Alert | You may need to make a free forum account to see this listing")
             view = SellerProfileView(str(thread.owner_id))
             await thread.send(embed=embed, view=view)
             logger.info(f"[Estate] Check before you buy posted on retry in {thread.name}")
@@ -5117,7 +5117,7 @@ async def on_thread_update(before, after):
                 color=discord.Color.dark_gold(),
                 timestamp=datetime.now(timezone.utc)
             )
-            embed.set_footer(text="Adrian — Estand")
+            embed.set_footer(text="Adrian — Forum Alert | You may need to make a free forum account to see this listing")
             await after.send(embed=embed, view=BuyerIdentifyView(str(after.id), str(seller_id)))
             logger.info(f"[Estate] Buyer identification message sent in thread {after.name}")
 
