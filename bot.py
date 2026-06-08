@@ -3027,11 +3027,18 @@ async def complete_setup(interaction):
         embed.set_image(url=bot_state["setup_end_img_url"])
     embed.set_footer(text="Adrian — Discord's #1 Militaria Bot")
 
-    # Buttons were already disabled via edit_message, so use followup
+    # Send completion message
+    logger.info(f"[Setup] Sending completion screen to {interaction.user} in {interaction.guild.name}")
     try:
         await interaction.followup.send(embed=embed, ephemeral=True)
-    except Exception as e:
-        logger.error(f"[Setup] Could not send completion message: {e}")
+        logger.info("[Setup] Completion screen sent via followup")
+    except Exception as e1:
+        logger.warning(f"[Setup] followup failed: {e1} — trying edit_original_response")
+        try:
+            await interaction.edit_original_response(embed=embed, view=None)
+            logger.info("[Setup] Completion screen sent via edit_original_response")
+        except Exception as e2:
+            logger.error(f"[Setup] Both methods failed: followup={e1} edit={e2}")
 
 # ==================== OWNER COMMANDS (Murphy only, test server only) ====================
 
