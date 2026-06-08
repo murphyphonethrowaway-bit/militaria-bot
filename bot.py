@@ -316,6 +316,12 @@ class MilitariaBot(discord.Client):
                     timestamp BIGINT NOT NULL
                 )
             ''')
+            # Add new columns if they don't exist (safe migration)
+            try:
+                await conn.execute("ALTER TABLE server_config ADD COLUMN view_all_channels INTEGER DEFAULT 0")
+            except Exception:
+                pass  # Column already exists
+
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS server_config (
                     guild_id TEXT PRIMARY KEY,
@@ -2527,7 +2533,7 @@ class SetupPermissionsView(discord.ui.View):
     async def perms_yes(self, interaction: discord.Interaction, button: discord.ui.Button):
         await db_save_server_config(str(interaction.guild_id), view_all_channels=1)
         embed = discord.Embed(
-            title="⚙️ Last Step — Do you want a Marketplace?",
+            title="🏪 Estate Marketplace — Buy & Sell Militaria",
             description=(
                 "✅ Got it — thank you!\n\n"
                 "**Turn your server into a trusted militaria marketplace!** 🏪\n\n"
@@ -2545,7 +2551,7 @@ class SetupPermissionsView(discord.ui.View):
     @discord.ui.button(label="❌ No — Keep permissions as is", style=discord.ButtonStyle.secondary, custom_id="setup_perms_no")
     async def perms_no(self, interaction: discord.Interaction, button: discord.ui.Button):
         embed = discord.Embed(
-            title="⚙️ Last Step — Do you want a Marketplace?",
+            title="🏪 Estate Marketplace — Buy & Sell Militaria",
             description=(
                 "No problem — I'll work with the channels I can see.\n\n"
                 "**Turn your server into a trusted militaria marketplace!** 🏪\n\n"
@@ -2939,7 +2945,7 @@ async def setup_cmd(interaction: discord.Interaction):
 
                 # Move straight to estate step
                 embed3 = discord.Embed(
-                    title="⚙️ Last Step — Do you want a Marketplace?",
+                    title="🏪 Estate Marketplace — Buy & Sell Militaria",
                     description=(
                         "\n".join(results) + "\n\n"
                         "**Turn your server into a trusted militaria marketplace!** 🏪\n\n"
@@ -2997,7 +3003,7 @@ async def setup_cmd(interaction: discord.Interaction):
                             result = "✅ Found existing **#adrian-updates**"
                         await db_save_server_config(str(interaction3.guild_id), updates_channel_id=str(updates_channel.id))
                         embed3 = discord.Embed(
-                            title="⚙️ Last Step — Do you want a Marketplace?",
+                            title="🏪 Estate Marketplace — Buy & Sell Militaria",
                             description=(
                                 result + "\n\n"
                                 "**Turn your server into a trusted militaria marketplace!** 🏪\n\n"
@@ -3028,16 +3034,16 @@ async def setup_cmd(interaction: discord.Interaction):
                     updates_channel = interaction3.guild.get_channel(updates_channel_id)
                     await db_save_server_config(str(interaction3.guild_id), updates_channel_id=str(updates_channel_id))
                     embed3 = discord.Embed(
-                        title="⚙️ Last Step — Do you want a Marketplace?",
+                        title="⚙️ Step 3 of 4 — Permissions",
                         description=(
-                            f"✅ Commands: {commands_channel.mention} | Updates: {updates_channel.mention}\n\n"
-                            "**Turn your server into a trusted militaria marketplace!** 🏪\n\n"
-                            "🔍 **Seller profiles** — buyers check seller ratings before purchasing\n"
-                            "⭐ **Reputation system** — every transaction builds a global trust score\n"
-                            "🌐 **Cross-server listings** — sellers reach buyers across ALL Adrian servers\n"
-                            "🛡️ **Scam protection** — warning flags follow bad actors everywhere\n"
-                            "📊 **Transaction history** — full record of every completed sale\n\n"
-                            "It's completely free and takes 30 seconds to set up."
+                            "**Can I have permission to View All Channels?**\n\n"
+                            "This allows me to:\n"
+                            "👁️ **Monitor estate listings** across all your channels\n"
+                            "🛡️ **Detect scam activity** in any channel\n"
+                            "📢 **Mirror community channels** to the Adrian network\n"
+                            "🔧 **Troubleshoot issues** without needing manual intervention\n\n"
+                            "To grant this: **Server Settings → Roles → Adrian → Permissions → View Channels ✅**\n\n"
+                            "This is optional but strongly recommended for the best experience."
                         ),
                         color=discord.Color.dark_gold()
                     )
