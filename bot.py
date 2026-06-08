@@ -3879,8 +3879,11 @@ async def on_thread_create(thread):
 
         # Check if this thread belongs to any server's estate channel
         config = await db_get_server_config(str(thread.guild.id))
-        estate_channel_id = get_config_value(config, "estate_channel_id") if config else ESTATE_CHANNEL_ID
-        logger.info(f"[Estate] Config estate_channel_id={estate_channel_id} | thread.parent_id={thread.parent_id} | ESTATE_CHANNEL_ID={ESTATE_CHANNEL_ID}")
+        estate_channel_id = get_config_value(config, "estate_channel_id") if config else None
+        # Fall back to hardcoded ID if not in DB
+        if not estate_channel_id:
+            estate_channel_id = ESTATE_CHANNEL_ID
+        logger.info(f"[Estate] Config estate_channel_id={estate_channel_id} | thread.parent_id={thread.parent_id}")
         if thread.parent_id != estate_channel_id:
             logger.info(f"[Estate] Skipping — channel mismatch")
             return
@@ -3932,8 +3935,12 @@ async def on_thread_update(before, after):
         # Only watch the estate channel
         # Check if this thread belongs to any server's estate channel
         config = await db_get_server_config(str(after.guild.id))
-        estate_channel_id = get_config_value(config, "estate_channel_id") if config else ESTATE_CHANNEL_ID
-        sold_tag_id = get_config_value(config, "estate_sold_tag_id") if config else ESTATE_SOLD_TAG_ID
+        estate_channel_id = get_config_value(config, "estate_channel_id") if config else None
+        if not estate_channel_id:
+            estate_channel_id = ESTATE_CHANNEL_ID
+        sold_tag_id = get_config_value(config, "estate_sold_tag_id") if config else None
+        if not sold_tag_id:
+            sold_tag_id = ESTATE_SOLD_TAG_ID
 
         if after.parent_id != estate_channel_id:
             return
