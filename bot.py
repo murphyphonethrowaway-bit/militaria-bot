@@ -461,6 +461,8 @@ bot_state = {
     "health_status": "starting",
     "startup_time": None,
     "watched_channels": {},
+    "pending_pings": {},
+    "ping_task_running": False,
 }
 
 # ==================== DATA FUNCTIONS ====================
@@ -1247,23 +1249,59 @@ async def send_alert(channel, name, url, logo_file, test=False, waf=False):
             dealer_eras = dealer_info.get("eras", [0]) if dealer_info else [0]
             dealer_countries = dealer_info.get("countries", ["Z"]) if dealer_info else ["Z"]
             matched_users = await db_get_users_for_dealer(dealer_region, dealer_eras, dealer_countries)
-            logger.info(f"[Alert] Pinging {len(matched_users)} matched user(s) for {name}")
+            logger.info(f"[Alert] Queuing ping for {len(matched_users)} matched user(s) for {name}")
             for uid in matched_users:
                 try:
                     await db_add_pending_alert(uid, name, url, flag)
-                    # Ping in their server's updates channel
-                    for updates_channel in updates_channels:
-                        member = updates_channel.guild.get_member(int(uid))
-                        if member:
-                            await updates_channel.send(
-                                content=f"{member.mention} 🆕 **{name}** has new items!",
-                                delete_after=8
-                            )
-                            break  # Only ping once per user
+                    # Add to batch queue instead of pinging immediately
+                    if uid not in bot_state["pending_pings"]:
+                        bot_state["pending_pings"][uid] = []
+                    bot_state["pending_pings"][uid].append({"name": name, "flag": flag, "url": url})
                 except Exception as alert_err:
-                    logger.debug(f"[Alert] Could not ping user {uid}: {alert_err}")
+                    logger.debug(f"[Alert] Could not queue ping for {uid}: {alert_err}")
+            # Start flush task if not already running
+            if bot_state["pending_pings"] and not bot_state["ping_task_running"]:
+                asyncio.create_task(flush_pending_pings())
         except Exception as e:
             logger.error(f"[Alert] Failed to send alerts for {name}: {e}")
+
+async def flush_pending_pings():
+    """Send batched alert pings — groups multiple dealer alerts into one message per user."""
+    if bot_state["ping_task_running"]:
+        return
+    bot_state["ping_task_running"] = True
+    try:
+        await asyncio.sleep(30)  # Wait 30 seconds to batch alerts
+        if not bot_state["pending_pings"]:
+            return
+        
+        pings = bot_state["pending_pings"].copy()
+        bot_state["pending_pings"] = {}
+        
+        servers = await db_get_all_servers()
+        updates_channels = await get_all_server_channels("updates_channel_id", ADRIAN_UPDATES_CHANNEL_ID)
+        
+        for uid, alerts in pings.items():
+            try:
+                # Build batched message
+                if len(alerts) == 1:
+                    msg = f"🆕 **{alerts[0]['name']}** has new items!"
+                else:
+                    dealer_list = "\n".join([f"• {a['flag']} **{a['name']}**" for a in alerts])
+                    msg = f"🆕 **{len(alerts)} dealers** have new items!\n{dealer_list}"
+                
+                for updates_channel in updates_channels:
+                    member = updates_channel.guild.get_member(int(uid))
+                    if member:
+                        await updates_channel.send(
+                            content=f"{member.mention}\n{msg}",
+                            delete_after=3
+                        )
+                        break
+            except Exception as e:
+                logger.debug(f"[Alert] Batch ping failed for {uid}: {e}")
+    finally:
+        bot_state["ping_task_running"] = False
 
 async def check_dealer(session, dealer, seen, channel):
     name = dealer["name"]
@@ -1589,14 +1627,11 @@ async def send_usmf_alert(channel, parsed):
         for uid in usmf_users:
             try:
                 await db_add_pending_alert(uid, f"USMF: {parsed['item_title']}", parsed.get('forum_url', ''), "🇺🇸")
-                for usmf_updates_channel in usmf_updates_channels:
-                        member = usmf_updates_channel.guild.get_member(int(uid))
-                        if member:
-                            await usmf_updates_channel.send(
-                                content=f"{member.mention} 🇺🇸 New USMF listing!",
-                                delete_after=8
-                            )
-                            break
+                if uid not in bot_state["pending_pings"]:
+                        bot_state["pending_pings"][uid] = []
+                        bot_state["pending_pings"][uid].append({"name": "USMF Forum", "flag": "🇺🇸", "url": ""})
+                        if not bot_state["ping_task_running"]:
+                            asyncio.create_task(flush_pending_pings())
             except Exception as ping_err:
                 logger.debug(f"[USMF Alert] Could not ping {uid}: {ping_err}")
     except Exception as e:
@@ -1670,14 +1705,11 @@ async def send_waf_alert(channel, parsed, guild):
         for uid in waf_users:
             try:
                 await db_add_pending_alert(uid, f"WAF: {parsed['item_title']}", parsed.get('forum_url', ''), "🎖️")
-                for waf_updates_channel in waf_updates_channels:
-                        member = waf_updates_channel.guild.get_member(int(uid))
-                        if member:
-                            await waf_updates_channel.send(
-                                content=f"{member.mention} 🎖️ New WAF listing!",
-                                delete_after=8
-                            )
-                            break
+                if uid not in bot_state["pending_pings"]:
+                        bot_state["pending_pings"][uid] = []
+                        bot_state["pending_pings"][uid].append({"name": "WAF Forum", "flag": "🎖️", "url": ""})
+                        if not bot_state["ping_task_running"]:
+                            asyncio.create_task(flush_pending_pings())
             except Exception as ping_err:
                 logger.debug(f"[WAF Alert] Could not ping {uid}: {ping_err}")
     except Exception as e:
@@ -3953,7 +3985,7 @@ async def testalert_cmd(interaction: discord.Interaction):
         if member:
             await updates_channel.send(
                 content=f"{member.mention} 🆕 **TEST** — Weitze Militaria has new items! Type `/alerts` to see your updates.",
-                delete_after=8
+                delete_after=3
             )
     await interaction.followup.send("✅ Test alert sent! Check #Adrian for the ping, then type `/alerts` to verify.", ephemeral=True)
 
