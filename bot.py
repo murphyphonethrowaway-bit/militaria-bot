@@ -3870,28 +3870,42 @@ async def on_guild_remove(guild):
     logger.info(f"[Guild] Removed from server: {guild.name} ({guild.id})")
 
 @client.event
-async def on_thread_create(thread):
-    """When a new listing is posted in the estate channel, bot posts a check before you buy message."""
+async def on_message(message):
+    """Detect the first message in a forum thread (estate listing) and post check before you buy."""
     try:
+        # Only care about threads
+        if not isinstance(message.channel, discord.Thread):
+            return
+        # Ignore bot messages
+        if message.author.bot:
+            return
+        # Only care about forum threads (not regular threads)
+        if not isinstance(message.channel.parent, discord.ForumChannel):
+            return
+
+        thread = message.channel
+        guild = message.guild
+
         # Check if this thread belongs to any server's estate channel
-        config = await db_get_server_config(str(thread.guild.id))
+        config = await db_get_server_config(str(guild.id))
         estate_channel_id = get_config_value(config, "estate_channel_id") if config else ESTATE_CHANNEL_ID
         if thread.parent_id != estate_channel_id:
             return
 
+        # Only fire on the FIRST message in the thread (the listing post)
+        # Check by looking at message history — if this is the only message, it's the first
+        messages = [m async for m in thread.history(limit=2)]
+        if len(messages) > 1:
+            return  # Not the first message
+
         seller_id = thread.owner_id
         logger.info(f"[Estate] ==============================")
-        logger.info(f"[Estate] New listing thread: {thread.name} by {seller_id}")
+        logger.info(f"[Estate] New listing detected: {thread.name} by {seller_id}")
         logger.info(f"[Estate] Thread ID: {thread.id} | Parent: {thread.parent_id}")
         logger.info(f"[Estate] ==============================")
 
-        # Wait for the post author to send their initial message
-        await asyncio.sleep(10)
-
         # Build seller profile button embed
-        embed = discord.Embed(
-            color=discord.Color.dark_gold()
-        )
+        embed = discord.Embed(color=discord.Color.dark_gold())
         if bot_state.get("check_before_buy_img_url"):
             embed.set_image(url=bot_state["check_before_buy_img_url"])
         embed.set_footer(text="The Relic Registry — Estate")
@@ -3901,7 +3915,7 @@ async def on_thread_create(thread):
         logger.info(f"[Estate] Check before you buy message posted in {thread.name}")
 
     except Exception as e:
-        logger.error(f"[Estate] on_thread_create error: {e}\n{traceback.format_exc()}")
+        logger.error(f"[Estate] on_message error: {e}\n{traceback.format_exc()}")
 
 @client.event
 async def on_thread_update(before, after):
