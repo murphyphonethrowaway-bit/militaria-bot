@@ -428,6 +428,7 @@ bot_state = {
     "setup_q1_img_url": None,
     "setup_q2_img_url": None,
     "setup_end_img_url": None,
+    "setup_stop_img_url": None,
     "error_404_img_url": None,
     "command_cooldowns": {},
     "health_status": "starting",
@@ -2522,6 +2523,32 @@ class RegionSelectView(discord.ui.View):
 
 # ==================== SETUP FLOW VIEWS ====================
 
+class SetupEstateConfirmView(discord.ui.View):
+    """Confirmation when server owner says No to estate."""
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="✅ Yes — Add the Estand", style=discord.ButtonStyle.success, custom_id="setup_estate_confirm_yes")
+    async def confirm_yes(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Go back to the estate setup
+        forum_channels = [c for c in interaction.guild.channels if isinstance(c, discord.ForumChannel)]
+        embed = discord.Embed(
+            title="🏪 Estand Marketplace — Buy & Sell Militaria",
+            description=(
+                "Which **forum channel** should be your Estand marketplace?\n\n"
+                "🚀 **Let me create one** — I\'ll set up the channel with the right tags automatically\n"
+                "📋 **Pick an existing one** — select from the dropdown below"
+            ),
+            color=discord.Color.dark_gold()
+        )
+        await interaction.response.edit_message(embed=embed, view=SetupStep3EstateView())
+
+    @discord.ui.button(label="❌ No, skip for now", style=discord.ButtonStyle.secondary, custom_id="setup_estate_confirm_no")
+    async def confirm_no(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        await db_save_server_config(str(interaction.guild_id), setup_complete=0)
+        await _show_permissions_step(interaction)
+
 class SetupStep3EstateView(discord.ui.View):
     """Step 3 — Estate marketplace pitch."""
     def __init__(self):
@@ -2645,8 +2672,25 @@ class SetupStep3EstateView(discord.ui.View):
 
     @discord.ui.button(label="❌ No Thanks", style=discord.ButtonStyle.secondary, custom_id="setup_s3_no")
     async def no(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await db_save_server_config(str(interaction.guild_id), setup_complete=0)
-        await _show_permissions_step(interaction)
+        embed = discord.Embed(
+            title="🏪 Are you sure you don\'t want an Estand?",
+            description=(
+                "No problem — but before you skip, here\'s what you\'d be missing:\n\n"
+                "Your members are already buying and selling militaria somewhere — probably in a messy general chat or over DMs with no protection. "
+                "The Estand gives them a proper place to do it safely.\n\n"
+                "**Here\'s what you lose by skipping:**\n"
+                "🔍 **No seller verification** — your members have no way to check if a seller is trustworthy before sending money\n"
+                "⭐ **No reputation system** — scammers can operate freely with no consequences\n"
+                "🛡️ **No scam protection** — if someone gets scammed on your server, there\'s nothing to show for it\n"
+                "🌐 **No cross-server exposure** — your members can\'t reach buyers on other Adrian servers\n\n"
+                "**Changed your mind?**\n"
+                "You can always enable the Estand later by running `/setup` again."
+            ),
+            color=discord.Color.orange()
+        )
+        if bot_state.get("setup_stop_img_url"):
+            embed.set_thumbnail(url=bot_state["setup_stop_img_url"])
+        await interaction.response.edit_message(embed=embed, view=SetupEstateConfirmView())
 
 
 class SetupNoForumView(discord.ui.View):
@@ -4649,6 +4693,7 @@ async def on_ready():
     client.add_view(BuyerIdentifyView("placeholder", "placeholder"))
     client.add_view(SellerProfileView("placeholder"))
     client.add_view(EstateRatingView("placeholder", "placeholder", "placeholder"))
+    client.add_view(SetupEstateConfirmView())
     client.add_view(SetupStep3EstateView())
     client.add_view(SetupNoForumView())
     client.add_view(SetupCrossPostView())
@@ -4678,7 +4723,7 @@ async def on_ready():
     try:
         img_host_channel = client.get_channel(IMAGE_HOST_CHANNEL_ID)
         if img_host_channel:
-            for q_file, key in [("adrian/adrain_1st_question.png", "question1_img_url"), ("adrian/adrain_2nd_question.png", "question2_img_url"), ("adrian/adrain_3rd_question.png", "question3_img_url"), ("adrian/adrain_4th_question.png", "question4_img_url"), ("adrian/adrain_5th_question.png", "question5_img_url"), ("adrian/thank_you_please_buy.png", "thankyou_img_url"), ("adrian/adrain_check_before_buy.png", "check_before_buy_img_url"), ("adrian/setup_1.png", "setup_img_url"), ("adrian/step_1_thumbnails.png", "setup_q1_img_url"), ("adrian/setup_2.png", "setup_q2_img_url"), ("adrian/setup_end.png", "setup_end_img_url"), ("adrian/404.png", "error_404_img_url")]:
+            for q_file, key in [("adrian/adrain_1st_question.png", "question1_img_url"), ("adrian/adrain_2nd_question.png", "question2_img_url"), ("adrian/adrain_3rd_question.png", "question3_img_url"), ("adrian/adrain_4th_question.png", "question4_img_url"), ("adrian/adrain_5th_question.png", "question5_img_url"), ("adrian/thank_you_please_buy.png", "thankyou_img_url"), ("adrian/adrain_check_before_buy.png", "check_before_buy_img_url"), ("adrian/setup_1.png", "setup_img_url"), ("adrian/step_1_thumbnails.png", "setup_q1_img_url"), ("adrian/setup_2.png", "setup_q2_img_url"), ("adrian/setup_end.png", "setup_end_img_url"), ("adrian/adrain_stop.png", "setup_stop_img_url"), ("adrian/404.png", "error_404_img_url")]:
                 path = os.path.join(SCRIPT_DIR, "logos", q_file)
                 if os.path.exists(path):
                     msg = await img_host_channel.send(file=discord.File(path, filename=q_file))
