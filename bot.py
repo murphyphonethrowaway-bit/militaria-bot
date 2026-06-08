@@ -4395,131 +4395,19 @@ class WelcomeView(discord.ui.View):
         region = await db_get_user_region(str(interaction.user.id))
         if not region:
             await interaction.followup.send(
-                "You don\'t have a profile yet! Click **👋 Get Started** to create one.",
+                "You don't have a profile yet! Click **👋 Get Started** to create one.",
                 ephemeral=True
             )
             return
-        eras_raw = await db_get_user_eras(str(interaction.user.id))
-        countries_raw = await db_get_user_countries(str(interaction.user.id))
-        forums_raw = await db_get_user_forums(str(interaction.user.id))
-        era_names = {0: "All Eras", 1: "Pre-1914", 2: "WWI", 3: "WWII", 4: "Korean War", 5: "Vietnam", 6: "Cold War", 7: "GWOT"}
-        country_names = {
-            "Z": "🌍 All Countries", "A": "🇺🇸 US", "B": "🇬🇧 British",
-            "C": "🇨🇦 Canadian", "D": "🇩🇪 German", "E": "🇷🇺 Soviet",
-            "F": "🇫🇷 French", "G": "🇯🇵 Japanese", "H": "🇮🇹 Italian",
-            "I": "🇦🇹 Austro-Hungarian", "J": "Other Axis", "K": "Other Allied",
-            "L": "🌐 Multi", "M": "🇨🇳 Chinese/KMT"
-        }
-        region_display_map = {"na": "NA", "eu": "EU", "both": "NA / EU"}
-        region_display = region_display_map.get((region or "").lower(), region or "Not set")
-
-        forums_raw_lower = (forums_raw or "").lower()
-        if forums_raw_lower == "both":
-            forums_display = "WAF / USMF"
-        elif forums_raw_lower == "waf":
-            forums_display = "WAF"
-        elif forums_raw_lower == "usmf":
-            forums_display = "USMF"
-        elif forums_raw_lower == "none":
-            forums_display = "None"
-        else:
-            forums_display = forums_raw or "Not set"
-
-        # If "All Eras" (0) is selected, just show that
-        eras_list = [int(e) for e in (eras_raw or [0])] if eras_raw else [0]
-        if 0 in eras_list:
-            eras_str = "🌍 All Eras"
-        else:
-            eras_str = ", ".join([era_names.get(e, str(e)) for e in sorted(eras_list)])
-
-        # If "All Countries" (Z) is selected, just show that
-        countries_list = countries_raw or ["Z"]
-        if "Z" in countries_list:
-            countries_str = "🌍 All Countries"
-        else:
-            # Only show countries we have names for, skip unknown codes
-            known = [country_names.get(c) for c in countries_list if c in country_names]
-            countries_str = ", ".join(known) if known else "Not set"
-
-        # Get reputation and rank data
-        seller_avg, seller_count = await db_get_seller_rating(str(interaction.user.id))
-        buyer_avg, buyer_count = await db_get_buyer_rating(str(interaction.user.id))
-        seller_sales, buyer_purchases = await db_get_completed_transactions(str(interaction.user.id))
-        reviews = await db_get_user_reviews(str(interaction.user.id))
-        points = await db_get_user_points(str(interaction.user.id))
-        warnings = await db_get_user_warnings(str(interaction.user.id))
-        rank = get_rank(points, warnings > 0)
-        top_percent = await db_get_top_percent(str(interaction.user.id))
-
-        def stars(avg):
-            if avg is None:
-                return "No ratings yet"
-            full = int(avg)
-            half = 1 if avg - full >= 0.5 else 0
-            empty = 5 - full - half
-            return "⭐" * full + "✨" * half + "☆" * empty + f" ({avg})"
-
-        # Build title with top % badge
-        title = f"🎖️ {interaction.user.display_name}\'s Collector Profile"
-        if top_percent:
-            title += f"  {top_percent}"
-
-        embed = discord.Embed(
-            title=title,
-            color=discord.Color.dark_gold(),
-            timestamp=datetime.now(timezone.utc)
-        )
-        embed.set_thumbnail(url=interaction.user.display_avatar.url)
-
-        # Rank
-        embed.add_field(name="🎗️ Rank", value=f"{rank}\n{points:,} pts", inline=True)
-        embed.add_field(name="\u200b", value="\u200b", inline=True)
-        embed.add_field(name="\u200b", value="\u200b", inline=True)
-
-        # Preferences
-        embed.add_field(name="📍 Region", value=region_display, inline=True)
-        embed.add_field(name="📋 Forums", value=forums_display, inline=True)
-        embed.add_field(name="⏳ Eras", value=eras_str, inline=False)
-        embed.add_field(name="🌐 Countries", value=countries_str, inline=False)
-
-        # Reputation
-        embed.add_field(name="\u200b", value="**— Reputation —**", inline=False)
-        embed.add_field(
-            name=f"🏪 Seller Rating",
-            value=f"{stars(seller_avg)}\n{seller_sales} completed sale(s)",
-            inline=True
-        )
-        embed.add_field(
-            name=f"🛒 Buyer Rating",
-            value=f"{stars(buyer_avg)}\n{buyer_purchases} completed purchase(s)",
-            inline=True
-        )
-
-        # Recent reviews
-        if reviews:
-            review_text = ""
-            for r in reviews[:3]:
-                role = "Seller" if str(r["seller_id"]) == str(interaction.user.id) else "Buyer"
-                review_content = f'*"{r["review"]}"*' if r.get("review") else "*No comment left*"
-                review_text += f"⭐ {r['rating']}/5 as **{role}** — {review_content}\n"
-            embed.add_field(name="💬 Recent Reviews", value=review_text.strip(), inline=False)
-        else:
-            embed.add_field(name="💬 Reviews", value="No reviews yet — complete a transaction to get started!", inline=False)
-
-        embed.set_footer(text="Use /start to update your preferences")
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await _send_profile(interaction, interaction.user)
 
     @discord.ui.button(label="🗑️ Clear My Profile", style=discord.ButtonStyle.danger, custom_id="welcome_clear_profile")
     async def clear_profile(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         region = await db_get_user_region(str(interaction.user.id))
         if not region:
-            await interaction.followup.send(
-                "You don\'t have a profile yet — nothing to clear!",
-                ephemeral=True
-            )
+            await interaction.followup.send("You don't have a profile yet — nothing to clear!", ephemeral=True)
             return
-        # Clear ONLY preferences — never touch ratings, transactions, or reputation
         async with client.db.acquire() as conn:
             await conn.execute(
                 "UPDATE user_preferences SET region=NULL, eras=NULL, countries=NULL, forums=NULL WHERE user_id=$1",
@@ -4537,7 +4425,163 @@ class WelcomeView(discord.ui.View):
             ),
             ephemeral=True
         )
-        logger.info(f"[Profile] Preferences cleared for {interaction.user} ({interaction.user.id})")
+
+
+async def _send_profile(interaction, user):
+    """Build and send a user profile embed with action buttons."""
+    uid = str(user.id)
+
+    # Preferences
+    region = await db_get_user_region(uid)
+    eras_raw = await db_get_user_eras(uid)
+    countries_raw = await db_get_user_countries(uid)
+    forums_raw = await db_get_user_forums(uid)
+
+    era_names = {0: "All Eras", 1: "Pre-1914", 2: "WWI", 3: "WWII", 4: "Korean War", 5: "Vietnam", 6: "Cold War", 7: "GWOT"}
+    country_names = {
+        "Z": "🌍 All Countries", "A": "🇺🇸 US", "B": "🇬🇧 British",
+        "C": "🇨🇦 Canadian", "D": "🇩🇪 German", "E": "🇷🇺 Soviet",
+        "F": "🇫🇷 French", "G": "🇯🇵 Japanese", "H": "🇮🇹 Italian",
+        "I": "🇦🇹 Austro-Hungarian", "J": "Other Axis", "K": "Other Allied",
+        "L": "🌐 Multi", "M": "🇨🇳 Chinese/KMT"
+    }
+
+    region_display = {"na": "NA", "eu": "EU", "both": "NA / EU"}.get((region or "").lower(), region or "Not set")
+    forums_raw_lower = (forums_raw or "").lower()
+    forums_display = {"waf": "WAF", "usmf": "USMF", "both": "WAF / USMF", "none": "None"}.get(forums_raw_lower, forums_raw or "Not set")
+
+    eras_list = [int(e) for e in (eras_raw or [0])] if eras_raw else [0]
+    eras_str = "🌍 All Eras" if 0 in eras_list else ", ".join([era_names.get(e, str(e)) for e in sorted(eras_list)])
+
+    countries_list = countries_raw or ["Z"]
+    if "Z" in countries_list:
+        countries_str = "🌍 All Countries"
+    else:
+        known = [country_names[c] for c in countries_list if c in country_names]
+        countries_str = ", ".join(known) if known else "Not set"
+
+    # Reputation
+    seller_avg, seller_count = await db_get_seller_rating(uid)
+    buyer_avg, buyer_count = await db_get_buyer_rating(uid)
+    seller_sales, buyer_purchases = await db_get_completed_transactions(uid)
+
+    # Rank
+    points = await db_get_user_points(uid)
+    warnings = await db_get_user_warnings(uid)
+    rank = get_rank(points, warnings > 0)
+    top_percent = await db_get_top_percent(uid)
+
+    def stars(avg):
+        if avg is None:
+            return "No ratings yet"
+        full = int(avg)
+        half = 1 if avg - full >= 0.5 else 0
+        empty = 5 - full - half
+        return "⭐" * full + "✨" * half + "☆" * empty + f" ({avg})"
+
+    title = f"🎖️ {user.display_name}'s Collector Profile"
+    if top_percent:
+        title += f"  {top_percent}"
+
+    embed = discord.Embed(title=title, color=discord.Color.dark_gold(), timestamp=datetime.now(timezone.utc))
+    embed.set_thumbnail(url=user.display_avatar.url)
+
+    # Rank row
+    embed.add_field(name="🎗️ Rank", value=f"{rank}\n{points:,} pts", inline=True)
+    embed.add_field(name="\u200b", value="\u200b", inline=True)
+    embed.add_field(name="\u200b", value="\u200b", inline=True)
+
+    # Preferences
+    embed.add_field(name="📍 Region", value=region_display, inline=True)
+    embed.add_field(name="📋 Forums", value=forums_display, inline=True)
+    embed.add_field(name="⏳ Eras", value=eras_str, inline=False)
+    embed.add_field(name="🌐 Countries", value=countries_str, inline=False)
+
+    # Reputation
+    embed.add_field(name="\u200b", value="**— Reputation —**", inline=False)
+    embed.add_field(name="🏪 Seller", value=f"{stars(seller_avg)}\n{seller_sales} sale(s)", inline=True)
+    embed.add_field(name="🛒 Buyer", value=f"{stars(buyer_avg)}\n{buyer_purchases} purchase(s)", inline=True)
+
+    embed.set_footer(text="Adrian — Collector Profile")
+
+    # Profile action buttons
+    class ProfileActionsView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=300)
+
+        @discord.ui.button(label="📦 My Followed Dealers", style=discord.ButtonStyle.secondary)
+        async def show_follows(self, interaction2: discord.Interaction, button: discord.ui.Button):
+            await interaction2.response.defer(ephemeral=True)
+            async with client.db.acquire() as conn:
+                rows = await conn.fetch("SELECT dealer_name FROM dealer_follows WHERE user_id=$1 ORDER BY timestamp ASC", uid)
+            if not rows:
+                await interaction2.followup.send("You aren't following any dealers yet.", ephemeral=True)
+                return
+            dealer_list = [r["dealer_name"] for r in rows]
+
+            class ClearFollowsView(discord.ui.View):
+                def __init__(self):
+                    super().__init__(timeout=120)
+
+                @discord.ui.button(label="🗑️ Clear All Follows", style=discord.ButtonStyle.danger)
+                async def clear_follows(self, interaction3: discord.Interaction, button: discord.ui.Button):
+                    async with client.db.acquire() as conn:
+                        await conn.execute("DELETE FROM dealer_follows WHERE user_id=$1", uid)
+                    await interaction3.response.send_message("✅ All dealer follows cleared.", ephemeral=True)
+
+            follows_text = "\n".join([f"• {d}" for d in dealer_list])
+            await interaction2.followup.send(
+                embed=discord.Embed(
+                    title=f"📦 Followed Dealers ({len(dealer_list)})",
+                    description=follows_text,
+                    color=discord.Color.dark_gold()
+                ),
+                view=ClearFollowsView(),
+                ephemeral=True
+            )
+
+        @discord.ui.button(label="💬 My Transaction Reviews", style=discord.ButtonStyle.secondary)
+        async def show_reviews(self, interaction2: discord.Interaction, button: discord.ui.Button):
+            await interaction2.response.defer(ephemeral=True)
+            reviews = await db_get_user_reviews(uid)
+            if not reviews:
+                await interaction2.followup.send("No transaction reviews yet — complete a sale or purchase to get started!", ephemeral=True)
+                return
+            review_text = ""
+            for r in reviews[:10]:
+                role = "Seller" if str(r["seller_id"]) == uid else "Buyer"
+                comment = f'*"{r["review"]}"*' if r.get("review") else "*No comment*"
+                review_text += f"⭐ {r['rating']}/5 as **{role}** — {comment}\n"
+            await interaction2.followup.send(
+                embed=discord.Embed(
+                    title="💬 Transaction Reviews",
+                    description=review_text.strip(),
+                    color=discord.Color.dark_gold()
+                ),
+                ephemeral=True
+            )
+
+        @discord.ui.button(label="💎 Buy Premium", style=discord.ButtonStyle.primary)
+        async def buy_premium(self, interaction2: discord.Interaction, button: discord.ui.Button):
+            await interaction2.response.send_message(
+                embed=discord.Embed(
+                    title="💎 Adrian Premium",
+                    description=(
+                        "Premium is coming soon!\n\n"
+                        "**What you'll get:**\n"
+                        "⚡ Instant DM alerts before channel posts\n"
+                        "🔑 Custom keyword alerts\n"
+                        "📋 Unlimited watchlist & follows\n"
+                        "💰 Price drop notifications\n"
+                        "🏅 Premium badge on your profile\n\n"
+                        "Stay tuned for the launch!"
+                    ),
+                    color=discord.Color.gold()
+                ),
+                ephemeral=True
+            )
+
+    await interaction.followup.send(embed=embed, view=ProfileActionsView(), ephemeral=True)
 
 # ==================== EVENTS ====================
 @client.event
@@ -5072,14 +5116,14 @@ async def on_ready():
                     view=WelcomeView()
                 )
                 # Save message ID for reaction watching
-                await db_save_server_config(str(GUILD_ID), welcome_message_id=str(welcome_msg.id))
+                await db_save_server_config(str(adrian_channel.guild.id), welcome_message_id=str(welcome_msg.id))
                 logger.info("[Startup] Welcome image posted to #Adrian with buttons.")
             else:
                 logger.warning("[Startup] Adrian_welcome.png not found in logos folder.")
+        else:
             logger.warning("[Startup] Could not find #Adrian channel.")
     except Exception as e:
         logger.error(f"[Startup] Failed to post welcome image: {e}")
-
     # Upload question images to private image host channel and store CDN URLs
     try:
         img_host_channel = client.get_channel(IMAGE_HOST_CHANNEL_ID)
