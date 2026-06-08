@@ -3870,46 +3870,32 @@ async def on_guild_remove(guild):
     logger.info(f"[Guild] Removed from server: {guild.name} ({guild.id})")
 
 @client.event
-async def on_message(message):
-    """Detect the first message in a forum thread (estate listing) and post check before you buy."""
+async def on_thread_create(thread):
+    """When a new listing is posted in the estate channel, post check before you buy."""
     try:
-        # Debug — log every message type
-        if not message.author.bot:
-            logger.debug(f"[Message] channel={type(message.channel).__name__} | author={message.author} | content={message.content[:50] if message.content else 'no content'}")
-
-        # Only care about threads
-        if not isinstance(message.channel, discord.Thread):
+        if not isinstance(thread.parent, discord.ForumChannel):
             return
-        # Ignore bot messages
-        if message.author.bot:
-            return
-        # Only care about forum threads (not regular threads)
-        if not isinstance(message.channel.parent, discord.ForumChannel):
-            logger.debug(f"[Estate] Thread parent is {type(message.channel.parent).__name__} not ForumChannel")
-            return
-
-        thread = message.channel
-        guild = message.guild
 
         # Check if this thread belongs to any server's estate channel
-        config = await db_get_server_config(str(guild.id))
+        config = await db_get_server_config(str(thread.guild.id))
         estate_channel_id = get_config_value(config, "estate_channel_id") if config else ESTATE_CHANNEL_ID
         if thread.parent_id != estate_channel_id:
             return
 
-        # Only fire on the FIRST message in the thread (the listing post)
-        # Check by looking at message history — if this is the only message, it's the first
-        messages = [m async for m in thread.history(limit=2)]
-        if len(messages) > 1:
-            return  # Not the first message
-
         seller_id = thread.owner_id
-        logger.info(f"[Estate] ==============================")
-        logger.info(f"[Estate] New listing detected: {thread.name} by {seller_id}")
-        logger.info(f"[Estate] Thread ID: {thread.id} | Parent: {thread.parent_id}")
-        logger.info(f"[Estate] ==============================")
+        logger.info(f"[Estate] New listing: {thread.name} by {seller_id}")
 
-        # Build seller profile button embed
+        # Wait for Discord to create the starter message
+        await asyncio.sleep(3)
+
+        # Fetch the starter message directly
+        try:
+            starter = await thread.fetch_message(thread.id)
+            logger.info(f"[Estate] Starter message found: {starter.content[:50] if starter.content else 'no text'}")
+        except Exception as e:
+            logger.warning(f"[Estate] Could not fetch starter message: {e} — posting anyway")
+
+        # Post check before you buy
         embed = discord.Embed(color=discord.Color.dark_gold())
         if bot_state.get("check_before_buy_img_url"):
             embed.set_image(url=bot_state["check_before_buy_img_url"])
@@ -3917,10 +3903,24 @@ async def on_message(message):
 
         view = SellerProfileView(str(seller_id))
         await thread.send(embed=embed, view=view)
-        logger.info(f"[Estate] Check before you buy message posted in {thread.name}")
+        logger.info(f"[Estate] Check before you buy posted in {thread.name}")
 
+    except discord.Forbidden as e:
+        logger.warning(f"[Estate] Forbidden — starter message not ready yet: {e}")
+        # Try one more time after longer wait
+        try:
+            await asyncio.sleep(15)
+            embed = discord.Embed(color=discord.Color.dark_gold())
+            if bot_state.get("check_before_buy_img_url"):
+                embed.set_image(url=bot_state["check_before_buy_img_url"])
+            embed.set_footer(text="The Relic Registry — Estate")
+            view = SellerProfileView(str(thread.owner_id))
+            await thread.send(embed=embed, view=view)
+            logger.info(f"[Estate] Check before you buy posted on retry in {thread.name}")
+        except Exception as retry_err:
+            logger.error(f"[Estate] Retry also failed: {retry_err}")
     except Exception as e:
-        logger.error(f"[Estate] on_message error: {e}\n{traceback.format_exc()}")
+        logger.error(f"[Estate] on_thread_create error: {e}\n{traceback.format_exc()}")
 
 @client.event
 async def on_thread_update(before, after):
