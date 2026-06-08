@@ -733,6 +733,36 @@ async def db_get_buyer_rating(buyer_id):
         ratings = [r["rating"] for r in rows]
         return round(sum(ratings) / len(ratings), 1), len(ratings)
 
+async def db_get_seller_rating(seller_id):
+    async with client.db.acquire() as conn:
+        rows = await conn.fetch("SELECT rating FROM estate_ratings WHERE seller_id=$1", str(seller_id))
+        if not rows:
+            return None, 0
+        ratings = [r["rating"] for r in rows]
+        return round(sum(ratings) / len(ratings), 1), len(ratings)
+
+async def db_get_user_reviews(user_id):
+    """Get reviews left for a user as either buyer or seller."""
+    async with client.db.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT rating, review, buyer_id, seller_id, timestamp FROM estate_ratings WHERE buyer_id=$1 OR seller_id=$1 ORDER BY timestamp DESC LIMIT 5",
+            str(user_id)
+        )
+        return [dict(r) for r in rows]
+
+async def db_get_completed_transactions(user_id):
+    """Get count of completed transactions as buyer and seller."""
+    async with client.db.acquire() as conn:
+        seller_count = await conn.fetchval(
+            "SELECT COUNT(*) FROM estate_transactions WHERE seller_id=$1 AND status='completed'",
+            str(user_id)
+        )
+        buyer_count = await conn.fetchval(
+            "SELECT COUNT(*) FROM estate_transactions WHERE buyer_id=$1 AND status='completed'",
+            str(user_id)
+        )
+        return seller_count or 0, buyer_count or 0
+
 # ==================== USER PREFERENCES DB ====================
 async def db_get_user_region(user_id):
     async with client.db.acquire() as conn:
@@ -4282,20 +4312,95 @@ class WelcomeView(discord.ui.View):
         countries_raw = await db_get_user_countries(str(interaction.user.id))
         forums_raw = await db_get_user_forums(str(interaction.user.id))
         era_names = {0: "All Eras", 1: "Pre-1914", 2: "WWI", 3: "WWII", 4: "Korean War", 5: "Vietnam", 6: "Cold War", 7: "GWOT"}
-        country_names = {"Z": "All Countries", "A": "🇺🇸 US", "B": "🇬🇧 British", "C": "🇨🇦 Canadian", "D": "🇩🇪 German", "E": "🇷🇺 Soviet", "F": "🇫🇷 French", "G": "🇯🇵 Japanese", "H": "🇮🇹 Italian"}
-        eras_str = ", ".join([era_names.get(int(e), str(e)) for e in (eras_raw or [0])]) if eras_raw else "Not set"
-        countries_str = ", ".join([country_names.get(c, c) for c in (countries_raw or ["Z"])]) if countries_raw else "Not set"
-        forums_str = (forums_raw or "None").upper() if forums_raw else "Not set"
+        country_names = {
+            "Z": "🌍 All Countries", "A": "🇺🇸 US", "B": "🇬🇧 British",
+            "C": "🇨🇦 Canadian", "D": "🇩🇪 German", "E": "🇷🇺 Soviet",
+            "F": "🇫🇷 French", "G": "🇯🇵 Japanese", "H": "🇮🇹 Italian",
+            "I": "🇦🇹 Austro-Hungarian", "J": "Other Axis", "K": "Other Allied",
+            "L": "🌐 Multi", "M": "🇨🇳 Chinese/KMT"
+        }
+        region_display_map = {"na": "NA", "eu": "EU", "both": "NA / EU"}
+        region_display = region_display_map.get((region or "").lower(), region or "Not set")
+
+        forums_raw_lower = (forums_raw or "").lower()
+        if forums_raw_lower == "both":
+            forums_display = "WAF / USMF"
+        elif forums_raw_lower == "waf":
+            forums_display = "WAF"
+        elif forums_raw_lower == "usmf":
+            forums_display = "USMF"
+        elif forums_raw_lower == "none":
+            forums_display = "None"
+        else:
+            forums_display = forums_raw or "Not set"
+
+        # If "All Eras" (0) is selected, just show that
+        eras_list = [int(e) for e in (eras_raw or [0])] if eras_raw else [0]
+        if 0 in eras_list:
+            eras_str = "🌍 All Eras"
+        else:
+            eras_str = ", ".join([era_names.get(e, str(e)) for e in sorted(eras_list)])
+
+        # If "All Countries" (Z) is selected, just show that
+        countries_list = countries_raw or ["Z"]
+        if "Z" in countries_list:
+            countries_str = "🌍 All Countries"
+        else:
+            # Only show countries we have names for, skip unknown codes
+            known = [country_names.get(c) for c in countries_list if c in country_names]
+            countries_str = ", ".join(known) if known else "Not set"
+
+        # Get reputation data
+        seller_avg, seller_count = await db_get_seller_rating(str(interaction.user.id))
+        buyer_avg, buyer_count = await db_get_buyer_rating(str(interaction.user.id))
+        seller_sales, buyer_purchases = await db_get_completed_transactions(str(interaction.user.id))
+        reviews = await db_get_user_reviews(str(interaction.user.id))
+
+        def stars(avg):
+            if avg is None:
+                return "No ratings yet"
+            full = int(avg)
+            half = 1 if avg - full >= 0.5 else 0
+            empty = 5 - full - half
+            return "⭐" * full + "✨" * half + "☆" * empty + f" ({avg})"
+
         embed = discord.Embed(
-            title=f"🎖️ {interaction.user.display_name}\'s Profile",
+            title=f"🎖️ {interaction.user.display_name}\'s Collector Profile",
             color=discord.Color.dark_gold(),
             timestamp=datetime.now(timezone.utc)
         )
         embed.set_thumbnail(url=interaction.user.display_avatar.url)
-        embed.add_field(name="Region", value=region or "Not set", inline=True)
-        embed.add_field(name="Forums", value=forums_str, inline=True)
-        embed.add_field(name="Eras", value=eras_str, inline=False)
-        embed.add_field(name="Countries", value=countries_str, inline=False)
+
+        # Preferences
+        embed.add_field(name="📍 Region", value=region_display, inline=True)
+        embed.add_field(name="📋 Forums", value=forums_display, inline=True)
+        embed.add_field(name="⏳ Eras", value=eras_str, inline=False)
+        embed.add_field(name="🌐 Countries", value=countries_str, inline=False)
+
+        # Reputation
+        embed.add_field(name="\u200b", value="**— Reputation —**", inline=False)
+        embed.add_field(
+            name=f"🏪 Seller Rating",
+            value=f"{stars(seller_avg)}\n{seller_sales} completed sale(s)",
+            inline=True
+        )
+        embed.add_field(
+            name=f"🛒 Buyer Rating",
+            value=f"{stars(buyer_avg)}\n{buyer_purchases} completed purchase(s)",
+            inline=True
+        )
+
+        # Recent reviews
+        if reviews:
+            review_text = ""
+            for r in reviews[:3]:
+                role = "Seller" if str(r["seller_id"]) == str(interaction.user.id) else "Buyer"
+                review_content = f'*"{r["review"]}"*' if r.get("review") else "*No comment left*"
+                review_text += f"⭐ {r['rating']}/5 as **{role}** — {review_content}\n"
+            embed.add_field(name="💬 Recent Reviews", value=review_text.strip(), inline=False)
+        else:
+            embed.add_field(name="💬 Reviews", value="No reviews yet — complete a transaction to get started!", inline=False)
+
         embed.set_footer(text="Use /start to update your preferences")
         await interaction.followup.send(embed=embed, ephemeral=True)
 
