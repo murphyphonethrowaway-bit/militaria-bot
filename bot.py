@@ -4448,8 +4448,12 @@ async def handle_webhook(request):
             logger.warning(f"[Webhook] Unknown dealer: {dealer_name}")
             return web.Response(text="Unknown dealer", status=404)
 
-        channel = client.get_channel(CHANNEL_ID)
-        if channel:
+        # Post to ALL servers' updates channels
+        updates_channels = await get_all_server_channels("updates_channel_id", ADRIAN_UPDATES_CHANNEL_ID)
+        if not updates_channels:
+            updates_channels = [client.get_channel(CHANNEL_ID)]
+        for channel in updates_channels:
+          if channel:
             # Use specific page URL if provided, otherwise use dealer default
             alert_url = page_url if page_url else dealer["url"]
             logo_file = os.path.join(SCRIPT_DIR, "logos", dealer["logo_file"])
@@ -4479,7 +4483,7 @@ async def handle_webhook(request):
                 await channel.send(file=file, embed=embed)
             else:
                 await channel.send(embed=embed)
-            logger.info(f"[Webhook] Alert sent for {dealer_name}!")
+        logger.info(f"[Webhook] Alert sent for {dealer_name} to {len(updates_channels)} server(s)!")
 
         return web.Response(text="OK", status=200)
     except Exception as e:
