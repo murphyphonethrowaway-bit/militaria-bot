@@ -425,6 +425,7 @@ bot_state = {
     "command_cooldowns": {},
     "health_status": "starting",
     "startup_time": None,
+    "watched_channels": {},
 }
 
 # ==================== DATA FUNCTIONS ====================
@@ -2773,7 +2774,10 @@ async def complete_setup(interaction, accept_cross_posts=None):
         try:
             welcome_file = os.path.join(SCRIPT_DIR, "logos", "adrian", "Adrian_welcome.png")
             if os.path.exists(welcome_file):
-                await commands_channel.send(file=discord.File(welcome_file, filename="Adrian_welcome.png"))
+                await commands_channel.send(
+                    file=discord.File(welcome_file, filename="Adrian_welcome.png"),
+                    view=WelcomeView()
+                )
                 results.append(f"✅ Posted welcome image to {commands_channel.mention}")
         except Exception as e:
             results.append(f"⚠️ Could not post welcome image: {e}")
@@ -3121,6 +3125,88 @@ async def debug_cmd(interaction: discord.Interaction):
 
     embed.set_footer(text="Adrian Owner Dashboard")
     await interaction.followup.send(embed=embed, ephemeral=True)
+
+@client.tree.command(name="watch", description="[Owner] Mirror a channel from another server to this one")
+async def watch_cmd(interaction: discord.Interaction):
+    if not is_bot_owner(interaction.user):
+        await interaction.response.send_message("❓ Unknown command.", ephemeral=True)
+        return
+
+    # Build server dropdown
+    guilds = [g for g in client.guilds if g.id != interaction.guild_id]
+    if not guilds:
+        await interaction.response.send_message("No other servers to watch.", ephemeral=True)
+        return
+
+    server_options = [
+        discord.SelectOption(label=g.name[:100], value=str(g.id), description=f"{g.member_count} members")
+        for g in guilds
+    ][:25]
+
+    class ServerSelect(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=300)
+
+        @discord.ui.select(placeholder="Select a server to watch...", options=server_options)
+        async def select_server(self, interaction2: discord.Interaction, select: discord.ui.Select):
+            guild_id = int(select.values[0])
+            guild = client.get_guild(guild_id)
+            if not guild:
+                await interaction2.response.send_message("Could not find that server.", ephemeral=True)
+                return
+
+            # Build channel dropdown for selected server
+            text_channels = [c for c in guild.channels if isinstance(c, discord.TextChannel)]
+            channel_options = [
+                discord.SelectOption(label=f"#{c.name}"[:100], value=str(c.id))
+                for c in sorted(text_channels, key=lambda x: x.position)
+            ][:25]
+
+            if not channel_options:
+                await interaction2.response.send_message("No viewable channels in that server.", ephemeral=True)
+                return
+
+            class ChannelSelect(discord.ui.View):
+                def __init__(self):
+                    super().__init__(timeout=300)
+
+                @discord.ui.select(placeholder="Select a channel to mirror...", options=channel_options)
+                async def select_channel(self, interaction3: discord.Interaction, select2: discord.ui.Select):
+                    channel_id = int(select2.values[0])
+                    source_channel = guild.get_channel(channel_id)
+
+                    # Save to bot_state watched channels
+                    if "watched_channels" not in bot_state:
+                        bot_state["watched_channels"] = {}
+                    bot_state["watched_channels"][str(channel_id)] = {
+                        "guild_id": guild_id,
+                        "guild_name": guild.name,
+                        "channel_name": source_channel.name,
+                        "mirror_to": interaction3.channel_id
+                    }
+                    await interaction3.response.edit_message(
+                        embed=discord.Embed(
+                            title="👁️ Watching Channel",
+                            description=f"Now mirroring **#{source_channel.name}** from **{guild.name}** to this channel.\n\nAll new messages will appear here.",
+                            color=discord.Color.dark_gold()
+                        ),
+                        view=None
+                    )
+                    logger.info(f"[Watch] Now watching #{source_channel.name} ({channel_id}) from {guild.name}")
+
+            embed = discord.Embed(
+                title=f"👁️ Watch — {guild.name}",
+                description="Select which channel to mirror:",
+                color=discord.Color.dark_gold()
+            )
+            await interaction2.response.edit_message(embed=embed, view=ChannelSelect())
+
+    embed = discord.Embed(
+        title="👁️ Watch — Select Server",
+        description="Which server\'s channel do you want to mirror here?",
+        color=discord.Color.dark_gold()
+    )
+    await interaction.response.send_message(embed=embed, view=ServerSelect(), ephemeral=True)
 
 @client.tree.command(name="broadcast", description="[Owner] Send a message to all Adrian servers")
 @app_commands.describe(message="The message to broadcast")
@@ -4023,6 +4109,66 @@ async def nextpromo_cmd(interaction: discord.Interaction):
     else:
         await interaction.response.send_message("📣 No promo sent yet. First auto-promo fires 48 hours after bot start.", ephemeral=True)
 
+
+# ==================== WELCOME VIEW ====================
+
+class WelcomeView(discord.ui.View):
+    """Persistent buttons on the static welcome message in #adrian."""
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="🎖️ Create My Profile", style=discord.ButtonStyle.success, custom_id="welcome_create_profile")
+    async def create_profile(self, interaction: discord.Interaction, button: discord.ui.Button):
+        existing = await db_get_user_region(str(interaction.user.id))
+        if existing:
+            await interaction.response.send_message(
+                "You already have a profile! Use `/start` to update your preferences.",
+                ephemeral=True
+            )
+            return
+        on_cd, remaining = check_cooldown(str(interaction.user.id), "start")
+        if on_cd:
+            await interaction.response.send_message(f"⏳ Please wait {remaining}s before trying again.", ephemeral=True)
+            return
+        img_url = bot_state.get("question1_img_url")
+        embed = discord.Embed(
+            title="🌍 Question 1 of 5 — Your Region",
+            description="Where are you based? This helps me show you the most relevant dealer alerts.",
+            color=discord.Color.dark_gold()
+        )
+        if img_url:
+            embed.set_image(url=img_url)
+        await interaction.response.send_message(embed=embed, view=RegionView(), ephemeral=True)
+
+    @discord.ui.button(label="👤 View My Profile", style=discord.ButtonStyle.secondary, custom_id="welcome_view_profile")
+    async def view_profile(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        region = await db_get_user_region(str(interaction.user.id))
+        if not region:
+            await interaction.followup.send(
+                "You don't have a profile yet! Click **🎖️ Create My Profile** to get started.",
+                ephemeral=True
+            )
+            return
+        prefs = await db_get_user_prefs(str(interaction.user.id))
+        era_names = {0: "All Eras", 1: "Pre-1914", 2: "WWI", 3: "WWII", 4: "Korean War", 5: "Vietnam", 6: "Cold War", 7: "GWOT"}
+        country_names = {"Z": "All Countries", "A": "🇺🇸 US", "B": "🇬🇧 British", "C": "🇨🇦 Canadian", "D": "🇩🇪 German", "E": "🇷🇺 Soviet", "F": "🇫🇷 French", "G": "🇯🇵 Japanese", "H": "🇮🇹 Italian"}
+        eras_str = ", ".join([era_names.get(int(e), str(e)) for e in (prefs.get("eras") or "0").split(",")]) if prefs else "Not set"
+        countries_str = ", ".join([country_names.get(c, c) for c in (prefs.get("countries") or "Z").split(",")]) if prefs else "Not set"
+        forums_str = (prefs.get("forums") or "None").upper() if prefs else "Not set"
+        embed = discord.Embed(
+            title=f"🎖️ {interaction.user.display_name}'s Profile",
+            color=discord.Color.dark_gold(),
+            timestamp=datetime.now(timezone.utc)
+        )
+        embed.set_thumbnail(url=interaction.user.display_avatar.url)
+        embed.add_field(name="Region", value=region or "Not set", inline=True)
+        embed.add_field(name="Forums", value=forums_str, inline=True)
+        embed.add_field(name="Eras", value=eras_str, inline=False)
+        embed.add_field(name="Countries", value=countries_str, inline=False)
+        embed.set_footer(text="Use /start to update your preferences")
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
 # ==================== EVENTS ====================
 @client.event
 async def on_error(event, *args, **kwargs):
@@ -4115,21 +4261,68 @@ async def on_guild_join(guild):
             owner = await client.fetch_user(guild.owner_id)
             if owner:
                 embed = discord.Embed(
-                    title="👋 Thanks for adding Adrian!",
-                    description=f"Hey! I\'m Adrian, Discord\'s #1 Militaria Bot.\n\nTo get started on **{guild.name}**, please run `/setup` in your server. It only takes 2 minutes!\n\n**What I can do:**\n📬 Dealer alert notifications\n🏪 Estate marketplace with seller ratings\n🎖️ Global collector profiles\n⭐ Cross-server reputation system",
+                    title="👋 Hey! I'm Adrian — Thanks for the invite!",
+                    description=(
+                        f"I'm now on **{guild.name}** and ready to get to work!\n\n"
+                        "Here's what I can do for your community:\n\n"
+                        "📬 **New Item Alerts** — I monitor 50+ militaria dealers and notify members the moment new items drop\n"
+                        "🎖️ **Collector Profiles** — members build a personalized feed based on their era, country and region\n"
+                        "🏪 **Estate Marketplace** — a trusted buy/sell system with global seller ratings and scam protection\n"
+                        "⭐ **Cross-Server Reputation** — buyer and seller ratings follow members across every Adrian server\n"
+                        "🌐 **Cross-Server Listings** — sellers reach buyers on every server running Adrian\n\n"
+                        "**To get started, run `/setup` in your server.**\n"
+                        "It only takes 2 minutes and I'll handle everything automatically — channels, permissions, roles, all of it."
+                    ),
                     color=discord.Color.dark_gold()
                 )
-                embed.set_footer(text="Adrian — The Relic Registry")
+                if bot_state.get("setup_q1_img_url"):
+                    embed.set_thumbnail(url=bot_state["setup_q1_img_url"])
+                embed.set_footer(text="Adrian — Discord's #1 Militaria Bot")
                 await owner.send(embed=embed)
+                logger.info(f"[Guild] DM sent to owner of {guild.name}")
         except Exception as e:
             logger.warning(f"[Guild] Could not DM owner of {guild.name}: {e}")
     except Exception as e:
         logger.error(f"[Guild] on_guild_join error: {e}\n{traceback.format_exc()}")
-
 @client.event
 async def on_guild_remove(guild):
     """When bot is removed from a server, log it."""
     logger.info(f"[Guild] Removed from server: {guild.name} ({guild.id})")
+
+@client.event
+async def on_message(message):
+    """Mirror watched channels to the owner's server."""
+    try:
+        if message.author.bot:
+            return
+        watched = bot_state.get("watched_channels", {})
+        if str(message.channel.id) not in watched:
+            return
+        watch_info = watched[str(message.channel.id)]
+        mirror_channel = client.get_channel(watch_info["mirror_to"])
+        if not mirror_channel:
+            return
+
+        # Build mirror embed
+        embed = discord.Embed(
+            description=message.content or "*[no text]*",
+            color=discord.Color.dark_gold(),
+            timestamp=message.created_at
+        )
+        embed.set_author(
+            name=f"{message.author.display_name} — #{watch_info['channel_name']} | {watch_info['guild_name']}",
+            icon_url=message.author.display_avatar.url
+        )
+        # Include attachments
+        if message.attachments:
+            embed.set_image(url=message.attachments[0].url)
+            if len(message.attachments) > 1:
+                embed.add_field(name="Attachments", value=f"{len(message.attachments)} files", inline=True)
+
+        await mirror_channel.send(embed=embed)
+
+    except Exception as e:
+        logger.error(f"[Watch] Mirror error: {e}")
 
 @client.event
 async def on_thread_create(thread):
@@ -4275,6 +4468,7 @@ async def on_ready():
     client.add_view(EstateRatingView("placeholder", "placeholder", "placeholder"))
     client.add_view(SetupEstateView())
     client.add_view(SetupCrossPostView())
+    client.add_view(WelcomeView())
     logger.info("Persistent views registered.")
 
     # Post welcome image to #Adrian on every startup
@@ -4283,8 +4477,11 @@ async def on_ready():
         if adrian_channel:
             welcome_file = os.path.join(SCRIPT_DIR, "logos", "adrian", "Adrian_welcome.png")
             if os.path.exists(welcome_file):
-                await adrian_channel.send(file=discord.File(welcome_file, filename="Adrian_welcome.png"))
-                logger.info("[Startup] Welcome image posted to #Adrian.")
+                await adrian_channel.send(
+                    file=discord.File(welcome_file, filename="Adrian_welcome.png"),
+                    view=WelcomeView()
+                )
+                logger.info("[Startup] Welcome image posted to #Adrian with buttons.")
             else:
                 logger.warning("[Startup] Adrian_welcome.png not found in logos folder.")
         else:
