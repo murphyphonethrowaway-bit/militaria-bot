@@ -2716,15 +2716,11 @@ class SetupPermissionsView(discord.ui.View):
 
     @discord.ui.button(label="✅ Yes — Grant View All Channels", style=discord.ButtonStyle.success, custom_id="setup_perms_yes")
     async def perms_yes(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Disable buttons immediately to prevent double clicks
-        for child in self.children:
-            child.disabled = True
-        await interaction.response.edit_message(view=self)
+        # Defer first — gives us 15 minutes to respond, prevents timeout
+        await interaction.response.defer(ephemeral=True)
         try:
             guild = interaction.guild
             bot_member = guild.me
-            # Only set permissions on channels where bot doesn't already have explicit access
-            # Use guild-level role permission instead of per-channel to avoid rate limits
             bot_role = bot_member.top_role
             if bot_role:
                 try:
@@ -2733,15 +2729,31 @@ class SetupPermissionsView(discord.ui.View):
                     pass
             await db_save_server_config(str(interaction.guild_id), view_all_channels=1, setup_complete=1)
             logger.info(f"[Setup] View All Channels granted via role in {guild.name}")
+            # Notify owner log channel
+            try:
+                notify_channel = client.get_channel(1513392214250622977)
+                if notify_channel:
+                    notify_embed = discord.Embed(
+                        title="👁️ View All Channels Granted",
+                        description=(
+                            f"**{guild.name}** (`{guild.id}`) granted View All Channels permission.\n\n"
+                            f"**Server Owner:** <@{guild.owner_id}>\n"
+                            f"**Members:** {guild.member_count}\n"
+                            f"**Granted by:** {interaction.user.mention}"
+                        ),
+                        color=discord.Color.green(),
+                        timestamp=datetime.now(timezone.utc)
+                    )
+                    await notify_channel.send(embed=notify_embed)
+            except Exception as notify_err:
+                logger.warning(f"[Setup] Could not send view-all notification: {notify_err}")
         except Exception as e:
             logger.error(f"[Setup] Permissions error: {e}")
         await complete_setup(interaction)
 
     @discord.ui.button(label="❌ No — Skip", style=discord.ButtonStyle.secondary, custom_id="setup_perms_no")
     async def perms_no(self, interaction: discord.Interaction, button: discord.ui.Button):
-        for child in self.children:
-            child.disabled = True
-        await interaction.response.edit_message(view=self)
+        await interaction.response.defer(ephemeral=True)
         await db_save_server_config(str(interaction.guild_id), setup_complete=1)
         await complete_setup(interaction)
 
@@ -3027,18 +3039,13 @@ async def complete_setup(interaction):
         embed.set_image(url=bot_state["setup_end_img_url"])
     embed.set_footer(text="Adrian — Discord's #1 Militaria Bot")
 
-    # Send completion message
+    # Since we deferred, edit_original_response replaces the "thinking" state
     logger.info(f"[Setup] Sending completion screen to {interaction.user} in {interaction.guild.name}")
     try:
-        await interaction.followup.send(embed=embed, ephemeral=True)
-        logger.info("[Setup] Completion screen sent via followup")
-    except Exception as e1:
-        logger.warning(f"[Setup] followup failed: {e1} — trying edit_original_response")
-        try:
-            await interaction.edit_original_response(embed=embed, view=None)
-            logger.info("[Setup] Completion screen sent via edit_original_response")
-        except Exception as e2:
-            logger.error(f"[Setup] Both methods failed: followup={e1} edit={e2}")
+        await interaction.edit_original_response(embed=embed, view=None)
+        logger.info("[Setup] Completion screen sent successfully")
+    except Exception as e:
+        logger.error(f"[Setup] Could not send completion screen: {e}")
 
 # ==================== OWNER COMMANDS (Murphy only, test server only) ====================
 
