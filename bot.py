@@ -153,11 +153,7 @@ USMF_CHANNEL_ID = 1513271593273655387  # #adrian — test server
 
 
 # ==================== BOT SETUP ====================
-intents = discord.Intents.default()
-intents.message_content = True
-intents.members = True
-intents.guilds = True
-intents.guild_messages = True
+intents = discord.Intents.all()
 
 class MilitariaBot(discord.Client):
     def __init__(self):
@@ -3875,13 +3871,18 @@ async def on_guild_remove(guild):
 async def on_thread_create(thread):
     """When a new listing is posted in the estate channel, post check before you buy."""
     try:
+        logger.info(f"[Estate] on_thread_create fired: {thread.name} | parent_type={type(thread.parent).__name__} | parent_id={thread.parent_id}")
+
         if not isinstance(thread.parent, discord.ForumChannel):
+            logger.info(f"[Estate] Skipping — not a forum channel")
             return
 
         # Check if this thread belongs to any server's estate channel
         config = await db_get_server_config(str(thread.guild.id))
         estate_channel_id = get_config_value(config, "estate_channel_id") if config else ESTATE_CHANNEL_ID
+        logger.info(f"[Estate] Config estate_channel_id={estate_channel_id} | thread.parent_id={thread.parent_id} | ESTATE_CHANNEL_ID={ESTATE_CHANNEL_ID}")
         if thread.parent_id != estate_channel_id:
+            logger.info(f"[Estate] Skipping — channel mismatch")
             return
 
         seller_id = thread.owner_id
