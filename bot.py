@@ -5261,7 +5261,16 @@ async def on_thread_create(thread):
         logger.info(f"[Estate] Check before you buy posted in {thread.name}")
 
         # Handle cross-posting (Option B and C)
-        if config and config.get("accept_cross_posts") == "1":
+        # Re-fetch config in case it was loaded via server list fallback
+        if not config:
+            config = await db_get_server_config(str(thread.guild.id))
+        cross_post_enabled = False
+        if config:
+            cp_val = config.get("accept_cross_posts") or get_config_value(config, "accept_cross_posts")
+            cross_post_enabled = str(cp_val) == "1"
+        logger.info(f"[CrossPost] Server cross-post setting: {cross_post_enabled}")
+
+        if cross_post_enabled:
             seller = await client.fetch_user(seller_id)
             if seller:
                 # Option C — seller already applied Cross-Posted tag
