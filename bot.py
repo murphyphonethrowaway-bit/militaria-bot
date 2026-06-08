@@ -327,6 +327,20 @@ class MilitariaBot(discord.Client):
                 pass  # Column already exists
 
             await conn.execute('''
+                CREATE TABLE IF NOT EXISTS cross_post_mirrors (
+                    id SERIAL PRIMARY KEY,
+                    original_thread_id TEXT NOT NULL,
+                    original_guild_id TEXT NOT NULL,
+                    original_seller_id TEXT NOT NULL,
+                    mirror_thread_id TEXT,
+                    mirror_guild_id TEXT NOT NULL,
+                    mirror_channel_id TEXT NOT NULL,
+                    item_title TEXT,
+                    status TEXT DEFAULT 'active',
+                    created_at BIGINT NOT NULL
+                )
+            ''')
+            await conn.execute('''
                 CREATE TABLE IF NOT EXISTS image_url_cache (
                     key TEXT PRIMARY KEY,
                     url TEXT NOT NULL,
@@ -784,6 +798,43 @@ async def db_get_completed_transactions(user_id):
             str(user_id)
         )
         return seller_count or 0, buyer_count or 0
+
+# ==================== CROSS-POST DB ====================
+
+async def db_save_cross_post_mirror(original_thread_id, original_guild_id, original_seller_id, mirror_guild_id, mirror_channel_id, item_title, mirror_thread_id=None):
+    async with client.db.acquire() as conn:
+        await conn.execute(
+            """INSERT INTO cross_post_mirrors
+               (original_thread_id, original_guild_id, original_seller_id, mirror_thread_id, mirror_guild_id, mirror_channel_id, item_title, created_at)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+               ON CONFLICT DO NOTHING""",
+            str(original_thread_id), str(original_guild_id), str(original_seller_id),
+            str(mirror_thread_id) if mirror_thread_id else None,
+            str(mirror_guild_id), str(mirror_channel_id), item_title,
+            int(datetime.now(timezone.utc).timestamp())
+        )
+
+async def db_get_mirror_servers(original_thread_id):
+    """Get servers that already have a mirror for this thread."""
+    async with client.db.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT mirror_guild_id FROM cross_post_mirrors WHERE original_thread_id=$1",
+            str(original_thread_id)
+        )
+        return [r["mirror_guild_id"] for r in rows]
+
+async def db_mark_mirror_sold(original_thread_id):
+    """Mark all mirrors of a thread as sold."""
+    async with client.db.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT mirror_channel_id, mirror_thread_id FROM cross_post_mirrors WHERE original_thread_id=$1 AND status='active'",
+            str(original_thread_id)
+        )
+        await conn.execute(
+            "UPDATE cross_post_mirrors SET status='sold' WHERE original_thread_id=$1",
+            str(original_thread_id)
+        )
+        return [dict(r) for r in rows]
 
 # ==================== RANK SYSTEM ====================
 
@@ -1264,6 +1315,171 @@ async def send_alert(channel, name, url, logo_file, test=False, waf=False):
                 asyncio.create_task(flush_pending_pings())
         except Exception as e:
             logger.error(f"[Alert] Failed to send alerts for {name}: {e}")
+
+async def cross_post_listing(thread, seller, starter_message=None):
+    """Mirror a listing to all servers that accept cross-posts."""
+    try:
+        all_servers = await db_get_all_servers()
+        already_mirrored = await db_get_mirror_servers(str(thread.id))
+
+        # Get image from starter message if available
+        image_url = None
+        extra_images = 0
+        if starter_message and starter_message.attachments:
+            image_url = starter_message.attachments[0].url
+            extra_images = len(starter_message.attachments) - 1
+
+        # Get description snippet from starter message
+        description_snippet = ""
+        if starter_message and starter_message.content:
+            description_snippet = starter_message.content[:300]
+            if len(starter_message.content) > 300:
+                description_snippet += "..."
+
+        # Get seller ratings
+        seller_avg, seller_count = await db_get_seller_rating(str(seller.id))
+        points = await db_get_user_points(str(seller.id))
+        warnings = await db_get_user_warnings(str(seller.id))
+        rank = get_rank(points, warnings > 0)
+
+        def stars(avg):
+            if avg is None:
+                return "No ratings yet"
+            full = int(avg)
+            return "⭐" * full + "☆" * (5-full) + f" ({avg})"
+
+        mirror_count = 0
+        for server in all_servers:
+            # Skip original server
+            if str(server["guild_id"]) == str(thread.guild.id):
+                continue
+            # Skip servers that don't accept cross-posts
+            if server.get("accept_cross_posts") != "1":
+                continue
+            # Skip if already mirrored to this server
+            if server["guild_id"] in already_mirrored:
+                continue
+            # Skip if no estate channel configured
+            estate_channel_id = get_config_value(server, "estate_channel_id")
+            if not estate_channel_id:
+                continue
+
+            estate_channel = client.get_channel(estate_channel_id)
+            if not estate_channel or not isinstance(estate_channel, discord.ForumChannel):
+                continue
+
+            try:
+                # Build contact seller view
+                class ContactSellerView(discord.ui.View):
+                    def __init__(self, seller_id, item_title, original_guild_name):
+                        super().__init__(timeout=None)
+                        self.seller_id = seller_id
+                        self.item_title = item_title
+                        self.original_guild_name = original_guild_name
+
+                    @discord.ui.button(label="📨 Contact Seller", style=discord.ButtonStyle.primary, custom_id=f"contact_seller_{seller_id}_{thread.id}")
+                    async def contact_seller(self, interaction: discord.Interaction, button: discord.ui.Button):
+                        try:
+                            seller_user = await client.fetch_user(int(self.seller_id))
+                            if seller_user:
+                                # DM the seller
+                                dm_embed = discord.Embed(
+                                    title="💬 Someone is interested in your listing!",
+                                    description=(
+                                        f"**{interaction.user.display_name}** from **{interaction.guild.name}** "
+                                        f"is interested in your listing:\n\n"
+                                        f"**{self.item_title}**\n\n"
+                                        f"They\'d like to negotiate via DM. Feel free to reach out to them!"
+                                    ),
+                                    color=discord.Color.dark_gold(),
+                                    timestamp=datetime.now(timezone.utc)
+                                )
+                                dm_embed.set_thumbnail(url=interaction.user.display_avatar.url)
+                                dm_embed.add_field(name="Interested Buyer", value=f"{interaction.user.mention} ({interaction.user.display_name})", inline=True)
+                                dm_embed.set_footer(text="Adrian — Estand Marketplace")
+                                await seller_user.send(embed=dm_embed)
+                                await interaction.response.send_message(
+                                    f"✅ The seller has been notified! They\'ll reach out to you via DM.",
+                                    ephemeral=True
+                                )
+                        except discord.Forbidden:
+                            await interaction.response.send_message(
+                                "⚠️ Could not contact the seller — they may have DMs disabled.",
+                                ephemeral=True
+                            )
+                        except Exception as e:
+                            logger.error(f"[CrossPost] Contact seller error: {e}")
+                            await interaction.response.send_message("⚠️ Something went wrong.", ephemeral=True)
+
+                # Build mirror embed
+                guild_name = thread.guild.name
+                mirror_embed = discord.Embed(
+                    title=f"🌐 {thread.name}",
+                    description=(
+                        f"{description_snippet}\n\n" if description_snippet else ""
+                    ) + (
+                        f"*Originally posted in **{guild_name}***"
+                    ),
+                    color=discord.Color.dark_gold(),
+                    timestamp=datetime.now(timezone.utc)
+                )
+
+                # Seller info
+                mirror_embed.add_field(
+                    name="👤 Seller",
+                    value=f"{seller.display_name}\n{rank}\n{stars(seller_avg)} ({seller_count} sale(s))",
+                    inline=True
+                )
+
+                # Image
+                if image_url:
+                    mirror_embed.set_image(url=image_url)
+                if extra_images > 0:
+                    mirror_embed.add_field(
+                        name="📷 Photos",
+                        value=f"+{extra_images} more photo(s)",
+                        inline=True
+                    )
+
+                mirror_embed.set_footer(text="Adrian — Cross-Posted Listing | Click 'Contact Seller' to negotiate via DM")
+
+                # Post to destination forum channel
+                tags_to_apply = []
+                for tag in estate_channel.available_tags:
+                    if tag.name.lower() == "cross-posted":
+                        tags_to_apply.append(tag)
+                        break
+
+                mirror_thread, _ = await estate_channel.create_thread(
+                    name=f"🌐 {thread.name}",
+                    content="",
+                    embed=mirror_embed,
+                    applied_tags=tags_to_apply
+                )
+
+                # Save mirror to DB
+                await db_save_cross_post_mirror(
+                    str(thread.id), str(thread.guild.id), str(seller.id),
+                    str(server["guild_id"]), str(estate_channel.id),
+                    thread.name, str(mirror_thread.id)
+                )
+
+                # Add contact seller button
+                await mirror_thread.send(view=ContactSellerView(str(seller.id), thread.name, guild_name))
+
+                mirror_count += 1
+                logger.info(f"[CrossPost] Mirrored \'{thread.name}\' to {estate_channel.guild.name}")
+
+            except Exception as e:
+                logger.error(f"[CrossPost] Failed to mirror to {server.get('guild_name', 'unknown')}: {e}")
+
+        if mirror_count > 0:
+            logger.info(f"[CrossPost] \'{thread.name}\' mirrored to {mirror_count} server(s)")
+        return mirror_count
+
+    except Exception as e:
+        logger.error(f"[CrossPost] cross_post_listing error: {e}\n{traceback.format_exc()}")
+        return 0
 
 async def flush_pending_pings():
     """Send batched alert pings — groups multiple dealer alerts into one message per user."""
@@ -5044,6 +5260,73 @@ async def on_thread_create(thread):
         await thread.send(embed=embed, view=view)
         logger.info(f"[Estate] Check before you buy posted in {thread.name}")
 
+        # Handle cross-posting (Option B and C)
+        if config and config.get("accept_cross_posts") == "1":
+            seller = await client.fetch_user(seller_id)
+            if seller:
+                # Option C — seller already applied Cross-Posted tag
+                applied_tag_names = [t.name.lower() for t in (thread.applied_tags or [])]
+                if "cross-posted" in applied_tag_names:
+                    logger.info(f"[CrossPost] Auto-mirroring \'{thread.name}\' — seller applied Cross-Posted tag")
+                    asyncio.create_task(cross_post_listing(thread, seller, starter if starter else None))
+                else:
+                    # Option B — DM seller asking if they want to cross-post
+                    try:
+                        class CrossPostOfferView(discord.ui.View):
+                            def __init__(self):
+                                super().__init__(timeout=3600)  # 1 hour
+
+                            @discord.ui.button(label="🌐 Yes — Cross-post my listing", style=discord.ButtonStyle.success)
+                            async def yes_crosspost(self, interaction: discord.Interaction, button: discord.ui.Button):
+                                for child in self.children:
+                                    child.disabled = True
+                                await interaction.response.edit_message(
+                                    embed=discord.Embed(
+                                        title="🌐 Cross-posting your listing...",
+                                        description="Hang tight — I\'m mirroring your listing to other Adrian servers now!",
+                                        color=discord.Color.dark_gold()
+                                    ),
+                                    view=self
+                                )
+                                count = await cross_post_listing(thread, seller, starter if starter else None)
+                                await interaction.edit_original_response(
+                                    embed=discord.Embed(
+                                        title="✅ Listing Cross-Posted!",
+                                        description=f"Your listing **{thread.name}** has been mirrored to **{count}** other Adrian server(s)!\n\nInterested buyers can contact you directly via DM.",
+                                        color=discord.Color.green()
+                                    )
+                                )
+
+                            @discord.ui.button(label="❌ No thanks", style=discord.ButtonStyle.secondary)
+                            async def no_crosspost(self, interaction: discord.Interaction, button: discord.ui.Button):
+                                for child in self.children:
+                                    child.disabled = True
+                                await interaction.response.edit_message(
+                                    embed=discord.Embed(
+                                        description="No problem! Your listing stays local.",
+                                        color=discord.Color.dark_gold()
+                                    ),
+                                    view=self
+                                )
+
+                        dm_embed = discord.Embed(
+                            title="🌐 Cross-post your listing?",
+                            description=(
+                                f"Your listing **{thread.name}** was just posted in **{thread.guild.name}**!\n\n"
+                                "Would you like to cross-post it to other Adrian servers so more buyers can see it?\n\n"
+                                "✅ More exposure across multiple servers\n"
+                                "💬 Interested buyers will contact you via DM\n"
+                                "🆓 Completely free"
+                            ),
+                            color=discord.Color.dark_gold()
+                        )
+                        await seller.send(embed=dm_embed, view=CrossPostOfferView())
+                        logger.info(f"[CrossPost] DM sent to seller {seller_id} about cross-posting")
+                    except discord.Forbidden:
+                        logger.warning(f"[CrossPost] Could not DM seller {seller_id} — DMs disabled")
+                    except Exception as e:
+                        logger.error(f"[CrossPost] DM error: {e}")
+
     except discord.Forbidden as e:
         logger.warning(f"[Estate] Forbidden — starter message not ready yet: {e}")
         # Try one more time after longer wait
@@ -5109,6 +5392,38 @@ async def on_thread_update(before, after):
 
             # Create transaction record
             await db_create_transaction(str(after.id), after.name, str(seller_id))
+
+            # Mark all cross-post mirrors as sold
+            try:
+                mirrors = await db_mark_mirror_sold(str(after.id))
+                for mirror in mirrors:
+                    try:
+                        mirror_channel = client.get_channel(int(mirror["mirror_channel_id"]))
+                        if mirror_channel and mirror["mirror_thread_id"]:
+                            mirror_thread = mirror_channel.guild.get_thread(int(mirror["mirror_thread_id"]))
+                            if mirror_thread:
+                                # Apply sold tag if available
+                                mirror_config = await db_get_server_config(str(mirror_channel.guild.id))
+                                mirror_sold_tag_id = get_config_value(mirror_config, "estate_sold_tag_id") if mirror_config else None
+                                if mirror_sold_tag_id:
+                                    sold_tag = discord.utils.get(mirror_thread.parent.available_tags, id=int(mirror_sold_tag_id))
+                                    if sold_tag:
+                                        current_tags = list(mirror_thread.applied_tags or [])
+                                        if sold_tag not in current_tags:
+                                            current_tags.append(sold_tag)
+                                            await mirror_thread.edit(applied_tags=current_tags[:5])
+                                await mirror_thread.send(
+                                    embed=discord.Embed(
+                                        title="🔴 This item has been sold!",
+                                        description=f"The original listing in **{after.guild.name}** has been marked as sold.",
+                                        color=discord.Color.red()
+                                    )
+                                )
+                                logger.info(f"[CrossPost] Mirror marked as sold in {mirror_channel.guild.name}")
+                    except Exception as me:
+                        logger.debug(f"[CrossPost] Could not update mirror: {me}")
+            except Exception as e:
+                logger.error(f"[CrossPost] Error marking mirrors sold: {e}")
 
             # Post buyer identification message in the thread
             embed = discord.Embed(
