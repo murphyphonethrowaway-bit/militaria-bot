@@ -4559,7 +4559,28 @@ async def _send_profile(interaction, user):
                 ephemeral=True
             )
 
-        @discord.ui.button(label="💎 Buy Premium", style=discord.ButtonStyle.primary)
+        @discord.ui.button(label="🗑️ Clear My Profile", style=discord.ButtonStyle.danger)
+        async def clear_profile_action(self, interaction2: discord.Interaction, button: discord.ui.Button):
+            await interaction2.response.defer(ephemeral=True)
+            async with client.db.acquire() as conn:
+                await conn.execute(
+                    "UPDATE user_preferences SET region=NULL, eras=NULL, countries=NULL, forums=NULL WHERE user_id=$1",
+                    uid
+                )
+            await interaction2.followup.send(
+                embed=discord.Embed(
+                    title="🗑️ Profile Preferences Cleared",
+                    description=(
+                        "Your alert preferences have been reset.\n\n"
+                        "**Your reputation, ratings and transaction history are untouched.**\n\n"
+                        "Click **👋 Get Started** in the #adrian channel to set up new preferences."
+                    ),
+                    color=discord.Color.red()
+                ),
+                ephemeral=True
+            )
+
+        @discord.ui.button(label="🩷 Buy Premium", style=discord.ButtonStyle.danger)
         async def buy_premium(self, interaction2: discord.Interaction, button: discord.ui.Button):
             await interaction2.response.send_message(
                 embed=discord.Embed(
