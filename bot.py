@@ -574,6 +574,7 @@ async def db_cleanup_watchlist():
             logger.info(f"[Watchlist] Cleaned up {deleted} expired watchlist entries")
 
 async def db_follow_dealer(user_id, dealer_name):
+    logger.debug(f"[DB] db_follow_dealer: user={user_id} dealer={dealer_name}")
     async with client.db.acquire() as conn:
         await conn.execute(
             "INSERT INTO dealer_follows (user_id, dealer_name, timestamp) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING",
@@ -581,6 +582,7 @@ async def db_follow_dealer(user_id, dealer_name):
         )
 
 async def db_unfollow_dealer(user_id, dealer_name):
+    logger.debug(f"[DB] db_unfollow_dealer: user={user_id} dealer={dealer_name}")
     async with client.db.acquire() as conn:
         await conn.execute("DELETE FROM dealer_follows WHERE user_id=$1 AND dealer_name=$2", str(user_id), dealer_name)
 
@@ -707,6 +709,7 @@ async def db_get_all_servers():
     """Get all server configs — for owner dashboard."""
     async with client.db.acquire() as conn:
         rows = await conn.fetch("SELECT * FROM server_config ORDER BY created_at DESC")
+        logger.debug(f"[DB] db_get_all_servers: returned {len(rows)} server(s)")
         return [dict(r) for r in rows]
 
 async def db_is_setup(guild_id):
@@ -854,6 +857,7 @@ RANKS = [
 
 async def db_get_user_points(user_id):
     """Calculate total rank points for a user."""
+    logger.debug(f"[DB] db_get_user_points: user={user_id}")
     async with client.db.acquire() as conn:
         # Points from completed transactions (30 each)
         tx_count = await conn.fetchval(
@@ -920,6 +924,7 @@ def get_rank(points, has_warnings=False):
 
 async def db_get_top_percent(user_id):
     """Calculate what percentile a user is in globally."""
+    logger.debug(f"[DB] db_get_top_percent: user={user_id}")
     user_points = await db_get_user_points(str(user_id))
     if user_points == 0:
         return None
@@ -1348,23 +1353,33 @@ async def cross_post_listing(thread, seller, starter_message=None):
             full = int(avg)
             return "⭐" * full + "☆" * (5-full) + f" ({avg})"
 
+        logger.info(f"[CrossPost] Checking {len(all_servers)} server(s) for mirror destinations")
         mirror_count = 0
         for server in all_servers:
+            gid = str(server.get("guild_id", ""))
+            cp = str(server.get("accept_cross_posts", "0"))
+            eid = get_config_value(server, "estate_channel_id")
+            logger.info(f"[CrossPost] Server {server.get('guild_name','?')} ({gid}): cross_posts={cp} estate_channel={eid}")
+
             # Skip original server
-            if str(server["guild_id"]) == str(thread.guild.id):
+            if gid == str(thread.guild.id):
+                logger.info(f"[CrossPost] Skipping — origin server")
                 continue
             # Skip servers that don't accept cross-posts
-            if server.get("accept_cross_posts") != "1":
+            if cp != "1":
+                logger.info(f"[CrossPost] Skipping — cross-posts disabled")
                 continue
             # Skip if already mirrored to this server
-            if server["guild_id"] in already_mirrored:
+            if gid in already_mirrored:
+                logger.info(f"[CrossPost] Skipping — already mirrored")
                 continue
             # Skip if no estate channel configured
-            estate_channel_id = get_config_value(server, "estate_channel_id")
+            estate_channel_id = eid
             if not estate_channel_id:
+                logger.info(f"[CrossPost] Skipping — no estate channel")
                 continue
 
-            estate_channel = client.get_channel(estate_channel_id)
+            estate_channel = client.get_channel(int(estate_channel_id))
             if not estate_channel or not isinstance(estate_channel, discord.ForumChannel):
                 continue
 
@@ -3791,6 +3806,7 @@ async def broadcast_cmd(interaction: discord.Interaction, message: str):
 
 @client.tree.command(name="start", description="Get started with Adrian and set your notification preferences")
 async def start_cmd(interaction: discord.Interaction):
+    logger.info(f"[Command] /start used by {interaction.user} ({interaction.user.id}) in {interaction.guild.name if interaction.guild else 'DM'}")
     on_cd, remaining = check_cooldown(str(interaction.user.id), "start")
     if on_cd:
         await interaction.response.send_message(f"⏳ Please wait {remaining}s before using `/start` again.", ephemeral=True)
@@ -4493,6 +4509,7 @@ async def mywatchlist_cmd(interaction: discord.Interaction):
 @client.tree.command(name="lookup", description="Look up another collector's public profile")
 @app_commands.describe(user="The Discord user to look up")
 async def lookup_cmd(interaction: discord.Interaction, user: discord.Member):
+    logger.info(f"[Command] /lookup: {interaction.user} looking up {user} ({user.id})")
     await interaction.response.defer(ephemeral=True)
     uid = str(user.id)
 
@@ -4754,6 +4771,7 @@ class WelcomeView(discord.ui.View):
 
     @discord.ui.button(label="👋 Get Started", style=discord.ButtonStyle.success, custom_id="welcome_create_profile")
     async def create_profile(self, interaction: discord.Interaction, button: discord.ui.Button):
+        logger.info(f"[Welcome] Get Started clicked by {interaction.user} ({interaction.user.id}) in {interaction.guild.name}")
         on_cd, remaining = check_cooldown(str(interaction.user.id), "start")
         if on_cd:
             await interaction.response.send_message(f"⏳ Please wait {remaining}s before trying again.", ephemeral=True)
@@ -4784,6 +4802,7 @@ class WelcomeView(discord.ui.View):
 
     @discord.ui.button(label="🗑️ Clear My Profile", style=discord.ButtonStyle.danger, custom_id="welcome_clear_profile")
     async def clear_profile(self, interaction: discord.Interaction, button: discord.ui.Button):
+        logger.info(f"[Welcome] Clear Profile clicked by {interaction.user} ({interaction.user.id})")
         await interaction.response.defer(ephemeral=True)
         region = await db_get_user_region(str(interaction.user.id))
         if not region:
@@ -4810,6 +4829,7 @@ class WelcomeView(discord.ui.View):
 
 async def _send_profile(interaction, user):
     """Build and send a user profile embed with action buttons."""
+    logger.info(f"[Profile] Building profile for {user} ({user.id})")
     uid = str(user.id)
 
     # Preferences
@@ -4892,6 +4912,7 @@ async def _send_profile(interaction, user):
 
         @discord.ui.button(label="📦 My Followed Dealers", style=discord.ButtonStyle.secondary)
         async def show_follows(self, interaction2: discord.Interaction, button: discord.ui.Button):
+            logger.info(f"[Profile] My Followed Dealers clicked by {interaction2.user} ({interaction2.user.id})")
             await interaction2.response.defer(ephemeral=True)
             async with client.db.acquire() as conn:
                 rows = await conn.fetch("SELECT dealer_name FROM dealer_follows WHERE user_id=$1 ORDER BY timestamp ASC", uid)
@@ -4923,6 +4944,7 @@ async def _send_profile(interaction, user):
 
         @discord.ui.button(label="💬 My Transaction Reviews", style=discord.ButtonStyle.secondary)
         async def show_reviews(self, interaction2: discord.Interaction, button: discord.ui.Button):
+            logger.info(f"[Profile] My Transaction Reviews clicked by {interaction2.user} ({interaction2.user.id})")
             await interaction2.response.defer(ephemeral=True)
             reviews = await db_get_user_reviews(uid)
             if not reviews:
@@ -5088,6 +5110,7 @@ async def on_guild_join(guild):
         logger.error(f"[Guild] on_guild_join error: {e}\n{traceback.format_exc()}")
 @client.event
 async def on_guild_remove(guild):
+    logger.info(f"[Guild] Bot removed from: {guild.name} ({guild.id})")
     """When bot is removed from a server, log it."""
     logger.info(f"[Guild] Removed from server: {guild.name} ({guild.id})")
 
@@ -5130,6 +5153,7 @@ async def on_message(message):
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     """When someone reacts to the welcome image, trigger /start for them."""
     try:
+        logger.debug(f"[Reaction] Reaction from {payload.user_id} in guild {payload.guild_id} on msg {payload.message_id}")
         # Ignore bot reactions
         if payload.user_id == client.user.id:
             return
@@ -5388,6 +5412,7 @@ async def on_thread_update(before, after):
         logger.info(f"[Estate] Thread update — tags before={before_tag_ids} after={after_tag_ids} sold_tag={sold_tag_id_int}")
 
         # Check if Sold tag was just added
+        logger.debug(f"[Estate] on_thread_update: before_tags={before_tag_ids} after_tags={after_tag_ids} sold_tag={sold_tag_id_int}")
         if sold_tag_id_int in after_tag_ids and sold_tag_id_int not in before_tag_ids:
             logger.info(f"[Estate] Sold tag detected on thread: {after.name} ({after.id})")
 
@@ -5400,6 +5425,7 @@ async def on_thread_update(before, after):
                 seller_id = after.owner_id
 
             # Create transaction record
+            logger.info(f"[Estate] Creating transaction record for thread {after.id} seller {seller_id}")
             await db_create_transaction(str(after.id), after.name, str(seller_id))
 
             # Mark all cross-post mirrors as sold
