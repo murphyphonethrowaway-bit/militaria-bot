@@ -339,6 +339,7 @@ class MilitariaBot(discord.Client):
                     accept_cross_posts INTEGER DEFAULT 0,
                     setup_complete INTEGER DEFAULT 0,
                     premium INTEGER DEFAULT 0,
+                    view_all_channels INTEGER DEFAULT 0,
                     created_at BIGINT NOT NULL
                 )
             ''')
@@ -2517,6 +2518,47 @@ class RegionSelectView(discord.ui.View):
 
 
 
+class SetupPermissionsView(discord.ui.View):
+    """Ask server owner to grant View All Channels permission."""
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="✅ Yes — I'll grant View All Channels", style=discord.ButtonStyle.success, custom_id="setup_perms_yes")
+    async def perms_yes(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await db_save_server_config(str(interaction.guild_id), view_all_channels=1)
+        embed = discord.Embed(
+            title="⚙️ Last Step — Do you want a Marketplace?",
+            description=(
+                "✅ Got it — thank you!\n\n"
+                "**Turn your server into a trusted militaria marketplace!** 🏪\n\n"
+                "🔍 **Seller profiles** — buyers check seller ratings before purchasing\n"
+                "⭐ **Reputation system** — every transaction builds a global trust score\n"
+                "🌐 **Cross-server listings** — sellers reach buyers across ALL Adrian servers\n"
+                "🛡️ **Scam protection** — warning flags follow bad actors everywhere\n"
+                "📊 **Transaction history** — full record of every completed sale\n\n"
+                "It's completely free and takes 30 seconds to set up."
+            ),
+            color=discord.Color.dark_gold()
+        )
+        await interaction.response.edit_message(embed=embed, view=SetupEstateView())
+
+    @discord.ui.button(label="❌ No — Keep permissions as is", style=discord.ButtonStyle.secondary, custom_id="setup_perms_no")
+    async def perms_no(self, interaction: discord.Interaction, button: discord.ui.Button):
+        embed = discord.Embed(
+            title="⚙️ Last Step — Do you want a Marketplace?",
+            description=(
+                "No problem — I'll work with the channels I can see.\n\n"
+                "**Turn your server into a trusted militaria marketplace!** 🏪\n\n"
+                "🔍 **Seller profiles** — buyers check seller ratings before purchasing\n"
+                "⭐ **Reputation system** — every transaction builds a global trust score\n"
+                "🌐 **Cross-server listings** — sellers reach buyers across ALL Adrian servers\n"
+                "🛡️ **Scam protection** — warning flags follow bad actors everywhere\n\n"
+                "It's completely free and takes 30 seconds to set up."
+            ),
+            color=discord.Color.dark_gold()
+        )
+        await interaction.response.edit_message(embed=embed, view=SetupEstateView())
+
 class SetupEstateView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -2910,7 +2952,7 @@ async def setup_cmd(interaction: discord.Interaction):
                     ),
                     color=discord.Color.dark_gold()
                 )
-                await interaction2.edit_original_response(embed=embed3, view=SetupEstateView())
+                await interaction2.edit_original_response(embed=embed3, view=SetupPermissionsView())
 
             except discord.Forbidden:
                 await interaction2.edit_original_response(
@@ -2968,7 +3010,7 @@ async def setup_cmd(interaction: discord.Interaction):
                             ),
                             color=discord.Color.dark_gold()
                         )
-                        await interaction3.edit_original_response(embed=embed3, view=SetupEstateView())
+                        await interaction3.edit_original_response(embed=embed3, view=SetupPermissionsView())
                     except discord.Forbidden:
                         await interaction3.edit_original_response(
                             embed=discord.Embed(
@@ -2999,7 +3041,7 @@ async def setup_cmd(interaction: discord.Interaction):
                         ),
                         color=discord.Color.dark_gold()
                     )
-                    await interaction3.response.edit_message(embed=embed3, view=SetupEstateView())
+                    await interaction3.response.edit_message(embed=embed3, view=SetupPermissionsView())
 
             embed2 = discord.Embed(
                 title="⚙️ Step 2 of 3 — New Item Alerts Channel",
@@ -4472,6 +4514,118 @@ async def on_thread_update(before, after):
     except Exception as e:
         logger.error(f"[Estate] on_thread_update error: {e}\n{traceback.format_exc()}")
 
+
+@client.event
+async def on_thread_delete(thread):
+    """When a listing thread is deleted, DM the seller asking if it was sold."""
+    try:
+        if not isinstance(thread.parent, discord.ForumChannel):
+            return
+
+        config = await db_get_server_config(str(thread.guild.id))
+        estate_channel_id = get_config_value(config, "estate_channel_id") if config else None
+        if not estate_channel_id:
+            estate_channel_id = ESTATE_CHANNEL_ID
+
+        if thread.parent_id != estate_channel_id:
+            all_servers = await db_get_all_servers()
+            matched = any(get_config_value(s, "estate_channel_id") == thread.parent_id for s in all_servers)
+            if not matched and thread.parent_id != ESTATE_CHANNEL_ID:
+                return
+
+        seller_id = thread.owner_id
+        logger.info(f"[Estate] Thread deleted: {thread.name} by {seller_id}")
+
+        try:
+            seller = await client.fetch_user(seller_id)
+            if not seller:
+                return
+
+            embed = discord.Embed(
+                title="👋 Hey! I noticed your listing was removed.",
+                description=(
+                    f"Your listing **{thread.name}** is no longer available.\n\n"
+                    "**Did this item sell on the server?**\n\n"
+                    "If so, please take 30 seconds to rate your buyer. Here\'s why it matters:\n\n"
+                    "🎖️ **Ratings build rank** — both you and your buyer earn rank progress from completed, rated transactions\n"
+                    "🛡️ **Ratings protect the community** — good ratings reward trustworthy buyers, bad ratings warn others\n"
+                    "🌐 **Ratings follow members everywhere** — your buyer\'s reputation carries across every Adrian server\n"
+                    "📈 **Ratings grow the community** — the more trusted transactions we track, the stronger this marketplace becomes\n\n"
+                    "A community is only as strong as the trust between its members. Your rating takes 10 seconds and makes a real difference."
+                ),
+                color=discord.Color.dark_gold(),
+                timestamp=datetime.now(timezone.utc)
+            )
+            embed.set_footer(text="Adrian — Estate Marketplace")
+
+            class DeletedListingView(discord.ui.View):
+                def __init__(self):
+                    super().__init__(timeout=172800)  # 48 hours
+
+                @discord.ui.button(label="⭐ Yes — Rate my Buyer", style=discord.ButtonStyle.success)
+                async def rate_buyer(self, interaction: discord.Interaction, button: discord.ui.Button):
+                    modal = discord.ui.Modal(title="Who was your buyer?")
+                    buyer_input = discord.ui.TextInput(
+                        label="Buyer Discord username or user ID",
+                        placeholder="e.g. Murphy#1234 or 161988117862023169",
+                        required=True
+                    )
+                    modal.add_item(buyer_input)
+
+                    async def on_submit(modal_interaction: discord.Interaction):
+                        buyer_name = buyer_input.value.strip()
+                        buyer = None
+                        try:
+                            buyer = await client.fetch_user(int(buyer_name))
+                        except:
+                            pass
+                        if buyer:
+                            try:
+                                buyer_embed = discord.Embed(
+                                    title="⭐ Rate Your Seller!",
+                                    description=(
+                                        f"**{seller.display_name}** just completed a sale with you and wanted to say thanks!\n\n"
+                                        f"Item: **{thread.name}**\n\n"
+                                        "**Please take a moment to rate your experience as a buyer.** Here\'s why it matters:\n\n"
+                                        "🎖️ **Ratings build your rank** — every rated transaction moves you up the ranks from Private to Maréchal d\'Empire\n"
+                                        "🛡️ **Ratings protect others** — your honest review helps the next buyer know what to expect\n"
+                                        "🌐 **Your reputation travels with you** — your rating is visible on every Adrian server you visit\n"
+                                        "📈 **Ratings grow the community** — a trusted marketplace attracts more serious collectors\n\n"
+                                        "It takes 10 seconds and means a lot to the community. How was your experience?"
+                                    ),
+                                    color=discord.Color.dark_gold()
+                                )
+                                await buyer.send(embed=buyer_embed, view=EstateRatingView(str(thread.id), str(seller_id), str(buyer.id)))
+                                await modal_interaction.response.send_message(f"✅ Rating request sent to {buyer.display_name}!", ephemeral=True)
+                            except discord.Forbidden:
+                                await modal_interaction.response.send_message(f"⚠️ Could not DM that user — they may have DMs disabled.", ephemeral=True)
+                        else:
+                            await modal_interaction.response.send_message("⚠️ Could not find that user. Please use their exact user ID.", ephemeral=True)
+
+                    modal.on_submit = on_submit
+                    await interaction.response.send_modal(modal)
+
+                @discord.ui.button(label="❌ Item wasn't sold", style=discord.ButtonStyle.secondary)
+                async def not_sold(self, interaction: discord.Interaction, button: discord.ui.Button):
+                    await interaction.response.edit_message(
+                        embed=discord.Embed(
+                            description="No problem! Let me know if you relist it. 👍",
+                            color=discord.Color.dark_gold()
+                        ),
+                        view=None
+                    )
+
+            await seller.send(embed=embed, view=DeletedListingView())
+            logger.info(f"[Estate] DM sent to seller {seller_id} about deleted listing")
+
+        except discord.Forbidden:
+            logger.warning(f"[Estate] Could not DM seller {seller_id} — DMs disabled")
+        except Exception as e:
+            logger.error(f"[Estate] Could not DM seller: {e}")
+
+    except Exception as e:
+        logger.error(f"[Estate] on_thread_delete error: {e}\n{traceback.format_exc()}")
+
 @client.event
 async def on_ready():
     bot_state["startup_time"] = datetime.now(timezone.utc)
@@ -4504,6 +4658,7 @@ async def on_ready():
     client.add_view(BuyerIdentifyView("placeholder", "placeholder"))
     client.add_view(SellerProfileView("placeholder"))
     client.add_view(EstateRatingView("placeholder", "placeholder", "placeholder"))
+    client.add_view(SetupPermissionsView())
     client.add_view(SetupEstateView())
     client.add_view(SetupCrossPostView())
     client.add_view(WelcomeView())
