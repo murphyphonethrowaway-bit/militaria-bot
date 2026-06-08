@@ -4592,6 +4592,264 @@ async def debug_cmd(interaction: discord.Interaction):
     embed.set_footer(text="Adrian Owner Dashboard")
     await interaction.followup.send(embed=embed, ephemeral=True)
 
+@client.tree.command(name="channelsearch", description="[Owner] Search a channel for keywords")
+@app_commands.describe(keyword="Keyword to search for (e.g. helmet, medal, badge)")
+async def channelsearch_cmd(interaction: discord.Interaction, keyword: str):
+    if not is_bot_owner(interaction.user):
+        await interaction.response.send_message("❓ Unknown command.", ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True)
+
+    # Build server dropdown
+    guilds = [g for g in client.guilds]
+    server_options = [
+        discord.SelectOption(label=g.name[:100], value=str(g.id), description=f"{g.member_count} members")
+        for g in guilds
+    ][:25]
+
+    class SearchServerSelect(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=300)
+
+        @discord.ui.select(placeholder="Select a server to search...", options=server_options)
+        async def select_server(self, interaction2: discord.Interaction, select: discord.ui.Select):
+            guild_id = int(select.values[0])
+            guild = client.get_guild(guild_id)
+            if not guild:
+                await interaction2.response.send_message("Could not find that server.", ephemeral=True)
+                return
+
+            text_channels = [c for c in guild.channels if isinstance(c, discord.TextChannel)]
+            channel_options = [
+                discord.SelectOption(label=f"#{c.name}"[:100], value=str(c.id))
+                for c in sorted(text_channels, key=lambda x: x.position)
+            ][:25]
+
+            class SearchChannelSelect(discord.ui.View):
+                def __init__(self):
+                    super().__init__(timeout=300)
+
+                @discord.ui.select(placeholder="Select a channel to search...", options=channel_options)
+                async def select_channel(self, interaction3: discord.Interaction, select2: discord.ui.Select):
+                    await interaction3.response.defer(ephemeral=True)
+                    channel_id = int(select2.values[0])
+                    source_channel = guild.get_channel(channel_id)
+                    if not source_channel:
+                        await interaction3.followup.send("Could not find that channel.", ephemeral=True)
+                        return
+
+                    await interaction3.followup.send(
+                        f"🔍 Searching **#{source_channel.name}** for `{keyword}`... this may take a moment.",
+                        ephemeral=True
+                    )
+
+                    results = []
+                    count = 0
+                    try:
+                        async for message in source_channel.history(limit=10000):
+                            count += 1
+                            if keyword.lower() in message.content.lower():
+                                results.append(message)
+                            if count % 1000 == 0:
+                                logger.info(f"[Search] Scanned {count} messages in #{source_channel.name}...")
+                    except discord.Forbidden:
+                        await interaction3.followup.send("⚠️ I don't have permission to read that channel.", ephemeral=True)
+                        return
+                    except Exception as e:
+                        await interaction3.followup.send(f"⚠️ Error reading channel: {e}", ephemeral=True)
+                        return
+
+                    if not results:
+                        await interaction3.followup.send(
+                            f"No messages found containing `{keyword}` in **#{source_channel.name}** (scanned {count:,} messages).",
+                            ephemeral=True
+                        )
+                        return
+
+                    # Build text file with results
+                    lines = [
+                        f"Search Results: '{keyword}' in #{source_channel.name} ({guild.name})",
+                        f"Scanned: {count:,} messages | Found: {len(results)} matches",
+                        f"Exported: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}",
+                        "=" * 60,
+                        ""
+                    ]
+                    for msg in reversed(results):  # Chronological order
+                        ts = msg.created_at.strftime("%Y-%m-%d %H:%M")
+                        author = f"{msg.author.display_name} (@{msg.author.name})"
+                        lines.append(f"[{ts}] {author}:")
+                        lines.append(msg.content)
+                        if msg.attachments:
+                            lines.append(f"  [Attachments: {', '.join(a.filename for a in msg.attachments)}]")
+                        lines.append("")
+
+                    output = "\n".join(lines)
+                    file_bytes = output.encode("utf-8")
+                    file = discord.File(
+                        fp=__import__("io").BytesIO(file_bytes),
+                        filename=f"search_{keyword}_{source_channel.name}.txt"
+                    )
+                    await interaction3.followup.send(
+                        f"✅ Found **{len(results)}** messages containing `{keyword}` in **#{source_channel.name}** (scanned {count:,} messages).",
+                        file=file,
+                        ephemeral=True
+                    )
+                    logger.info(f"[Search] Found {len(results)} results for '{keyword}' in #{source_channel.name} ({guild.name})")
+
+            await interaction2.response.edit_message(
+                embed=discord.Embed(
+                    title=f"🔍 Search — {guild.name}",
+                    description=f"Select which channel to search for `{keyword}`:",
+                    color=discord.Color.dark_gold()
+                ),
+                view=SearchChannelSelect()
+            )
+
+    await interaction.edit_original_response(
+        embed=discord.Embed(
+            title="🔍 Channel Search",
+            description=f"Searching for: `{keyword}`\n\nSelect a server to search:",
+            color=discord.Color.dark_gold()
+        ),
+        view=SearchServerSelect()
+    )
+
+
+@client.tree.command(name="channelscrape", description="[Owner] Scrape up to 10,000 messages from a channel into a text file")
+async def channelscrape_cmd(interaction: discord.Interaction):
+    if not is_bot_owner(interaction.user):
+        await interaction.response.send_message("❓ Unknown command.", ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True)
+
+    guilds = [g for g in client.guilds]
+    server_options = [
+        discord.SelectOption(label=g.name[:100], value=str(g.id), description=f"{g.member_count} members")
+        for g in guilds
+    ][:25]
+
+    class ScrapeServerSelect(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=300)
+
+        @discord.ui.select(placeholder="Select a server to scrape...", options=server_options)
+        async def select_server(self, interaction2: discord.Interaction, select: discord.ui.Select):
+            guild_id = int(select.values[0])
+            guild = client.get_guild(guild_id)
+            if not guild:
+                await interaction2.response.send_message("Could not find that server.", ephemeral=True)
+                return
+
+            text_channels = [c for c in guild.channels if isinstance(c, discord.TextChannel)]
+            channel_options = [
+                discord.SelectOption(label=f"#{c.name}"[:100], value=str(c.id))
+                for c in sorted(text_channels, key=lambda x: x.position)
+            ][:25]
+
+            class ScrapeChannelSelect(discord.ui.View):
+                def __init__(self):
+                    super().__init__(timeout=300)
+
+                @discord.ui.select(placeholder="Select a channel to scrape...", options=channel_options)
+                async def select_channel(self, interaction3: discord.Interaction, select2: discord.ui.Select):
+                    await interaction3.response.defer(ephemeral=True)
+                    channel_id = int(select2.values[0])
+                    source_channel = guild.get_channel(channel_id)
+                    if not source_channel:
+                        await interaction3.followup.send("Could not find that channel.", ephemeral=True)
+                        return
+
+                    await interaction3.followup.send(
+                        f"📥 Scraping **#{source_channel.name}** — fetching up to 10,000 messages. This may take a few minutes...",
+                        ephemeral=True
+                    )
+
+                    messages = []
+                    try:
+                        async for message in source_channel.history(limit=10000, oldest_first=True):
+                            messages.append(message)
+                            if len(messages) % 1000 == 0:
+                                logger.info(f"[Scrape] Collected {len(messages)} messages from #{source_channel.name}...")
+                    except discord.Forbidden:
+                        await interaction3.followup.send("⚠️ I don't have permission to read that channel.", ephemeral=True)
+                        return
+                    except Exception as e:
+                        await interaction3.followup.send(f"⚠️ Error reading channel: {e}", ephemeral=True)
+                        return
+
+                    if not messages:
+                        await interaction3.followup.send("No messages found in that channel.", ephemeral=True)
+                        return
+
+                    # Build plain text file
+                    lines = [
+                        f"Channel Scrape: #{source_channel.name} ({guild.name})",
+                        f"Total messages: {len(messages):,}",
+                        f"Date range: {messages[0].created_at.strftime('%Y-%m-%d')} to {messages[-1].created_at.strftime('%Y-%m-%d')}",
+                        f"Exported: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}",
+                        "=" * 60,
+                        ""
+                    ]
+
+                    for msg in messages:
+                        ts = msg.created_at.strftime("%Y-%m-%d %H:%M")
+                        author = f"{msg.author.display_name} (@{msg.author.name})"
+                        content = msg.content.strip()
+                        if not content and not msg.attachments:
+                            continue  # Skip empty messages
+                        lines.append(f"[{ts}] {author}:")
+                        if content:
+                            lines.append(content)
+                        if msg.attachments:
+                            lines.append(f"  [Attachments: {', '.join(a.filename for a in msg.attachments)}]")
+                        if msg.embeds:
+                            for embed in msg.embeds:
+                                if embed.title:
+                                    lines.append(f"  [Embed: {embed.title}]")
+                                if embed.description:
+                                    lines.append(f"  {embed.description[:200]}")
+                        lines.append("")
+
+                    output = "\n".join(lines)
+                    file_bytes = output.encode("utf-8")
+
+                    # Discord file size limit is 25MB
+                    if len(file_bytes) > 25_000_000:
+                        file_bytes = file_bytes[:25_000_000]
+                        lines.append("\n[File truncated at 25MB limit]")
+
+                    file = discord.File(
+                        fp=__import__("io").BytesIO(file_bytes),
+                        filename=f"scrape_{guild.name}_{source_channel.name}.txt"
+                    )
+                    await interaction3.followup.send(
+                        f"✅ Scraped **{len(messages):,} messages** from **#{source_channel.name}** in **{guild.name}**.",
+                        file=file,
+                        ephemeral=True
+                    )
+                    logger.info(f"[Scrape] Exported {len(messages)} messages from #{source_channel.name} ({guild.name})")
+
+            await interaction2.response.edit_message(
+                embed=discord.Embed(
+                    title=f"📥 Scrape — {guild.name}",
+                    description="Select which channel to scrape:",
+                    color=discord.Color.dark_gold()
+                ),
+                view=ScrapeChannelSelect()
+            )
+
+    await interaction.edit_original_response(
+        embed=discord.Embed(
+            title="📥 Channel Scrape",
+            description="Select a server to scrape a channel from:",
+            color=discord.Color.dark_gold()
+        ),
+        view=ScrapeServerSelect()
+    )
+
+
 @client.tree.command(name="channelfeed", description="[Owner] Mirror a channel from another server to this one")
 async def watch_cmd(interaction: discord.Interaction):
     if not is_bot_owner(interaction.user):
