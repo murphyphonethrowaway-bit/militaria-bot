@@ -4621,11 +4621,26 @@ async def watch_cmd(interaction: discord.Interaction):
                 await interaction2.response.send_message("Could not find that server.", ephemeral=True)
                 return
 
-            # Build channel dropdown for selected server
+            # Build channel dropdown — only show restricted/private channels
+            # A channel is "private" if @everyone can't view it
             text_channels = [c for c in guild.channels if isinstance(c, discord.TextChannel)]
+            private_channels = []
+            for c in sorted(text_channels, key=lambda x: x.position):
+                everyone_role = guild.default_role
+                perms = c.permissions_for(everyone_role)
+                if not perms.view_channel:
+                    private_channels.append(c)
+
+            # Fall back to all channels if none are restricted
+            channels_to_show = private_channels if private_channels else text_channels
+
             channel_options = [
-                discord.SelectOption(label=f"#{c.name}"[:100], value=str(c.id))
-                for c in sorted(text_channels, key=lambda x: x.position)
+                discord.SelectOption(
+                    label=f"#{c.name}"[:100],
+                    value=str(c.id),
+                    description="🔒 Private" if c in private_channels else "🌐 Public"
+                )
+                for c in channels_to_show
             ][:25]
 
             if not channel_options:
