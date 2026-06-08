@@ -2716,8 +2716,9 @@ class SetupPermissionsView(discord.ui.View):
 
     @discord.ui.button(label="✅ Yes — Grant View All Channels", style=discord.ButtonStyle.success, custom_id="setup_perms_yes")
     async def perms_yes(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Defer immediately before doing any work — prevents interaction timeout
+        await interaction.response.defer(ephemeral=True)
         try:
-            # Grant bot View All Channels in every channel
             guild = interaction.guild
             bot_member = guild.me
             granted = 0
@@ -2736,6 +2737,7 @@ class SetupPermissionsView(discord.ui.View):
 
     @discord.ui.button(label="❌ No — Skip", style=discord.ButtonStyle.secondary, custom_id="setup_perms_no")
     async def perms_no(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
         await db_save_server_config(str(interaction.guild_id), setup_complete=1)
         await complete_setup(interaction)
 
@@ -3021,10 +3023,14 @@ async def complete_setup(interaction):
         embed.set_image(url=bot_state["setup_end_img_url"])
     embed.set_footer(text="Adrian — Discord's #1 Militaria Bot")
 
+    # Since we deferred, use edit_original_response
     try:
-        await interaction.response.edit_message(embed=embed, view=None)
-    except discord.InteractionResponded:
         await interaction.edit_original_response(embed=embed, view=None)
+    except Exception:
+        try:
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        except Exception as e:
+            logger.error(f"[Setup] Could not send completion message: {e}")
 
 # ==================== OWNER COMMANDS (Murphy only, test server only) ====================
 
