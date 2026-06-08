@@ -2553,11 +2553,83 @@ class SetupEstateView(discord.ui.View):
             def __init__(self):
                 super().__init__(timeout=300)
 
-            @discord.ui.select(placeholder="Select your estate/marketplace forum channel...", options=forum_options)
+            @discord.ui.button(label="🚀 Auto-create Estate channel for me", style=discord.ButtonStyle.success, row=0)
+            async def auto_create_estate(self, interaction2: discord.Interaction, button: discord.ui.Button):
+                try:
+                    await interaction2.response.defer(ephemeral=True)
+                    guild = interaction2.guild
+
+                    # Create the forum channel
+                    estate_channel = discord.utils.get(guild.forums, name="estate")
+                    if not estate_channel:
+                        # Create tags first
+                        tags = [
+                            discord.ForumTag(name="Active", emoji=discord.PartialEmoji(name="🟢")),
+                            discord.ForumTag(name="Sold", emoji=discord.PartialEmoji(name="🔴")),
+                            discord.ForumTag(name="On Hold", emoji=discord.PartialEmoji(name="🟡")),
+                            discord.ForumTag(name="Cross-Posted", emoji=discord.PartialEmoji(name="🌐")),
+                        ]
+                        estate_channel = await guild.create_forum(
+                            name="estate",
+                            topic="Buy and sell militaria with verified members. Use /start to create your profile and build your reputation.",
+                            available_tags=tags,
+                            reason="Created by Adrian setup"
+                        )
+                        result = "✅ Created **#estate** forum channel with tags: 🟢 Active, 🔴 Sold, 🟡 On Hold, 🌐 Cross-Posted"
+                    else:
+                        result = "✅ Found existing **#estate** forum channel"
+
+                    # Save sold tag ID if we can find it
+                    sold_tag = next((t for t in estate_channel.available_tags if t.name.lower() == "sold"), None)
+                    if sold_tag:
+                        await db_save_server_config(
+                            str(interaction2.guild_id),
+                            estate_channel_id=str(estate_channel.id),
+                            estate_sold_tag_id=str(sold_tag.id),
+                            estate_name="Estate"
+                        )
+                    else:
+                        await db_save_server_config(
+                            str(interaction2.guild_id),
+                            estate_channel_id=str(estate_channel.id),
+                            estate_name="Estate"
+                        )
+
+                    embed = discord.Embed(
+                        title="⚙️ Almost Done — Cross-Server Listings",
+                        description=(
+                            result + "\n\n"
+                            "Do you want to **accept cross-posted listings** from other Adrian servers?\n\n"
+                            "When enabled, sellers from other militaria communities can post their items directly in your estate channel.\n\n"
+                            "📈 **More listings** — your members see a wider selection\n"
+                            "🤝 **Community growth** — builds connections between servers\n"
+                            "🆓 **Completely free**"
+                        ),
+                        color=discord.Color.dark_gold()
+                    )
+                    await interaction2.edit_original_response(embed=embed, view=SetupCrossPostView())
+
+                except discord.Forbidden:
+                    await interaction2.edit_original_response(
+                        embed=discord.Embed(
+                            title="⚠️ Missing Permissions",
+                            description="I don't have permission to create channels. Please give me **Manage Channels** permission and try again, or select an existing forum channel below.",
+                            color=discord.Color.red()
+                        )
+                    )
+                except Exception as e:
+                    logger.error(f"[Setup] Auto-create estate error: {e}\n{traceback.format_exc()}")
+
+            @discord.ui.select(placeholder="Or pick an existing forum channel...", options=forum_options, row=1)
             async def select_forum(self, interaction2: discord.Interaction, select: discord.ui.Select):
                 estate_channel_id = int(select.values[0])
                 estate_channel = interaction2.guild.get_channel(estate_channel_id)
-                await db_save_server_config(str(interaction2.guild_id), estate_channel_id=str(estate_channel_id))
+                # Try to find sold tag automatically
+                sold_tag = next((t for t in estate_channel.available_tags if t.name.lower() == "sold"), None) if hasattr(estate_channel, "available_tags") else None
+                if sold_tag:
+                    await db_save_server_config(str(interaction2.guild_id), estate_channel_id=str(estate_channel_id), estate_sold_tag_id=str(sold_tag.id), estate_name=estate_channel.name)
+                else:
+                    await db_save_server_config(str(interaction2.guild_id), estate_channel_id=str(estate_channel_id), estate_name=estate_channel.name)
 
                 embed = discord.Embed(
                     title="⚙️ Almost Done — Cross-Server Listings",
@@ -2577,13 +2649,12 @@ class SetupEstateView(discord.ui.View):
             title="⚙️ Select Your Estate Channel",
             description=(
                 "Which **forum channel** should be your estate marketplace?\n\n"
-                "💡 If you already have an estate channel, select it below.\n"
-                "If you want to create a new one, close this and create a **Forum Channel** in Discord first, then run `/setup` again."
+                "🚀 **Let me create one** — I'll set up the channel with the right tags automatically\n"
+                "📋 **Pick an existing one** — select from the dropdown below"
             ),
             color=discord.Color.dark_gold()
         )
         await interaction.response.edit_message(embed=embed, view=EstateForumSelect())
-
     @discord.ui.button(label="❌ No Thanks", style=discord.ButtonStyle.secondary, custom_id="setup_estate_no")
     async def no(self, interaction: discord.Interaction, button: discord.ui.Button):
         await db_save_server_config(str(interaction.guild_id), setup_complete=1)
