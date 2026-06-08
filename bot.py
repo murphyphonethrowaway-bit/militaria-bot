@@ -430,6 +430,7 @@ bot_state = {
     "setup_stop_img_url": None,
     "setup_estand_img_url": None,
     "setup_crosspost_img_url": None,
+    "setup_please_img_url": None,
     "error_404_img_url": None,
     "command_cooldowns": {},
     "health_status": "starting",
@@ -2768,20 +2769,21 @@ class SetupCrossPostView(discord.ui.View):
     async def no(self, i, b): await self._save_and_continue(i, 0)
 
 async def _show_permissions_step(interaction):
-    """Show step 4 — View All Channels permission."""
+    """Show step 4 — Permissions."""
     embed = discord.Embed(
-        title="⚙️ Step 4 of 4 — Permissions",
+        title="🔐 WAIT! Before You Go — One Last Thing!",
         description=(
-            "**Can I have permission to View All Channels?**\n\n"
-            "This lets me:\n"
-            "👁️ **Monitor estate listings** across all your channels\n"
-            "🛡️ **Detect scam activity** anywhere in the server\n"
-            "📢 **Mirror community channels** to the Adrian network\n"
-            "🔧 **Troubleshoot issues** without manual intervention\n\n"
-            "If you click **Yes**, I\'ll grant myself View All Channels automatically right now."
+            f"To work at my best on **{interaction.guild.name}**, I need permission to create and assign roles.\n\n"
+            "👁️ **Estand Monitoring** — I need to see your Estand channel to post seller profiles and detect when items are sold\n"
+            "🛡️ **Scam Detection** — I can spot bad sellers and buyers that have been reported by other server owners\n"
+            "🔧 **Better Support** — If something goes wrong, I can diagnose issues without needing manual help\n\n"
+            "If you click **Yes**, I\'ll grant myself the permissions I need automatically.\n"
+            "If you click **No**, I\'ll still work — but some features may be limited."
         ),
         color=discord.Color.dark_gold()
     )
+    if bot_state.get("setup_please_img_url"):
+        embed.set_thumbnail(url=bot_state["setup_please_img_url"])
     if interaction.response.is_done():
         await interaction.edit_original_response(embed=embed, view=SetupPermissionsView())
     else:
@@ -4763,7 +4765,7 @@ async def on_ready():
     try:
         img_host_channel = client.get_channel(IMAGE_HOST_CHANNEL_ID)
         if img_host_channel:
-            for q_file, key in [("adrian/adrain_1st_question.png", "question1_img_url"), ("adrian/adrain_2nd_question.png", "question2_img_url"), ("adrian/adrain_3rd_question.png", "question3_img_url"), ("adrian/adrain_4th_question.png", "question4_img_url"), ("adrian/adrain_5th_question.png", "question5_img_url"), ("adrian/thank_you_please_buy.png", "thankyou_img_url"), ("adrian/adrain_check_before_buy.png", "check_before_buy_img_url"), ("adrian/setup_1.png", "setup_img_url"), ("adrian/step_1_thumbnails.png", "setup_q1_img_url"), ("adrian/setup_2.png", "setup_q2_img_url"), ("adrian/setup_end.png", "setup_end_img_url"), ("adrian/adrain_stop.png", "setup_stop_img_url"), ("adrian/adrain_estand.png", "setup_estand_img_url"), ("adrian/adrain_cross_platform.png", "setup_crosspost_img_url"), ("adrian/404.png", "error_404_img_url")]:
+            for q_file, key in [("adrian/adrain_1st_question.png", "question1_img_url"), ("adrian/adrain_2nd_question.png", "question2_img_url"), ("adrian/adrain_3rd_question.png", "question3_img_url"), ("adrian/adrain_4th_question.png", "question4_img_url"), ("adrian/adrain_5th_question.png", "question5_img_url"), ("adrian/thank_you_please_buy.png", "thankyou_img_url"), ("adrian/adrain_check_before_buy.png", "check_before_buy_img_url"), ("adrian/setup_1.png", "setup_img_url"), ("adrian/step_1_thumbnails.png", "setup_q1_img_url"), ("adrian/setup_2.png", "setup_q2_img_url"), ("adrian/setup_end.png", "setup_end_img_url"), ("adrian/adrain_stop.png", "setup_stop_img_url"), ("adrian/adrain_estand.png", "setup_estand_img_url"), ("adrian/adrain_cross_platform.png", "setup_crosspost_img_url"), ("adrian/adrain_please.png", "setup_please_img_url"), ("adrian/404.png", "error_404_img_url")]:
                 path = os.path.join(SCRIPT_DIR, "logos", q_file)
                 if os.path.exists(path):
                     msg = await img_host_channel.send(file=discord.File(path, filename=q_file))
