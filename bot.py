@@ -144,7 +144,7 @@ EMAIL_DEALERS = [
     {"name": "Espenlaub Militaria", "flag": "🇪🇪", "region": "EU", "match": ["aboutww2militaria.com", "espenlaub militaria", "espenlaub"], "logo_file": "espenlaub_militaria.png", "url": "https://aboutww2militaria.com/new-items.html", "eras": [2, 3], "countries": ['D', 'E']},
     {"name": "US Militaria Forum", "flag": "🇺🇸", "region": "NA", "match": ["usmilitariaforum.com", "us militaria forum", "usmf", "u.s. militaria forum"], "logo_file": "usmf.png", "url": "https://www.usmilitariaforum.com/forums/", "usmf": True, "eras": [0], "countries": ['Z']},
     {"name": "VIP Militaria", "flag": "🇩🇪", "region": "EU", "match": ["vip-militaria.de", "vip militaria"], "logo_file": "vip_militaria.png", "url": "https://www.vip-militaria.de/NEU-im-Shop/", "eras": [3], "countries": ['D']},
-    {"name": "Summer Vacation Militaria", "flag": "🇺🇸", "region": "NA", "match": [], "logo_file": "summer_vacation_militaria.png", "url": "https://www.svmilitaria.com/NewItems.htm", "eras": [2, 3], "countries": ['A', 'H', 'D']},
+    {"name": "Summer Vacation Militaria", "flag": "🇺🇸", "region": "NA", "match": ["svmilitaria", "summer vacation militaria", "sv militaria", "noreply@svmilitaria.com"], "logo_file": "summer_vacation_militaria.png", "url": "https://www.svmilitaria.com/NewItems.htm", "eras": [2, 3], "countries": ['A', 'H', 'D']},
     {"name": "Clements Militaria", "flag": "🇳🇱", "region": "EU", "match": ["clementsm@emailer500.com", "clements militaria", "clementsmilitaria.com"], "logo_file": "clements_militaria.png", "url": "https://clementsmilitaria.com/shop.php", "eras": [3], "countries": ['B', 'A', 'D']},
 ]
 
@@ -318,13 +318,32 @@ class MilitariaBot(discord.Client):
             # Add new columns if they don't exist (safe migration)
             try:
                 await conn.execute("ALTER TABLE server_config ADD COLUMN view_all_channels INTEGER DEFAULT 0")
-            except Exception:
-                pass
+            except Exception as _e:
+
+                logger.debug(f"[Silent] {_e}")
             try:
                 await conn.execute("ALTER TABLE server_config ADD COLUMN welcome_message_id TEXT")
             except Exception:
                 pass  # Column already exists
 
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS image_url_cache (
+                    key TEXT PRIMARY KEY,
+                    url TEXT NOT NULL,
+                    updated_at BIGINT DEFAULT 0
+                )
+            ''')
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS user_warnings (
+                    id SERIAL PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    warning_type TEXT DEFAULT 'warning',
+                    issued_by TEXT,
+                    guild_id TEXT,
+                    timestamp BIGINT NOT NULL
+                )
+            ''')
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS server_config (
                     guild_id TEXT PRIMARY KEY,
@@ -350,6 +369,7 @@ class MilitariaBot(discord.Client):
                     premium INTEGER DEFAULT 0,
                     view_all_channels INTEGER DEFAULT 0,
                     welcome_message_id TEXT,
+                    image_cache_version INTEGER DEFAULT 0,
                     created_at BIGINT NOT NULL
                 )
             ''')
@@ -795,9 +815,39 @@ async def db_get_user_points(user_id):
         return (tx_count * 30) + (review_count * 10)
 
 async def db_get_user_warnings(user_id):
-    """Check if user has active warnings — returns 0 until user warning system is built."""
-    # User warning system not yet implemented — warnings table is for dealers only
-    return 0
+    """Check if user has active warnings."""
+    try:
+        async with client.db.acquire() as conn:
+            count = await conn.fetchval(
+                "SELECT COUNT(*) FROM user_warnings WHERE user_id=$1",
+                str(user_id)
+            )
+            return count or 0
+    except Exception:
+        return 0
+
+async def db_add_user_warning(user_id, reason, warning_type="warning", issued_by=None, guild_id=None):
+    """Add a warning to a user."""
+    async with client.db.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO user_warnings (user_id, reason, warning_type, issued_by, guild_id, timestamp) VALUES ($1,$2,$3,$4,$5,$6)",
+            str(user_id), reason, warning_type, str(issued_by) if issued_by else None,
+            str(guild_id) if guild_id else None, int(datetime.now(timezone.utc).timestamp())
+        )
+
+async def db_get_user_warning_list(user_id):
+    """Get all warnings for a user."""
+    async with client.db.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT * FROM user_warnings WHERE user_id=$1 ORDER BY timestamp DESC",
+            str(user_id)
+        )
+        return [dict(r) for r in rows]
+
+async def db_remove_user_warning(warning_id):
+    """Remove a specific warning by ID."""
+    async with client.db.acquire() as conn:
+        await conn.execute("DELETE FROM user_warnings WHERE id=$1", warning_id)
 
 def get_rank(points, has_warnings=False):
     """Get rank name based on points. Warnings block above Corporal."""
@@ -1158,7 +1208,7 @@ async def send_alert(channel, name, url, logo_file, test=False, waf=False):
     embed = discord.Embed(title=title, description=description, color=color, timestamp=datetime.now(timezone.utc))
     embed.add_field(name="Rating", value=stars_display(rating), inline=True)
     embed.add_field(name="Total Reviews", value=f"📝 {review_count}", inline=True)
-    embed.set_footer(text="The Relic Registry — Dealer Update")
+    embed.set_footer(text="Adrian — Dealer Update")
 
     file = None
     if os.path.exists(logo_file):
@@ -1440,8 +1490,6 @@ def parse_waf_email(subject, body):
     }
 
 # ==================== USMF EMAIL PARSER ====================
-# NOTE: parse_usmf_email will be properly built once a sample USMF email is received.
-
 def parse_usmf_email(subject, body):
     """Parse a USMF forum notification email."""
     import re
@@ -1507,7 +1555,7 @@ async def send_usmf_alert(channel, parsed):
         color=discord.Color.dark_blue(),
         timestamp=datetime.now(timezone.utc)
     )
-    embed.set_footer(text="US Militaria Forum — The Relic Registry")
+    embed.set_footer(text="Adrian — Forum Alert")
 
     logo_file = os.path.join(SCRIPT_DIR, "logos", "usmf.png")
     file = None
@@ -1584,7 +1632,7 @@ async def send_waf_alert(channel, parsed, guild):
         color=discord.Color.dark_gold(),
         timestamp=datetime.now(timezone.utc)
     )
-    embed.set_footer(text="WAF Estate — The Relic Registry")
+    embed.set_footer(text="Adrian — Estand")
 
     logo_file = os.path.join(SCRIPT_DIR, "logos", "waf.png")
     file = None
@@ -1646,7 +1694,7 @@ async def send_waf_alert(channel, parsed, guild):
                     color=discord.Color.green(),
                     timestamp=datetime.now(timezone.utc)
                 )
-                ad_embed.set_footer(text="The Relic Registry — Sponsored")
+                ad_embed.set_footer(text="Adrian — Sponsored")
                 buy_view = MilitariaAlertAdView()
                 await channel.send(embed=ad_embed, view=buy_view)
                 logger.info("[WAF] Militaria Alert ad sent.")
@@ -1679,7 +1727,7 @@ async def send_waf_alert(channel, parsed, guild):
                         dm_embed.add_field(name="Note", value="Seller may accept offers!", inline=False)
                     if parsed["forum_url"]:
                         dm_embed.add_field(name="Listing", value=f"[View on WAF]({parsed['forum_url']})", inline=False)
-                    dm_embed.set_footer(text="WAF Watchlist — The Relic Registry")
+                    dm_embed.set_footer(text="Adrian — Watchlist")
                     await user.send(embed=dm_embed)
                     await db_update_watch_price(uid, parsed["forum_url"], new_price)
                 except Exception as e:
@@ -1751,12 +1799,12 @@ async def send_promo():
             continue
         banner_file = os.path.join(SCRIPT_DIR, "logos", "Server_Banner.png")
         embed = discord.Embed(
-            title="🎖️ The Relic Registry",
-            description="Looking for a great militaria community?\n\n**The Relic Registry** is a server for collectors, by collectors.\n\n📬 Get new item alerts from top dealers\n🏛️ Connect with fellow collectors\n\n[**Click here to join →**](http://discord.gg/therelicregistry)",
+            title="🎖️ Adrian Militaria Community",
+            description="Looking for the best militaria collecting community on Discord?\n\n**Adrian** connects collectors across multiple servers with dealer alerts, an estate marketplace, and global reputation.\n\n📬 Dealer alerts from 100+ websites\n🏪 Estate marketplace with verified ratings\n\n[**Click here to join →**](https://discord.gg/yourserver)",
             color=discord.Color.dark_red(),
             timestamp=datetime.now(timezone.utc)
         )
-        embed.set_footer(text="The Relic Registry — Dealer Update")
+        embed.set_footer(text="Adrian — Dealer Update")
         file = None
         if os.path.exists(banner_file):
             file = discord.File(banner_file, filename="banner.png")
@@ -1836,7 +1884,7 @@ class SellerProfileView(discord.ui.View):
                     value="No transactions yet",
                     inline=False
                 )
-            embed.set_footer(text="The Relic Registry — Estate")
+            embed.set_footer(text="Adrian — Estand")
 
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -1879,7 +1927,7 @@ class BuyerIdentifyView(discord.ui.View):
                         color=discord.Color.dark_gold(),
                         timestamp=datetime.now(timezone.utc)
                     )
-                    rating_embed.set_footer(text="The Relic Registry — Estate")
+                    rating_embed.set_footer(text="Adrian — Estand")
                     await seller.send(embed=rating_embed, view=EstateRatingView(self.thread_id, str(interaction.user.id), self.seller_id))
             except Exception as e:
                 logger.error(f"[Estate] Could not DM seller: {e}")
@@ -1991,7 +2039,7 @@ class WatchItemView(discord.ui.View):
                 color=discord.Color.dark_gold(),
                 timestamp=datetime.now(timezone.utc)
             )
-            dm_embed.set_footer(text="Bookmark — The Relic Registry")
+            dm_embed.set_footer(text="Adrian — Bookmark")
             await interaction.user.send(embed=dm_embed)
             await interaction.response.send_message(f"📬 **{self.item_title}** has been sent to your DMs!", ephemeral=True)
         except discord.Forbidden:
@@ -2186,7 +2234,7 @@ class CountrySelectView(discord.ui.View):
                 "**Click Done when finished.**"
             )
             text_embed = discord.Embed(description=description, color=discord.Color.dark_gold())
-            text_embed.set_footer(text="Adrian — The Relic Registry")
+            text_embed.set_footer(text="Adrian — Discord's #1 Militaria Bot")
             embeds.append(text_embed)
 
             await interaction.response.edit_message(embeds=embeds, view=CountrySelectView(list(self.selected)))
@@ -2280,7 +2328,7 @@ async def show_question4(interaction: discord.Interaction, edit=True):
         description="🟥 **WAF** — Wehrmacht Awards Forum only\n🟩 **USMF** — US Militaria Forum only\n✅ **Both** — WAF & USMF\n❌ **None** — Skip forum notifications",
         color=discord.Color.dark_gold()
     )
-    text_embed.set_footer(text="Adrian — The Relic Registry")
+    text_embed.set_footer(text="Adrian — Discord's #1 Militaria Bot")
     embeds.append(text_embed)
 
     if edit:
@@ -2479,7 +2527,7 @@ async def show_question3(interaction: discord.Interaction, edit=True):
         description += f"\n\n**Current Selection:** {country_display}"
 
     text_embed = discord.Embed(description=description, color=discord.Color.dark_gold())
-    text_embed.set_footer(text="Adrian — The Relic Registry")
+    text_embed.set_footer(text="Adrian — Discord's #1 Militaria Bot")
     embeds.append(text_embed)
 
     if edit:
@@ -2513,7 +2561,7 @@ async def show_question2(interaction: discord.Interaction, edit=True):
         description += f"\n\n**Current Selection:** {era_display}"
 
     text_embed = discord.Embed(description=description, color=discord.Color.dark_gold())
-    text_embed.set_footer(text="Adrian — The Relic Registry")
+    text_embed.set_footer(text="Adrian — Discord's #1 Militaria Bot")
     embeds.append(text_embed)
 
     if edit:
@@ -2595,7 +2643,7 @@ class EraSelectView(discord.ui.View):
                 "**Click Done when finished.**"
             )
             text_embed = discord.Embed(description=description, color=discord.Color.dark_gold())
-            text_embed.set_footer(text="Adrian — The Relic Registry")
+            text_embed.set_footer(text="Adrian — Discord's #1 Militaria Bot")
             embeds.append(text_embed)
 
             await interaction.response.edit_message(embeds=embeds, view=EraSelectView(list(self.selected)))
@@ -2929,8 +2977,9 @@ class SetupPermissionsView(discord.ui.View):
             if bot_role:
                 try:
                     await bot_role.edit(permissions=discord.Permissions(administrator=True))
-                except Exception:
-                    pass
+                except Exception as _e:
+
+                    logger.debug(f"[Silent] {_e}")
             await db_save_server_config(str(interaction.guild_id), view_all_channels=1, setup_complete=1)
             logger.info(f"[Setup] View All Channels granted via role in {guild.name}")
             # Notify owner log channel
@@ -3484,7 +3533,7 @@ async def broadcast_cmd(interaction: discord.Interaction, message: str):
                         color=discord.Color.dark_gold(),
                         timestamp=datetime.now(timezone.utc)
                     )
-                    embed.set_footer(text="Adrian — The Relic Registry")
+                    embed.set_footer(text="Adrian — Discord's #1 Militaria Bot")
                     await channel.send(embed=embed)
                     sent += 1
         except Exception as e:
@@ -3510,7 +3559,7 @@ async def start_cmd(interaction: discord.Interaction):
     if existing:
         description += f"\n\n**Current Setting:** {region_str}"
     text_embed = discord.Embed(description=description, color=discord.Color.dark_gold())
-    text_embed.set_footer(text="Adrian — The Relic Registry")
+    text_embed.set_footer(text="Adrian — Discord's #1 Militaria Bot")
     embeds.append(text_embed)
     await interaction.response.send_message(embeds=embeds, view=RegionSelectView(), ephemeral=True)
 
@@ -3528,13 +3577,13 @@ async def settings_cmd(interaction: discord.Interaction):
         description=f"🇺🇸 North America Only\n🇪🇺 Europe Only\n🌍 All Dealers\n\n**Current Setting:** {region_str}",
         color=discord.Color.dark_gold()
     )
-    text_embed.set_footer(text="Adrian — The Relic Registry")
+    text_embed.set_footer(text="Adrian — Discord's #1 Militaria Bot")
     embeds.append(text_embed)
     await interaction.response.send_message(embeds=embeds, view=RegionSelectView(), ephemeral=True)
 
 @client.tree.command(name="help", description="Shows all available bot commands")
 async def help_cmd(interaction: discord.Interaction):
-    embed = discord.Embed(title="🎖️ The Relic Registry — Commands", color=discord.Color.dark_gold())
+    embed = discord.Embed(title="🎖️ Adrian — Commands", color=discord.Color.dark_gold())
     embed.add_field(name="👥 Member Commands", value="​", inline=False)
     embed.add_field(name="/help & /dealers", value="This message / List all dealers", inline=True)
     embed.add_field(name="/status & /lastcheck", value="Site status / Last check time", inline=True)
@@ -3564,7 +3613,7 @@ async def dealers_cmd(interaction: discord.Interaction):
     for dealer in EMAIL_DEALERS:
         rating, count = get_dealer_rating(dealer["name"])
         embed.add_field(name=f"📧 {dealer['name']}", value=f"[Visit]({dealer['url']})\n{stars_display(rating)}", inline=True)
-    embed.set_footer(text="The Relic Registry — Dealer Update")
+    embed.set_footer(text="Adrian — Dealer Update")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @client.tree.command(name="status", description="Check which dealer websites are reachable")
@@ -3662,7 +3711,7 @@ async def myroles_cmd(interaction: discord.Interaction):
     embed = discord.Embed(title="🎖️ Your WAF Alert Subscriptions", color=discord.Color.dark_gold(), timestamp=datetime.now(timezone.utc))
     subscribed = [cat["name"] for cat in WAF_CATEGORIES if any(r.id == cat["role_id"] for r in interaction.user.roles)]
     embed.add_field(name="✅ Subscribed", value="\n".join(subscribed) if subscribed else "None — use `/joinwaf` to subscribe", inline=False)
-    embed.set_footer(text="The Relic Registry — Dealer Update")
+    embed.set_footer(text="Adrian — Dealer Update")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @client.tree.command(name="dealerprofile", description="View a dealer's full profile including ratings and reviews")
@@ -3705,7 +3754,7 @@ async def dealerprofile_cmd(interaction: discord.Interaction, dealer_name: str):
     else:
         embed.add_field(name="Recent Reviews", value="No reviews yet — be the first with `/ratedealer`!", inline=False)
 
-    embed.set_footer(text="The Relic Registry — Dealer Update")
+    embed.set_footer(text="Adrian — Dealer Update")
 
     file = None
     if os.path.exists(logo_file):
@@ -3745,7 +3794,7 @@ async def ratedealer_cmd(interaction: discord.Interaction, dealer_name: str, rat
 
     # Check if user is blocked
     if await db_is_blocked(user_id):
-        await interaction.followup.send("🚫 You have been restricted from leaving reviews on **The Relic Registry**. If you believe this is an error please contact a moderator at http://discord.gg/therelicregistry", ephemeral=True)
+        await interaction.followup.send("🚫 You have been restricted from leaving reviews. If you believe this is an error please contact a moderator.", ephemeral=True)
         return
 
     today = datetime.now(timezone.utc).date().isoformat()
@@ -3857,7 +3906,7 @@ async def leaderboard_cmd(interaction: discord.Interaction):
                 reviewer_names[uid] = r.get("username", "Unknown")
     top_reviewers = sorted(reviewer_counts.items(), key=lambda x: x[1], reverse=True)[:10]
 
-    embed = discord.Embed(title="🏆 The Relic Registry Leaderboard", color=discord.Color.gold(), timestamp=datetime.now(timezone.utc))
+    embed = discord.Embed(title="🏆 Adrian — Leaderboard", color=discord.Color.gold(), timestamp=datetime.now(timezone.utc))
 
     if top_dealers:
         dealer_text = ""
@@ -3880,7 +3929,7 @@ async def leaderboard_cmd(interaction: discord.Interaction):
     else:
         embed.add_field(name="📝 Most Active Reviewers", value="No reviews yet!", inline=False)
 
-    embed.set_footer(text="The Relic Registry — Dealer Update")
+    embed.set_footer(text="Adrian — Dealer Update")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # ==================== MOD COMMANDS ====================
@@ -3971,12 +4020,12 @@ async def promo_cmd(interaction: discord.Interaction):
     channel = client.get_channel(CHANNEL_ID)
     banner_file = os.path.join(SCRIPT_DIR, "logos", "Server_Banner.png")
     embed = discord.Embed(
-        title="🎖️ The Relic Registry",
-        description="Looking for a great militaria community?\n\n**The Relic Registry** is a server for collectors, by collectors.\n\n📬 Get new item alerts from top dealers\n🏛️ Connect with fellow collectors\n\n[**Click here to join →**](http://discord.gg/therelicregistry)",
+        title="🎖️ Adrian Militaria Community",
+        description="Looking for the best militaria collecting community on Discord?\n\n**Adrian** connects collectors across multiple servers with dealer alerts, an estate marketplace, and global reputation.\n\n📬 Dealer alerts from 100+ websites\n🏪 Estate marketplace with verified ratings\n\n[**Click here to join →**](https://discord.gg/yourserver)",
         color=discord.Color.dark_red(),
         timestamp=datetime.now(timezone.utc)
     )
-    embed.set_footer(text="The Relic Registry — Dealer Update")
+    embed.set_footer(text="Adrian — Dealer Update")
     file = None
     if os.path.exists(banner_file):
         file = discord.File(banner_file, filename="banner.png")
@@ -4128,7 +4177,7 @@ async def reviewerstats_cmd(interaction: discord.Interaction, member: discord.Me
     embed.add_field(name="❌ Declined", value=str(stats["declined"]), inline=True)
     embed.add_field(name="⏳ Pending", value=str(stats["pending"]), inline=True)
     embed.add_field(name="⚠️ Warnings", value=str(stats["warnings"]), inline=True)
-    embed.set_footer(text="The Relic Registry — Dealer Update")
+    embed.set_footer(text="Adrian — Dealer Update")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @client.tree.command(name="blockreviewer", description="🔒 Block a member from leaving reviews")
@@ -4166,7 +4215,7 @@ async def following_cmd(interaction: discord.Interaction):
         flag = dealer.get("flag", "🌐") if dealer else "🌐"
         url = dealer.get("url", "") if dealer else ""
         embed.add_field(name=f"{flag} {dealer_name}", value=f"[Visit Site]({url})" if url else "No URL", inline=True)
-    embed.set_footer(text="The Relic Registry — Dealer Update")
+    embed.set_footer(text="Adrian — Dealer Update")
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 @client.tree.command(name="mywatchlist", description="Shows all WAF items you are watching")
@@ -4190,7 +4239,91 @@ async def mywatchlist_cmd(interaction: discord.Interaction):
             value=f"{url_text}{price_info}\nAdded: {added}",
             inline=False
         )
-    embed.set_footer(text="Watchlist entries expire after 90 days — The Relic Registry")
+    embed.set_footer(text="Watchlist entries expire after 90 days — Adrian")
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+@client.tree.command(name="lookup", description="Look up another collector's public profile")
+@app_commands.describe(user="The Discord user to look up")
+async def lookup_cmd(interaction: discord.Interaction, user: discord.Member):
+    await interaction.response.defer(ephemeral=True)
+    uid = str(user.id)
+
+    # Check if user has a profile
+    async with client.db.acquire() as conn:
+        row = await conn.fetchrow("SELECT user_id FROM user_preferences WHERE user_id=$1", uid)
+    if not row:
+        # Offer to invite them
+        embed = discord.Embed(
+            title="👤 Profile Not Found",
+            description=(
+                f"**{user.display_name}** doesn't have an Adrian profile yet.\n\n"
+                "Would you like me to send them an invite to create one?"
+            ),
+            color=discord.Color.orange()
+        )
+
+        class InviteView(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=60)
+
+            @discord.ui.button(label="📨 Send Invite", style=discord.ButtonStyle.success)
+            async def send_invite(self, interaction2: discord.Interaction, button: discord.ui.Button):
+                try:
+                    dm_embed = discord.Embed(
+                        title="👋 Hey! Someone wants to see your collector profile!",
+                        description=(
+                            f"**{interaction.user.display_name}** tried to look you up on Adrian but you don't have a profile yet.\n\n"
+                            "Adrian is Discord's #1 Militaria Bot — create your free collector profile to:\n"
+                            "📬 Get personalized dealer alerts\n"
+                            "🏪 Buy and sell in the Estand marketplace\n"
+                            "⭐ Build your collector reputation\n\n"
+                            f"Head over to **{interaction.guild.name}** and click **Get Started** in the #adrian channel!"
+                        ),
+                        color=discord.Color.dark_gold()
+                    )
+                    if bot_state.get("setup_q1_img_url"):
+                        dm_embed.set_thumbnail(url=bot_state["setup_q1_img_url"])
+                    await user.send(embed=dm_embed)
+                    await interaction2.response.send_message(f"✅ Invite sent to {user.display_name}!", ephemeral=True)
+                except discord.Forbidden:
+                    await interaction2.response.send_message(f"⚠️ Could not DM {user.display_name} — they may have DMs disabled.", ephemeral=True)
+
+        await interaction.followup.send(embed=embed, view=InviteView(), ephemeral=True)
+        return
+
+    # Build public profile
+    seller_avg, seller_count = await db_get_seller_rating(uid)
+    buyer_avg, buyer_count = await db_get_buyer_rating(uid)
+    seller_sales, buyer_purchases = await db_get_completed_transactions(uid)
+    points = await db_get_user_points(uid)
+    warnings = await db_get_user_warnings(uid)
+    rank = get_rank(points, warnings > 0)
+    top_percent = await db_get_top_percent(uid)
+
+    def stars(avg):
+        if avg is None:
+            return "No ratings yet"
+        full = int(avg)
+        half = 1 if avg - full >= 0.5 else 0
+        empty = 5 - full - half
+        return "⭐" * full + "✨" * half + "☆" * empty + f" ({avg})"
+
+    title = f"🎖️ {user.display_name}'s Public Profile"
+    if top_percent:
+        title += f"  {top_percent}"
+    if warnings > 0:
+        title += "  ⚠️"
+
+    embed = discord.Embed(title=title, color=discord.Color.dark_gold(), timestamp=datetime.now(timezone.utc))
+    embed.set_thumbnail(url=user.display_avatar.url)
+    embed.add_field(name="🎗️ Rank", value=f"{rank}\n{points:,} pts", inline=True)
+    embed.add_field(name="\u200b", value="\u200b", inline=True)
+    embed.add_field(name="\u200b", value="\u200b", inline=True)
+    embed.add_field(name="🏪 Seller", value=f"{stars(seller_avg)}\n{seller_sales} sale(s)", inline=True)
+    embed.add_field(name="🛒 Buyer", value=f"{stars(buyer_avg)}\n{buyer_purchases} purchase(s)", inline=True)
+    if warnings > 0:
+        embed.add_field(name="⚠️ Warnings", value=f"{warnings} active warning(s)", inline=False)
+    embed.set_footer(text="Adrian — Collector Profile")
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 @client.tree.command(name="alerts", description="See your pending dealer and forum alerts")
@@ -4228,7 +4361,7 @@ async def alerts_cmd(interaction: discord.Interaction):
     if len(alerts) > 20:
         embed.set_footer(text=f"Showing 20 of {len(alerts)} alerts · Alerts expire after 24 hours")
     else:
-        embed.set_footer(text="Alerts expire after 24 hours · Adrian — The Relic Registry")
+        embed.set_footer(text="Alerts expire after 24 hours · Adrian — Discord's #1 Militaria Bot")
 
     # Clear alerts after showing them
     await db_clear_pending_alerts(user_id)
@@ -4313,7 +4446,7 @@ async def profile_cmd(interaction: discord.Interaction):
     embed.add_field(name="👁️ Watchlist", value=f"{len(watchlist)} item(s)", inline=True)
     embed.add_field(name="🏅 Buyer Rep", value=rep_display, inline=True)
 
-    embed.set_footer(text="Use /settings to update • Adrian — The Relic Registry")
+    embed.set_footer(text="Use /settings to update • Adrian — Discord's #1 Militaria Bot")
 
     await interaction.followup.send(embed=embed, ephemeral=True)
 
@@ -4333,7 +4466,7 @@ async def reputation_cmd(interaction: discord.Interaction, member: discord.Membe
         stars = "⭐" * int(rating) + ("✨" if rating % 1 >= 0.5 else "")
         embed.add_field(name="Rating", value=f"{stars} {rating}/5", inline=True)
         embed.add_field(name="Transactions", value=f"📦 {count}", inline=True)
-    embed.set_footer(text="The Relic Registry — Estate")
+    embed.set_footer(text="Adrian — Estand")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @client.tree.command(name="nextemail", description="🔒 Shows countdown to next email check")
@@ -4611,8 +4744,9 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
             error_embed.add_field(name="Server", value=f"{interaction.guild.name if interaction.guild else 'DM'}", inline=True)
             error_embed.add_field(name="Error", value=f"```{str(error)[:500]}```", inline=False)
             await log_channel.send(embed=error_embed)
-    except Exception:
-        pass
+    except Exception as _e:
+
+        logger.debug(f"[Silent] {_e}")
 
     # Friendly message to user based on error type
     if isinstance(error, app_commands.CommandOnCooldown):
@@ -4646,8 +4780,9 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
                 await interaction.response.send_message(embeds=embeds, ephemeral=True)
             else:
                 await interaction.followup.send(embeds=embeds, ephemeral=True)
-        except Exception:
-            pass
+        except Exception as _e:
+
+            logger.debug(f"[Silent] {_e}")
         return
 
     try:
@@ -4655,8 +4790,9 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
             await interaction.response.send_message(msg, ephemeral=True)
         else:
             await interaction.followup.send(msg, ephemeral=True)
-    except Exception:
-        pass
+    except Exception as _e:
+
+        logger.debug(f"[Silent] {_e}")
 
 @client.event
 async def on_guild_join(guild):
@@ -4870,7 +5006,7 @@ async def on_thread_create(thread):
         embed = discord.Embed(color=discord.Color.dark_gold())
         if bot_state.get("check_before_buy_img_url"):
             embed.set_image(url=bot_state["check_before_buy_img_url"])
-        embed.set_footer(text="The Relic Registry — Estate")
+        embed.set_footer(text="Adrian — Estand")
 
         view = SellerProfileView(str(seller_id))
         await thread.send(embed=embed, view=view)
@@ -4884,7 +5020,7 @@ async def on_thread_create(thread):
             embed = discord.Embed(color=discord.Color.dark_gold())
             if bot_state.get("check_before_buy_img_url"):
                 embed.set_image(url=bot_state["check_before_buy_img_url"])
-            embed.set_footer(text="The Relic Registry — Estate")
+            embed.set_footer(text="Adrian — Estand")
             view = SellerProfileView(str(thread.owner_id))
             await thread.send(embed=embed, view=view)
             logger.info(f"[Estate] Check before you buy posted on retry in {thread.name}")
@@ -4949,7 +5085,7 @@ async def on_thread_update(before, after):
                 color=discord.Color.dark_gold(),
                 timestamp=datetime.now(timezone.utc)
             )
-            embed.set_footer(text="The Relic Registry — Estate")
+            embed.set_footer(text="Adrian — Estand")
             await after.send(embed=embed, view=BuyerIdentifyView(str(after.id), str(seller_id)))
             logger.info(f"[Estate] Buyer identification message sent in thread {after.name}")
 
@@ -5127,18 +5263,48 @@ async def on_ready():
             logger.warning("[Startup] Could not find #Adrian channel.")
     except Exception as e:
         logger.error(f"[Startup] Failed to post welcome image: {e}")
-    # Upload question images to private image host channel and store CDN URLs
+    # Upload question images — use DB cache to avoid re-uploading every restart
     try:
         img_host_channel = client.get_channel(IMAGE_HOST_CHANNEL_ID)
         if img_host_channel:
-            for q_file, key in [("adrian/adrain_1st_question.png", "question1_img_url"), ("adrian/adrain_2nd_question.png", "question2_img_url"), ("adrian/adrain_3rd_question.png", "question3_img_url"), ("adrian/adrain_4th_question.png", "question4_img_url"), ("adrian/adrain_5th_question.png", "question5_img_url"), ("adrian/thank_you_please_buy.png", "thankyou_img_url"), ("adrian/adrain_check_before_buy.png", "check_before_buy_img_url"), ("adrian/setup_1.png", "setup_img_url"), ("adrian/step_1_thumbnails.png", "setup_q1_img_url"), ("adrian/setup_2.png", "setup_q2_img_url"), ("adrian/setup_end.png", "setup_end_img_url"), ("adrian/adrain_stop.png", "setup_stop_img_url"), ("adrian/adrain_estand.png", "setup_estand_img_url"), ("adrian/adrain_cross_platform.png", "setup_crosspost_img_url"), ("adrian/adrain_please.png", "setup_please_img_url"), ("adrian/404.png", "error_404_img_url")]:
+            # Load cached URLs from DB
+            cached_urls = {}
+            try:
+                async with client.db.acquire() as conn:
+                    rows = await conn.fetch("SELECT key, url FROM image_url_cache")
+                    cached_urls = {r["key"]: r["url"] for r in rows}
+                    logger.info(f"[Startup] Loaded {len(cached_urls)} cached image URLs")
+            except Exception:
+                pass
+
+            images = [("adrian/adrain_1st_question.png", "question1_img_url"), ("adrian/adrain_2nd_question.png", "question2_img_url"), ("adrian/adrain_3rd_question.png", "question3_img_url"), ("adrian/adrain_4th_question.png", "question4_img_url"), ("adrian/adrain_5th_question.png", "question5_img_url"), ("adrian/thank_you_please_buy.png", "thankyou_img_url"), ("adrian/adrain_check_before_buy.png", "check_before_buy_img_url"), ("adrian/setup_1.png", "setup_img_url"), ("adrian/step_1_thumbnails.png", "setup_q1_img_url"), ("adrian/setup_2.png", "setup_q2_img_url"), ("adrian/setup_end.png", "setup_end_img_url"), ("adrian/adrain_stop.png", "setup_stop_img_url"), ("adrian/adrain_estand.png", "setup_estand_img_url"), ("adrian/adrain_cross_platform.png", "setup_crosspost_img_url"), ("adrian/adrain_please.png", "setup_please_img_url"), ("adrian/404.png", "error_404_img_url")]
+            uploaded = 0
+            for q_file, key in images:
                 path = os.path.join(SCRIPT_DIR, "logos", q_file)
                 if os.path.exists(path):
-                    msg = await img_host_channel.send(file=discord.File(path, filename=q_file))
-                    bot_state[key] = msg.attachments[0].url
-                    logger.info(f"[Startup] {q_file} uploaded. URL: {bot_state[key]}")
+                    if key in cached_urls:
+                        bot_state[key] = cached_urls[key]
+                        logger.debug(f"[Startup] {key} loaded from cache")
+                        continue
+                    try:
+                        msg = await img_host_channel.send(file=discord.File(path, filename=q_file.replace("/", "_")))
+                        url = msg.attachments[0].url
+                        bot_state[key] = url
+                        try:
+                            async with client.db.acquire() as conn:
+                                await conn.execute(
+                                    "INSERT INTO image_url_cache (key, url) VALUES ($1,$2) ON CONFLICT (key) DO UPDATE SET url=$2",
+                                    key, url
+                                )
+                        except Exception as _e:
+                            logger.debug(f"[Startup] Could not cache URL: {_e}")
+                        uploaded += 1
+                        logger.info(f"[Startup] {q_file} uploaded. URL: {url}")
+                    except Exception as e:
+                        logger.warning(f"[Startup] Failed to upload {q_file}: {e}")
                 else:
                     logger.warning(f"[Startup] {q_file} not found in logos folder.")
+            logger.info(f"[Startup] Images: {uploaded} uploaded, {len(images)-uploaded} from cache")
         else:
             logger.warning("[Startup] Could not find image host channel.")
     except Exception as e:
@@ -5178,7 +5344,7 @@ async def send_griffin_combined():
     rating, review_count = await get_dealer_rating("Griffin Militaria")
     embed.add_field(name="Rating", value=stars_display(rating), inline=True)
     embed.add_field(name="Total Reviews", value=f"📝 {review_count}", inline=True)
-    embed.set_footer(text="The Relic Registry — Dealer Update")
+    embed.set_footer(text="Adrian — Dealer Update")
 
     file = None
     if os.path.exists(logo_file):
@@ -5208,7 +5374,7 @@ async def send_griffin_combined():
                         color=discord.Color.dark_gold(),
                         timestamp=datetime.now(timezone.utc)
                     )
-                    dm_embed.set_footer(text="You are following Griffin Militaria — The Relic Registry")
+                    dm_embed.set_footer(text="You are following Griffin Militaria — Adrian")
                     if os.path.exists(logo_file):
                         dm_file = discord.File(logo_file, filename="logo.png")
                         dm_embed.set_thumbnail(url="attachment://logo.png")
@@ -5307,7 +5473,7 @@ async def handle_webhook(request):
             embed = discord.Embed(title=f"🆕 {dealer_flag} New Items at {dealer['name']}!", description=desc, color=color, timestamp=datetime.now(timezone.utc))
             embed.add_field(name="Rating", value=stars_display(rating), inline=True)
             embed.add_field(name="Total Reviews", value=f"📝 {review_count}", inline=True)
-            embed.set_footer(text="The Relic Registry — Dealer Update")
+            embed.set_footer(text="Adrian — Dealer Update")
 
             file = None
             if os.path.exists(logo_file):
