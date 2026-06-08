@@ -1421,7 +1421,7 @@ async def cross_post_listing(thread, seller, starter_message=None):
                     def __init__(self, seller_id, buyer_id, item_title, guild_name, thread_id):
                         super().__init__(timeout=None)
                         self.seller_id = seller_id
-                        self.buyer_id = buyer_id
+                        self.buyer_id = buyer_id  # None at creation, set when buyer clicks
                         self.item_title = item_title
                         self.guild_name = guild_name
                         self.thread_id = thread_id
@@ -1692,8 +1692,16 @@ async def cross_post_listing(thread, seller, starter_message=None):
                     thread.name, str(mirror_thread.id)
                 )
 
-                # Add contact seller button
-                await mirror_thread.send(view=ContactSellerView(str(seller.id), thread.name, guild_name))
+                # Add contact seller button with visible embed
+                contact_embed = discord.Embed(
+                    description="💬 Interested in this item? Click the button below to contact the seller directly via DM.",
+                    color=discord.Color.dark_gold()
+                )
+                contact_embed.set_footer(text="Adrian — Estand Marketplace | All negotiations happen via DM")
+                await mirror_thread.send(
+                    embed=contact_embed,
+                    view=ContactSellerView(str(seller.id), None, thread.name, guild_name, str(thread.id))
+                )
 
                 mirror_count += 1
                 logger.info(f"[CrossPost] Mirrored \'{thread.name}\' to {estate_channel.guild.name}")
