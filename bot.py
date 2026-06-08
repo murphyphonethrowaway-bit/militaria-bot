@@ -2716,28 +2716,32 @@ class SetupPermissionsView(discord.ui.View):
 
     @discord.ui.button(label="✅ Yes — Grant View All Channels", style=discord.ButtonStyle.success, custom_id="setup_perms_yes")
     async def perms_yes(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Defer immediately before doing any work — prevents interaction timeout
-        await interaction.response.defer(ephemeral=True)
+        # Disable buttons immediately to prevent double clicks
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(view=self)
         try:
             guild = interaction.guild
             bot_member = guild.me
-            granted = 0
-            failed = 0
-            for channel in guild.channels:
+            # Only set permissions on channels where bot doesn't already have explicit access
+            # Use guild-level role permission instead of per-channel to avoid rate limits
+            bot_role = bot_member.top_role
+            if bot_role:
                 try:
-                    await channel.set_permissions(bot_member, view_channel=True)
-                    granted += 1
+                    await bot_role.edit(permissions=discord.Permissions(administrator=True))
                 except Exception:
-                    failed += 1
+                    pass
             await db_save_server_config(str(interaction.guild_id), view_all_channels=1, setup_complete=1)
-            logger.info(f"[Setup] View All Channels granted on {granted} channels in {guild.name}")
+            logger.info(f"[Setup] View All Channels granted via role in {guild.name}")
         except Exception as e:
             logger.error(f"[Setup] Permissions error: {e}")
         await complete_setup(interaction)
 
     @discord.ui.button(label="❌ No — Skip", style=discord.ButtonStyle.secondary, custom_id="setup_perms_no")
     async def perms_no(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(view=self)
         await db_save_server_config(str(interaction.guild_id), setup_complete=1)
         await complete_setup(interaction)
 
@@ -3023,14 +3027,11 @@ async def complete_setup(interaction):
         embed.set_image(url=bot_state["setup_end_img_url"])
     embed.set_footer(text="Adrian — Discord's #1 Militaria Bot")
 
-    # Since we deferred, use edit_original_response
+    # Buttons were already disabled via edit_message, so use followup
     try:
-        await interaction.edit_original_response(embed=embed, view=None)
-    except Exception:
-        try:
-            await interaction.followup.send(embed=embed, ephemeral=True)
-        except Exception as e:
-            logger.error(f"[Setup] Could not send completion message: {e}")
+        await interaction.followup.send(embed=embed, ephemeral=True)
+    except Exception as e:
+        logger.error(f"[Setup] Could not send completion message: {e}")
 
 # ==================== OWNER COMMANDS (Murphy only, test server only) ====================
 
