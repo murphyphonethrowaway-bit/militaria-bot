@@ -319,6 +319,10 @@ class MilitariaBot(discord.Client):
             try:
                 await conn.execute("ALTER TABLE server_config ADD COLUMN view_all_channels INTEGER DEFAULT 0")
             except Exception:
+                pass
+            try:
+                await conn.execute("ALTER TABLE server_config ADD COLUMN welcome_message_id TEXT")
+            except Exception:
                 pass  # Column already exists
 
             await conn.execute('''
@@ -345,6 +349,7 @@ class MilitariaBot(discord.Client):
                     setup_complete INTEGER DEFAULT 0,
                     premium INTEGER DEFAULT 0,
                     view_all_channels INTEGER DEFAULT 0,
+                    welcome_message_id TEXT,
                     created_at BIGINT NOT NULL
                 )
             ''')
@@ -2794,7 +2799,7 @@ class SetupPermissionsView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="✅ Yes — Grant View All Channels", style=discord.ButtonStyle.success, custom_id="setup_perms_yes")
+    @discord.ui.button(label="✅ Yes", style=discord.ButtonStyle.success, custom_id="setup_perms_yes")
     async def perms_yes(self, interaction: discord.Interaction, button: discord.ui.Button):
         # Defer first — gives us 15 minutes to respond, prevents timeout
         await interaction.response.defer(ephemeral=True)
@@ -2831,7 +2836,7 @@ class SetupPermissionsView(discord.ui.View):
             logger.error(f"[Setup] Permissions error: {e}")
         await complete_setup(interaction)
 
-    @discord.ui.button(label="❌ No — Skip", style=discord.ButtonStyle.secondary, custom_id="setup_perms_no")
+    @discord.ui.button(label="❌ No", style=discord.ButtonStyle.danger, custom_id="setup_perms_no")
     async def perms_no(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         await db_save_server_config(str(interaction.guild_id), setup_complete=1)
@@ -3103,10 +3108,12 @@ async def complete_setup(interaction):
         try:
             welcome_file = os.path.join(SCRIPT_DIR, "logos", "adrian", "Adrian_welcome.png")
             if os.path.exists(welcome_file):
-                await commands_channel.send(
+                welcome_msg = await commands_channel.send(
                     file=discord.File(welcome_file, filename="Adrian_welcome.png"),
                     view=WelcomeView()
                 )
+                # Save message ID so we can watch for reactions
+                await db_save_server_config(str(guild.id), welcome_message_id=str(welcome_msg.id))
                 results.append(f"✅ Posted welcome image to {commands_channel.mention}")
         except Exception as e:
             results.append(f"⚠️ Could not post welcome image: {e}")
@@ -4245,15 +4252,8 @@ class WelcomeView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="🎖️ Create My Profile", style=discord.ButtonStyle.success, custom_id="welcome_create_profile")
+    @discord.ui.button(label="👋 Get Started", style=discord.ButtonStyle.success, custom_id="welcome_create_profile")
     async def create_profile(self, interaction: discord.Interaction, button: discord.ui.Button):
-        existing = await db_get_user_region(str(interaction.user.id))
-        if existing:
-            await interaction.response.send_message(
-                "You already have a profile! Use `/start` to update your preferences.",
-                ephemeral=True
-            )
-            return
         on_cd, remaining = check_cooldown(str(interaction.user.id), "start")
         if on_cd:
             await interaction.response.send_message(f"⏳ Please wait {remaining}s before trying again.", ephemeral=True)
@@ -4268,13 +4268,13 @@ class WelcomeView(discord.ui.View):
             embed.set_image(url=img_url)
         await interaction.response.send_message(embed=embed, view=RegionView(), ephemeral=True)
 
-    @discord.ui.button(label="👤 View My Profile", style=discord.ButtonStyle.secondary, custom_id="welcome_view_profile")
+    @discord.ui.button(label="🪪 View My Profile", style=discord.ButtonStyle.primary, custom_id="welcome_view_profile")
     async def view_profile(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         region = await db_get_user_region(str(interaction.user.id))
         if not region:
             await interaction.followup.send(
-                "You don't have a profile yet! Click **🎖️ Create My Profile** to get started.",
+                "You don\'t have a profile yet! Click **👋 Get Started** to create one.",
                 ephemeral=True
             )
             return
@@ -4287,7 +4287,7 @@ class WelcomeView(discord.ui.View):
         countries_str = ", ".join([country_names.get(c, c) for c in (countries_raw or ["Z"])]) if countries_raw else "Not set"
         forums_str = (forums_raw or "None").upper() if forums_raw else "Not set"
         embed = discord.Embed(
-            title=f"🎖️ {interaction.user.display_name}'s Profile",
+            title=f"🎖️ {interaction.user.display_name}\'s Profile",
             color=discord.Color.dark_gold(),
             timestamp=datetime.now(timezone.utc)
         )
@@ -4298,6 +4298,36 @@ class WelcomeView(discord.ui.View):
         embed.add_field(name="Countries", value=countries_str, inline=False)
         embed.set_footer(text="Use /start to update your preferences")
         await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @discord.ui.button(label="🗑️ Clear My Profile", style=discord.ButtonStyle.danger, custom_id="welcome_clear_profile")
+    async def clear_profile(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        region = await db_get_user_region(str(interaction.user.id))
+        if not region:
+            await interaction.followup.send(
+                "You don\'t have a profile yet — nothing to clear!",
+                ephemeral=True
+            )
+            return
+        # Clear ONLY preferences — never touch ratings, transactions, or reputation
+        async with client.db.acquire() as conn:
+            await conn.execute(
+                "UPDATE user_preferences SET region=NULL, eras=NULL, countries=NULL, forums=NULL WHERE user_id=$1",
+                str(interaction.user.id)
+            )
+        await interaction.followup.send(
+            embed=discord.Embed(
+                title="🗑️ Profile Preferences Cleared",
+                description=(
+                    "Your alert preferences have been reset.\n\n"
+                    "**Your reputation, ratings and transaction history are untouched.**\n\n"
+                    "Click **👋 Get Started** to set up new preferences."
+                ),
+                color=discord.Color.red()
+            ),
+            ephemeral=True
+        )
+        logger.info(f"[Profile] Preferences cleared for {interaction.user} ({interaction.user.id})")
 
 # ==================== EVENTS ====================
 @client.event
@@ -4454,6 +4484,84 @@ async def on_message(message):
 
     except Exception as e:
         logger.error(f"[Watch] Mirror error: {e}")
+
+@client.event
+async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
+    """When someone reacts to the welcome image, trigger /start for them."""
+    try:
+        # Ignore bot reactions
+        if payload.user_id == client.user.id:
+            return
+
+        # Check if this reaction is on a welcome message for any server
+        config = await db_get_server_config(str(payload.guild_id))
+        if not config:
+            return
+
+        welcome_msg_id = get_config_value(config, "welcome_message_id")
+        if not welcome_msg_id or payload.message_id != welcome_msg_id:
+            return
+
+        logger.info(f"[Welcome] Reaction from {payload.user_id} on welcome message in guild {payload.guild_id}")
+
+        guild = client.get_guild(payload.guild_id)
+        if not guild:
+            return
+
+        member = guild.get_member(payload.user_id)
+        if not member:
+            return
+
+        channel = client.get_channel(payload.channel_id)
+        if not channel:
+            return
+
+        # Remove the reaction after 5 seconds
+        async def remove_reactions():
+            await asyncio.sleep(5)
+            try:
+                message = await channel.fetch_message(payload.message_id)
+                await message.clear_reactions()
+                logger.info(f"[Welcome] Cleared all reactions on welcome message")
+            except Exception as e:
+                logger.warning(f"[Welcome] Could not clear reactions: {e}")
+
+        asyncio.create_task(remove_reactions())
+
+        # Trigger /start flow for the user
+        region = await db_get_user_region(str(payload.user_id))
+        if region:
+            # Already has profile — send quick ephemeral notice
+            try:
+                dm = await member.create_dm()
+                await dm.send(
+                    embed=discord.Embed(
+                        description="You already have an Adrian profile! Use `/start` to update your preferences or `/alerts` to see your pending alerts.",
+                        color=discord.Color.dark_gold()
+                    )
+                )
+            except discord.Forbidden:
+                pass
+            return
+
+        # No profile — send onboarding via DM
+        try:
+            img_url = bot_state.get("question1_img_url")
+            embed = discord.Embed(
+                title="🌍 Question 1 of 5 — Your Region",
+                description="Hey! I saw you reacted to the welcome post. Let\'s set up your collector profile!\n\nWhere are you based? This helps me show you the most relevant dealer alerts.",
+                color=discord.Color.dark_gold()
+            )
+            if img_url:
+                embed.set_image(url=img_url)
+            dm = await member.create_dm()
+            await dm.send(embed=embed, view=RegionView())
+            logger.info(f"[Welcome] Sent /start onboarding to {member} via DM")
+        except discord.Forbidden:
+            logger.warning(f"[Welcome] Could not DM {member} — DMs disabled")
+
+    except Exception as e:
+        logger.error(f"[Welcome] on_raw_reaction_add error: {e}\n{traceback.format_exc()}")
 
 @client.event
 async def on_thread_create(thread):
@@ -4749,12 +4857,13 @@ async def on_ready():
         if adrian_channel:
             welcome_file = os.path.join(SCRIPT_DIR, "logos", "adrian", "Adrian_welcome.png")
             if os.path.exists(welcome_file):
-                await adrian_channel.send(
+                welcome_msg = await adrian_channel.send(
                     file=discord.File(welcome_file, filename="Adrian_welcome.png"),
                     view=WelcomeView()
                 )
+                # Save message ID for reaction watching
+                await db_save_server_config(str(GUILD_ID), welcome_message_id=str(welcome_msg.id))
                 logger.info("[Startup] Welcome image posted to #Adrian with buttons.")
-            else:
                 logger.warning("[Startup] Adrian_welcome.png not found in logos folder.")
         else:
             logger.warning("[Startup] Could not find #Adrian channel.")
