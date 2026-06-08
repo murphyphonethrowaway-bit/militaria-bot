@@ -4309,11 +4309,12 @@ async def on_guild_join(guild):
                     description=(
                         f"I'm now on **{guild.name}** and ready to get to work!\n\n"
                         "Here's what I can do for your community:\n\n"
-                        "📬 **New Item Alerts** — I monitor 50+ militaria dealers and notify members the moment new items drop\n"
-                        "🎖️ **Collector Profiles** — members build a personalized feed based on their era, country and region\n"
-                        "🏪 **Estate Marketplace** — a trusted buy/sell system with global seller ratings and scam protection\n"
-                        "⭐ **Cross-Server Reputation** — buyer and seller ratings follow members across every Adrian server\n"
-                        "🌐 **Cross-Server Listings** — sellers reach buyers on every server running Adrian\n\n"
+                        "📬 **New Item Alerts** — I monitor 100+ militaria dealer websites for new items\n"
+                        "🗞️ **Forum Alerts** — I monitor all the major collector forums for new items for sale\n"
+                        "🎖️ **Collector Profiles** — Members build a personalized feed based on their era, country, and region\n"
+                        "🏪 **Estand Marketplace** — A trusted buy/sell system with global seller ratings and scam protection\n"
+                        "⭐ **Cross-Server Reputation** — Buyer & seller ratings and reviews follow members across every Adrian server\n"
+                        "🌐 **Cross-Server Listings** — Sellers reach buyers on every server running Adrian\n\n"
                         "**To get started, run `/setup` in your server.**\n"
                         "It only takes 2 minutes and I'll handle everything automatically — channels, permissions, roles, all of it."
                     ),
