@@ -347,6 +347,14 @@ class MilitariaBot(discord.Client):
                 pass  # Column already exists
 
             await conn.execute('''
+                CREATE TABLE IF NOT EXISTS estand_blocked_tags (
+                    id SERIAL PRIMARY KEY,
+                    guild_id TEXT NOT NULL,
+                    tag_name TEXT NOT NULL,
+                    UNIQUE(guild_id, tag_name)
+                )
+            ''')
+            await conn.execute('''
                 CREATE TABLE IF NOT EXISTS scam_flags (
                     id SERIAL PRIMARY KEY,
                     flagged_user_id TEXT NOT NULL,
@@ -861,6 +869,75 @@ async def db_get_completed_transactions(user_id):
             str(user_id)
         )
         return seller_count or 0, buyer_count or 0
+
+# ==================== ESTAND BLOCKED TAGS DB ====================
+
+async def db_get_blocked_tags(guild_id):
+    async with client.db.acquire() as conn:
+        rows = await conn.fetch("SELECT tag_name FROM estand_blocked_tags WHERE guild_id=$1", str(guild_id))
+        return [r["tag_name"] for r in rows]
+
+async def db_set_blocked_tags(guild_id, tag_names):
+    async with client.db.acquire() as conn:
+        await conn.execute("DELETE FROM estand_blocked_tags WHERE guild_id=$1", str(guild_id))
+        for tag_name in tag_names:
+            await conn.execute(
+                "INSERT INTO estand_blocked_tags (guild_id, tag_name) VALUES ($1,$2) ON CONFLICT DO NOTHING",
+                str(guild_id), tag_name
+            )
+
+async def is_listing_blocked_for_guild(thread, dest_guild_id):
+    """Check if a listing's tags are blocked by the destination guild."""
+    blocked = await db_get_blocked_tags(str(dest_guild_id))
+    if not blocked:
+        return False
+    thread_tag_names = {t.name for t in getattr(thread, "applied_tags", [])}
+    for blocked_tag in blocked:
+        if blocked_tag in thread_tag_names:
+            return True
+    return False
+
+# ==================== ESTAND STANDARD TAGS ====================
+
+ESTAND_STANDARD_TAGS = [
+    # Status tags
+    discord.ForumTag(name="Active", emoji=discord.PartialEmoji(name="🟢")),
+    discord.ForumTag(name="Sold", emoji=discord.PartialEmoji(name="🔴")),
+    discord.ForumTag(name="On Hold", emoji=discord.PartialEmoji(name="🟡")),
+    discord.ForumTag(name="Cross-Posted", emoji=discord.PartialEmoji(name="🌐")),
+    # Country tags
+    discord.ForumTag(name="🇺🇸 American"),
+    discord.ForumTag(name="🇩🇪 German"),
+    discord.ForumTag(name="🇬🇧 British"),
+    discord.ForumTag(name="🇷🇺 Soviet"),
+    discord.ForumTag(name="🇯🇵 Japanese"),
+    discord.ForumTag(name="🇫🇷 French"),
+    discord.ForumTag(name="🇮🇹 Italian"),
+    discord.ForumTag(name="🇨🇦 Canadian"),
+    discord.ForumTag(name="🇦🇹 Austro-Hungarian"),
+    discord.ForumTag(name="🌍 Other"),
+    # Era tags
+    discord.ForumTag(name="WWI"),
+    discord.ForumTag(name="WWII"),
+    discord.ForumTag(name="Pre-WWI"),
+    discord.ForumTag(name="Cold War"),
+    discord.ForumTag(name="Vietnam"),
+    discord.ForumTag(name="Korea"),
+    discord.ForumTag(name="GWOT"),
+]
+
+async def add_standard_tags_to_forum(forum_channel):
+    """Add any missing standard tags to an existing Estand forum channel."""
+    existing_names = {t.name for t in forum_channel.available_tags}
+    new_tags = list(forum_channel.available_tags)
+    added = []
+    for tag in ESTAND_STANDARD_TAGS:
+        if tag.name not in existing_names and len(new_tags) < 20:  # Discord limit is 20 tags
+            new_tags.append(tag)
+            added.append(tag.name)
+    if added:
+        await forum_channel.edit(available_tags=new_tags)
+    return added
 
 # ==================== SCAM FLAG SYSTEM ====================
 
@@ -1567,6 +1644,11 @@ async def cross_post_listing(thread, seller, starter_message=None):
 
             estate_channel = client.get_channel(int(estate_channel_id))
             if not estate_channel or not isinstance(estate_channel, discord.ForumChannel):
+                continue
+
+            # Check if listing tags are blocked by this server
+            if await is_listing_blocked_for_guild(thread, gid):
+                logger.info(f"[CrossPost] Skipping — listing tags blocked by {server.get('guild_name','?')}")
                 continue
 
             try:
@@ -4076,21 +4158,19 @@ def _build_estate_forum_select(forum_options):
                 guild = interaction2.guild
                 estate_channel = discord.utils.get(guild.forums, name="estand")
                 if not estate_channel:
-                    tags = [
-                        discord.ForumTag(name="Active", emoji=discord.PartialEmoji(name="🟢")),
-                        discord.ForumTag(name="Sold", emoji=discord.PartialEmoji(name="🔴")),
-                        discord.ForumTag(name="On Hold", emoji=discord.PartialEmoji(name="🟡")),
-                        discord.ForumTag(name="Cross-Posted", emoji=discord.PartialEmoji(name="🌐")),
-                    ]
                     estate_channel = await guild.create_forum(
                         name="estand",
                         topic="Buy and sell militaria with verified members. Use /start to create your profile.",
-                        available_tags=tags,
+                        available_tags=ESTAND_STANDARD_TAGS[:20],
                         reason="Created by Adrian setup"
                     )
-                    result = "✅ Created **#estand** with tags: 🟢 Active, 🔴 Sold, 🟡 On Hold, 🌐 Cross-Posted"
+                    result = "✅ Created **#estand** with standard country, era, and status tags"
                 else:
-                    result = "✅ Found existing **#estand** forum channel"
+                    added = await add_standard_tags_to_forum(estate_channel)
+                    if added:
+                        result = f"✅ Found existing **#estand** — added {len(added)} missing tags"
+                    else:
+                        result = "✅ Found existing **#estand** — all standard tags already present"
                 sold_tag = next((t for t in estate_channel.available_tags if t.name.lower() == "sold"), None)
                 await db_save_server_config(
                     str(interaction2.guild_id),
@@ -4123,8 +4203,19 @@ def _build_estate_forum_select(forum_options):
 
         @discord.ui.select(placeholder="Or pick an existing forum channel...", options=forum_options, row=1)
         async def select_forum(self, interaction2: discord.Interaction, select: discord.ui.Select):
+            await interaction2.response.defer(ephemeral=True)
             estate_channel_id = int(select.values[0])
             estate_channel = interaction2.guild.get_channel(estate_channel_id)
+            # Add any missing standard tags
+            if hasattr(estate_channel, "available_tags"):
+                try:
+                    added = await add_standard_tags_to_forum(estate_channel)
+                    tag_note = f" Added {len(added)} standard tags." if added else " Standard tags already present."
+                except Exception as te:
+                    tag_note = ""
+                    logger.debug(f"[Setup] Could not add tags: {te}")
+            else:
+                tag_note = ""
             sold_tag = next((t for t in estate_channel.available_tags if t.name.lower() == "sold"), None) if hasattr(estate_channel, "available_tags") else None
             await db_save_server_config(
                 str(interaction2.guild_id),
@@ -4135,7 +4226,7 @@ def _build_estate_forum_select(forum_options):
             embed = discord.Embed(
                 title="🏪 Estand Marketplace — Buy & Sell Militaria",
                 description=(
-                    f"✅ Estand channel set to {estate_channel.mention}\n\n"
+                    f"✅ Estand channel set to {estate_channel.mention}{tag_note}\n\n"
                     "Do you want to **accept cross-posted listings** from other Adrian servers?\n\n"
                     "📈 **More listings** — your members see a wider selection\n"
                     "🤝 **Community growth** — builds connections between servers\n"
@@ -4249,13 +4340,69 @@ class SetupCrossPostView(discord.ui.View):
             await db_save_server_config(str(interaction.guild_id), accept_cross_posts=accept, estate_cross_posts_channel_id=str(cross_channel.id))
         else:
             await db_save_server_config(str(interaction.guild_id), accept_cross_posts=accept)
-        await _show_permissions_step(interaction)
+        if accept:
+            await _show_tag_blocking_step(interaction)
+        else:
+            await _show_permissions_step(interaction)
 
     @discord.ui.button(label="✅ Yes — Accept Cross-Posts", style=discord.ButtonStyle.success, custom_id="setup_crosspost_yes")
     async def yes(self, i, b): await self._save_and_continue(i, 1)
 
     @discord.ui.button(label="❌ No — Local Only", style=discord.ButtonStyle.secondary, custom_id="setup_crosspost_no")
     async def no(self, i, b): await self._save_and_continue(i, 0)
+
+async def _show_tag_blocking_step(interaction):
+    """Show tag blocking step — let server owners block specific categories from cross-posts."""
+    country_tags = [t.name for t in ESTAND_STANDARD_TAGS if any(flag in t.name for flag in ["🇺🇸","🇩🇪","🇬🇧","🇷🇺","🇯🇵","🇫🇷","🇮🇹","🇨🇦","🇦🇹","🌍"])]
+    era_tags = ["WWI", "WWII", "Pre-WWI", "Cold War", "Vietnam", "Korea", "GWOT"]
+    all_blockable = country_tags + era_tags
+
+    options = [
+        discord.SelectOption(label=tag, value=tag)
+        for tag in all_blockable
+    ]
+
+    embed = discord.Embed(
+        title="🚫 Cross-Post Tag Blocking",
+        description=(
+            "You've chosen to accept cross-posts. You can block specific categories from appearing on your server.\n\n"
+            "**Example:** An American-only server can block 🇩🇪 German, 🇷🇺 Soviet, 🇯🇵 Japanese etc.\n\n"
+            "Select any tags you want to **block** from cross-posts, or click **Skip** to accept all categories."
+        ),
+        color=discord.Color.dark_gold()
+    )
+
+    class TagBlockingView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=300)
+
+        @discord.ui.select(
+            placeholder="Select tags to block (optional)...",
+            options=options,
+            min_values=0,
+            max_values=len(options)
+        )
+        async def select_tags(self, interaction2: discord.Interaction, select: discord.ui.Select):
+            pass  # Just store selection, wait for confirm
+
+        @discord.ui.button(label="✅ Save Blocked Tags", style=discord.ButtonStyle.success, row=1)
+        async def save_tags(self, interaction2: discord.Interaction, button: discord.ui.Button):
+            blocked = self.children[0].values if hasattr(self.children[0], "values") else []
+            await db_set_blocked_tags(str(interaction2.guild_id), blocked)
+            if blocked:
+                logger.info(f"[Setup] Tag blocking saved for {interaction2.guild.name}: {blocked}")
+            await _show_permissions_step(interaction2)
+
+        @discord.ui.button(label="⏭️ Skip — Accept All", style=discord.ButtonStyle.secondary, row=1)
+        async def skip(self, interaction2: discord.Interaction, button: discord.ui.Button):
+            await db_set_blocked_tags(str(interaction2.guild_id), [])
+            await _show_permissions_step(interaction2)
+
+    if interaction.response.is_done():
+        await interaction.edit_original_response(embed=embed, view=TagBlockingView())
+    else:
+        await interaction.response.edit_message(embed=embed, view=TagBlockingView())
+
 
 async def _show_permissions_step(interaction):
     """Show step 4 — Permissions."""
