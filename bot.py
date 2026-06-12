@@ -2590,12 +2590,26 @@ class SellerProfileView(discord.ui.View):
         super().__init__(timeout=None)
         self.seller_id = seller_id
 
+    def _get_seller_id(self, interaction: discord.Interaction):
+        """Get seller ID from self or fall back to thread owner."""
+        if self.seller_id and self.seller_id != "placeholder":
+            return self.seller_id
+        # Fall back to thread owner
+        if isinstance(interaction.channel, discord.Thread):
+            return str(interaction.channel.owner_id)
+        return None
+
     @discord.ui.button(label="Check Seller Profile", emoji="🔍", style=discord.ButtonStyle.primary, custom_id="estate_check_seller")
     async def check_seller(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
-            seller = interaction.guild.get_member(int(self.seller_id)) if interaction.guild else None
+            seller_id = self._get_seller_id(interaction)
+            if not seller_id:
+                await interaction.response.send_message("⚠️ Could not find seller.", ephemeral=True)
+                return
+            seller = interaction.guild.get_member(int(seller_id)) if interaction.guild else None
             if not seller:
-                seller = await client.fetch_user(int(self.seller_id))
+                seller = await client.fetch_user(int(seller_id))
+            self.seller_id = seller_id
             if not seller:
                 await interaction.response.send_message("⚠️ Could not find seller profile.", ephemeral=True)
                 return
@@ -2638,6 +2652,7 @@ class SellerProfileView(discord.ui.View):
     @discord.ui.button(label="I'll Take It!", emoji="💰", style=discord.ButtonStyle.success, custom_id="estate_ill_take_it")
     async def ill_take_it(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
+            self.seller_id = self._get_seller_id(interaction) or self.seller_id
             if str(interaction.user.id) == str(self.seller_id):
                 await interaction.response.send_message("🚫 You can't buy your own listing!", ephemeral=True)
                 return
@@ -2675,6 +2690,7 @@ class SellerProfileView(discord.ui.View):
     @discord.ui.button(label="Make an Offer", emoji="🤝", style=discord.ButtonStyle.primary, custom_id="estate_make_offer")
     async def make_offer(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
+            self.seller_id = self._get_seller_id(interaction) or self.seller_id
             if str(interaction.user.id) == str(self.seller_id):
                 await interaction.response.send_message("🚫 You can't make an offer on your own listing!", ephemeral=True)
                 return
@@ -2858,6 +2874,7 @@ class SellerProfileView(discord.ui.View):
     @discord.ui.button(label="Contact Seller", emoji="✉️", style=discord.ButtonStyle.secondary, custom_id="estate_contact_seller_direct")
     async def contact_seller_direct(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
+            self.seller_id = self._get_seller_id(interaction) or self.seller_id
             if str(interaction.user.id) == str(self.seller_id):
                 await interaction.response.send_message("🚫 You can't contact yourself!", ephemeral=True)
                 return
@@ -7491,6 +7508,7 @@ async def on_ready():
     else:
         logger.warning(f"Logos folder NOT found at {logos_path}!")
     # Re-register persistent views so buttons work after bot restarts
+    client.add_view(SellerProfileView("placeholder"))
     client.add_view(WatchItemView("placeholder", "placeholder", ""))
     client.add_view(FollowDealerView("placeholder"))
     client.add_view(MilitariaAlertAdView())
