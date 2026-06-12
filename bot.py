@@ -2693,7 +2693,7 @@ class SellerProfileView(discord.ui.View):
             logger.error(f"[Estate] IllTakeIt error: {e}\n{traceback.format_exc()}")
             await interaction.response.send_message("⚠️ Something went wrong.", ephemeral=True)
 
-    @discord.ui.button(label="Make an Offer", emoji="🤝", style=discord.ButtonStyle.primary, custom_id="estate_make_offer")
+    @discord.ui.button(label="Make an Offer", emoji="🤝", style=discord.ButtonStyle.success, custom_id="estate_make_offer")
     async def make_offer(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             self.seller_id = self._get_seller_id(interaction) or self.seller_id
