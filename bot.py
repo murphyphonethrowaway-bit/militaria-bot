@@ -4282,40 +4282,62 @@ class SetupStep3EstateView(discord.ui.View):
 
     @discord.ui.button(label="✅ Yes — Add the Estand", style=discord.ButtonStyle.success, custom_id="setup_s3_yes")
     async def yes(self, interaction: discord.Interaction, button: discord.ui.Button):
-        forum_channels = [c for c in interaction.guild.channels if isinstance(c, discord.ForumChannel)]
-        if not forum_channels:
-            embed = discord.Embed(
-                title="⚠️ Forum Channel Required",
-                description=(
-                    "The Estand marketplace only works with **Forum Channels** — not regular text channels.\n\n"
-                    "**Here\'s how to create one:**\n"
-                    "1. Go to your server settings\n"
-                    "2. Click **Channels** → **New Channel**\n"
-                    "3. Select **Forum** as the channel type\n"
-                    "4. Name it something like `#estand` or `#marketplace`\n"
-                    "5. Click the button below once it\'s created\n\n"
-                    "Forum channels let members create individual posts for each listing."
-                ),
-                color=discord.Color.orange()
+        await interaction.response.defer(ephemeral=True)
+        try:
+            guild = interaction.guild
+
+            # Auto-create or find existing estand forum channel
+            estate_channel = discord.utils.get(guild.forums, name="estand")
+            if not estate_channel:
+                estate_channel = await guild.create_forum(
+                    name="estand",
+                    topic="Buy and sell militaria with verified members. Use /start to create your profile.",
+                    available_tags=ESTAND_STANDARD_TAGS[:20],
+                    reason="Created by Adrian setup"
+                )
+                result = "✅ Created **#estand** with standard country, era, and status tags"
+                logger.info(f"[Setup] Auto-created #estand in {guild.name}")
+            else:
+                added = await add_standard_tags_to_forum(estate_channel)
+                result = f"✅ Found existing **#estand**" + (f" — added {len(added)} missing tags" if added else "")
+                logger.info(f"[Setup] Using existing #estand in {guild.name}")
+
+            sold_tag = next((t for t in estate_channel.available_tags if t.name.lower() == "sold"), None)
+            await db_save_server_config(
+                str(guild.id),
+                estate_channel_id=str(estate_channel.id),
+                estate_sold_tag_id=str(sold_tag.id) if sold_tag else None,
+                estate_name="Estand"
             )
-            await interaction.response.edit_message(embed=embed, view=SetupNoForumView())
-            return
-        forum_options = [
-            discord.SelectOption(label=f"#{c.name}"[:100], value=str(c.id))
-            for c in sorted(forum_channels, key=lambda x: x.position)
-        ][:25]
-        embed = discord.Embed(
-            title="🏪 Estand Marketplace — Buy & Sell Militaria",
-            description=(
-                "Which **forum channel** should be your Estand marketplace?\n\n"
-                "🚀 **Let me create one** — I\'ll set up the channel with the right tags automatically\n"
-                "📋 **Pick an existing one** — select from the dropdown below"
-            ),
-            color=discord.Color.dark_gold()
-        )
-        if bot_state.get("setup_estand_img_url"):
-            embed.set_thumbnail(url=bot_state["setup_estand_img_url"])
-        await interaction.response.edit_message(embed=embed, view=_build_estate_forum_select(forum_options))
+
+            embed = discord.Embed(
+                title="🏪 Estand Marketplace — Buy & Sell Militaria",
+                description=(
+                    result + "\n\n"
+                    "Do you want to **accept cross-posted listings** from other Adrian servers?\n\n"
+                    "📈 **More listings** — your members see a wider selection\n"
+                    "🤝 **Community growth** — builds connections between servers\n"
+                    "🆓 **Completely free**"
+                ),
+                color=discord.Color.dark_gold()
+            )
+            if bot_state.get("setup_crosspost_img_url"):
+                embed.set_thumbnail(url=bot_state["setup_crosspost_img_url"])
+            await interaction.edit_original_response(embed=embed, view=SetupCrossPostView())
+
+        except discord.Forbidden:
+            await interaction.edit_original_response(embed=discord.Embed(
+                title="⚠️ Missing Permissions",
+                description="I don\'t have permission to create forum channels. Please give me **Manage Channels** permission and run `/setup` again.",
+                color=discord.Color.red()
+            ))
+        except Exception as e:
+            logger.error(f"[Setup] Estand auto-create error: {e}\n{traceback.format_exc()}")
+            await interaction.edit_original_response(embed=discord.Embed(
+                title="⚠️ Something went wrong",
+                description=f"Could not create the Estand channel: {e}",
+                color=discord.Color.red()
+            ))
 
     @discord.ui.button(label="❌ No Thanks", style=discord.ButtonStyle.secondary, custom_id="setup_s3_no")
     async def no(self, interaction: discord.Interaction, button: discord.ui.Button):
