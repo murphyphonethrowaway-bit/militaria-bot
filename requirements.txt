@@ -1,4 +1,5 @@
-discord.py
-aiohttp
-beautifulsoup4
-asyncpg
+discord.py==2.3.2
+asyncpg==0.29.0
+aiohttp==3.9.5
+beautifulsoup4==4.12.3
+psutil==5.9.8
