@@ -341,6 +341,17 @@ class MilitariaBot(discord.Client):
                 pass  # Column already exists
 
             await conn.execute('''
+                CREATE TABLE IF NOT EXISTS scam_flags (
+                    id SERIAL PRIMARY KEY,
+                    flagged_user_id TEXT NOT NULL,
+                    flagged_by TEXT NOT NULL,
+                    guild_id TEXT NOT NULL,
+                    reason TEXT,
+                    created_at BIGINT NOT NULL,
+                    UNIQUE(flagged_user_id, flagged_by)
+                )
+            ''')
+            await conn.execute('''
                 CREATE TABLE IF NOT EXISTS keyword_watchlist (
                     id SERIAL PRIMARY KEY,
                     user_id TEXT NOT NULL,
@@ -844,6 +855,45 @@ async def db_get_completed_transactions(user_id):
             str(user_id)
         )
         return seller_count or 0, buyer_count or 0
+
+# ==================== SCAM FLAG SYSTEM ====================
+
+SCAM_FLAG_THRESHOLD = 2  # Number of mod flags needed to trigger global ban
+
+async def db_add_scam_flag(flagged_user_id, flagged_by, guild_id, reason):
+    """Add a scam flag. Returns (total_flags, newly_added)."""
+    async with client.db.acquire() as conn:
+        try:
+            await conn.execute(
+                "INSERT INTO scam_flags (flagged_user_id, flagged_by, guild_id, reason, created_at) VALUES ($1,$2,$3,$4,$5)",
+                str(flagged_user_id), str(flagged_by), str(guild_id), reason,
+                int(datetime.now(timezone.utc).timestamp())
+            )
+            newly_added = True
+        except Exception:
+            newly_added = False  # Already flagged by this mod
+        total = await conn.fetchval(
+            "SELECT COUNT(*) FROM scam_flags WHERE flagged_user_id=$1",
+            str(flagged_user_id)
+        )
+        return total or 0, newly_added
+
+async def db_get_scam_flags(user_id):
+    async with client.db.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT * FROM scam_flags WHERE flagged_user_id=$1 ORDER BY created_at ASC",
+            str(user_id)
+        )
+        return [dict(r) for r in rows]
+
+async def db_remove_scam_flag(flagged_user_id):
+    """Clear all scam flags for a user (bot owner only)."""
+    async with client.db.acquire() as conn:
+        await conn.execute("DELETE FROM scam_flags WHERE flagged_user_id=$1", str(flagged_user_id))
+        await conn.execute(
+            "DELETE FROM user_warnings WHERE user_id=$1 AND warning_type='scammer'",
+            str(flagged_user_id)
+        )
 
 # ==================== KEYWORD WATCHLIST DB ====================
 
@@ -4737,6 +4787,31 @@ async def debug_cmd(interaction: discord.Interaction):
     embed.set_footer(text="Adrian Owner Dashboard")
     await interaction.followup.send(embed=embed, ephemeral=True)
 
+@client.tree.command(name="setestate", description="[Owner] Manually set the estate channel for a server")
+@app_commands.describe(channel="The forum channel to use as the Estand")
+async def setestate_cmd(interaction: discord.Interaction, channel: discord.ForumChannel):
+    if not is_bot_owner(interaction.user):
+        await interaction.response.send_message("❓ Unknown command.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    sold_tag = next((t for t in channel.available_tags if t.name.lower() == "sold"), None)
+    await db_save_server_config(
+        str(interaction.guild_id),
+        estate_channel_id=str(channel.id),
+        estate_sold_tag_id=str(sold_tag.id) if sold_tag else None,
+        estate_name=channel.name
+    )
+    await interaction.followup.send(
+        embed=discord.Embed(
+            title="✅ Estand Channel Updated",
+            description=f"Estand channel set to {channel.mention}\nSold tag: {sold_tag.name if sold_tag else 'None found'}",
+            color=discord.Color.green()
+        ),
+        ephemeral=True
+    )
+    logger.info(f"[Admin] Estand channel manually set to {channel.name} ({channel.id}) in {interaction.guild.name}")
+
+
 @client.tree.command(name="restart", description="[Owner] Restart the bot")
 async def restart_cmd(interaction: discord.Interaction):
     if not is_bot_owner(interaction.user):
@@ -5830,6 +5905,160 @@ async def mywatchlist_cmd(interaction: discord.Interaction):
     embed.set_footer(text="Watchlist entries expire after 90 days — Adrian")
     await interaction.followup.send(embed=embed, ephemeral=True)
 
+@client.tree.command(name="scamflag", description="Flag a user as a suspected scammer")
+@app_commands.describe(
+    user="The user to flag",
+    reason="Why you believe this user is a scammer"
+)
+async def scamflag_cmd(interaction: discord.Interaction, user: discord.Member, reason: str):
+    # Must be mod or server owner
+    config = await db_get_server_config(str(interaction.guild_id))
+    mod_role_id = get_config_value(config, "mod_role_id") if config else None
+    is_mod = (
+        interaction.user.guild_permissions.manage_messages or
+        interaction.user.id == interaction.guild.owner_id or
+        is_bot_owner(interaction.user) or
+        (mod_role_id and any(r.id == int(mod_role_id) for r in interaction.user.roles))
+    )
+    if not is_mod:
+        await interaction.response.send_message("⚠️ You don't have permission to flag users.", ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True)
+
+    if user.id == interaction.user.id:
+        await interaction.followup.send("⚠️ You can't flag yourself.", ephemeral=True)
+        return
+    if user.id == client.user.id:
+        await interaction.followup.send("⚠️ You can't flag the bot.", ephemeral=True)
+        return
+
+    total_flags, newly_added = await db_add_scam_flag(
+        str(user.id), str(interaction.user.id),
+        str(interaction.guild_id), reason
+    )
+
+    if not newly_added:
+        await interaction.followup.send(
+            f"⚠️ You have already flagged **{user.display_name}**. Another mod needs to confirm.",
+            ephemeral=True
+        )
+        return
+
+    logger.info(f"[ScamFlag] {interaction.user} flagged {user} ({user.id}) — total flags: {total_flags}")
+
+    # Log to mod channel
+    try:
+        mod_log_id = get_config_value(config, "mod_log_channel_id") if config else None
+        if mod_log_id:
+            mod_channel = interaction.guild.get_channel(int(mod_log_id))
+            if mod_channel:
+                log_embed = discord.Embed(
+                    title="🚨 Scam Flag Added",
+                    color=discord.Color.red(),
+                    timestamp=datetime.now(timezone.utc)
+                )
+                log_embed.add_field(name="Flagged User", value=f"{user.mention} ({user.display_name})", inline=True)
+                log_embed.add_field(name="Flagged By", value=f"{interaction.user.mention}", inline=True)
+                log_embed.add_field(name="Total Flags", value=f"{total_flags} / {SCAM_FLAG_THRESHOLD}", inline=True)
+                log_embed.add_field(name="Reason", value=reason, inline=False)
+                log_embed.set_footer(text="Adrian — Scam Protection")
+                await mod_channel.send(embed=log_embed)
+    except Exception as e:
+        logger.debug(f"[ScamFlag] Could not log: {e}")
+
+    # Check if threshold reached
+    if total_flags >= SCAM_FLAG_THRESHOLD:
+        # Add global scammer warning
+        await db_add_user_warning(
+            str(user.id),
+            f"Flagged as scammer by {total_flags} mods across the Adrian network. Reason: {reason}",
+            warning_type="scammer",
+            issued_by="system",
+            guild_id=str(interaction.guild_id)
+        )
+
+        # Notify bot owner channel
+        try:
+            owner_channel = client.get_channel(1513670729194016778)
+            if owner_channel:
+                alert_embed = discord.Embed(
+                    title="🚨 Global Scammer Flag Triggered!",
+                    description=f"**{user.display_name}** (`{user.id}`) has been flagged by **{total_flags} mods** and is now globally marked as a scammer.",
+                    color=discord.Color.red(),
+                    timestamp=datetime.now(timezone.utc)
+                )
+                alert_embed.add_field(name="Last Reason", value=reason, inline=False)
+                alert_embed.add_field(name="Server", value=interaction.guild.name, inline=True)
+                alert_embed.set_footer(text="Adrian — Scam Protection System")
+                await owner_channel.send(embed=alert_embed)
+        except Exception as e:
+            logger.debug(f"[ScamFlag] Could not notify owner channel: {e}")
+
+        # Try to DM the flagged user
+        try:
+            dm_embed = discord.Embed(
+                title="🚨 Your account has been flagged",
+                description=(
+                    "Your account has been flagged as a suspected scammer by multiple moderators "
+                    "across the Adrian network.\n\n"
+                    "Your access to the Estand Marketplace has been restricted pending review.\n\n"
+                    "If you believe this is an error, please contact a server administrator."
+                ),
+                color=discord.Color.red()
+            )
+            dm_embed.set_footer(text="Adrian — Scam Protection")
+            await user.send(embed=dm_embed)
+        except discord.Forbidden:
+            pass
+
+        await interaction.followup.send(
+            embed=discord.Embed(
+                title="🚨 Global Scammer Flag Triggered",
+                description=(
+                    f"**{user.display_name}** has been flagged by **{total_flags} mods** "
+                    f"and is now **globally marked as a scammer** across all Adrian servers.\n\n"
+                    f"Their Estand access has been restricted and the bot owner has been notified."
+                ),
+                color=discord.Color.red()
+            ),
+            ephemeral=True
+        )
+    else:
+        remaining = SCAM_FLAG_THRESHOLD - total_flags
+        await interaction.followup.send(
+            embed=discord.Embed(
+                title="🚩 Scam Flag Added",
+                description=(
+                    f"**{user.display_name}** has been flagged.\n\n"
+                    f"**Total flags:** {total_flags} / {SCAM_FLAG_THRESHOLD}\n"
+                    f"**{remaining} more mod flag(s) needed** from different servers to trigger global action."
+                ),
+                color=discord.Color.orange()
+            ),
+            ephemeral=True
+        )
+
+
+@client.tree.command(name="clearscamflag", description="[Owner] Clear all scam flags for a user")
+@app_commands.describe(user="The user to clear flags for")
+async def clearscamflag_cmd(interaction: discord.Interaction, user: discord.Member):
+    if not is_bot_owner(interaction.user):
+        await interaction.response.send_message("❓ Unknown command.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    await db_remove_scam_flag(str(user.id))
+    await interaction.followup.send(
+        embed=discord.Embed(
+            title="✅ Scam Flags Cleared",
+            description=f"All scam flags and scammer warnings have been cleared for **{user.display_name}**.",
+            color=discord.Color.green()
+        ),
+        ephemeral=True
+    )
+    logger.info(f"[ScamFlag] Flags cleared for {user} ({user.id}) by {interaction.user}")
+
+
 @client.tree.command(name="warn", description="Issue a warning to a user")
 @app_commands.describe(
     user="The user to warn",
@@ -6726,6 +6955,49 @@ async def on_message(message):
 
     except Exception as e:
         logger.error(f"[Watch] Mirror error: {e}")
+
+@client.event
+async def on_message(message: discord.Message):
+    """Redirect any webhook message that lands in #adrian to #adrian-updates."""
+    try:
+        if not message.webhook_id:
+            return
+        if not message.guild:
+            return
+
+        config = await db_get_server_config(str(message.guild.id))
+        if not config:
+            return
+
+        commands_channel_id = get_config_value(config, "channel_id")
+        updates_channel_id = get_config_value(config, "updates_channel_id")
+
+        if not commands_channel_id or not updates_channel_id:
+            return
+
+        # If webhook posted in #adrian (commands channel), redirect to updates
+        if str(message.channel.id) == str(commands_channel_id):
+            updates_channel = message.guild.get_channel(int(updates_channel_id))
+            if updates_channel:
+                # Forward the message
+                fwd_embed = discord.Embed(
+                    description=message.content or "",
+                    color=discord.Color.dark_gold()
+                )
+                if message.embeds:
+                    # Forward first embed
+                    fwd_embed = message.embeds[0]
+                fwd_embed.set_footer(text=f"Forwarded from #{message.channel.name} — Adrian")
+                await updates_channel.send(embed=fwd_embed)
+                # Delete from wrong channel
+                try:
+                    await message.delete()
+                except discord.Forbidden:
+                    pass
+                logger.info(f"[Message] Redirected webhook from #adrian to #adrian-updates in {message.guild.name}")
+    except Exception as e:
+        logger.debug(f"[Message] on_message error: {e}")
+
 
 @client.event
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
