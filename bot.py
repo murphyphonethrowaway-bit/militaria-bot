@@ -341,6 +341,16 @@ class MilitariaBot(discord.Client):
                 pass  # Column already exists
 
             await conn.execute('''
+                CREATE TABLE IF NOT EXISTS keyword_watchlist (
+                    id SERIAL PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    keyword TEXT NOT NULL,
+                    keyword_type TEXT DEFAULT 'forum',
+                    created_at BIGINT NOT NULL,
+                    UNIQUE(user_id, keyword)
+                )
+            ''')
+            await conn.execute('''
                 CREATE TABLE IF NOT EXISTS listing_blocks (
                     id SERIAL PRIMARY KEY,
                     seller_id TEXT NOT NULL,
@@ -597,13 +607,22 @@ async def db_cleanup_watchlist():
         if deleted:
             logger.info(f"[Watchlist] Cleaned up {deleted} expired watchlist entries")
 
-async def db_follow_dealer(user_id, dealer_name):
+async def db_follow_dealer(user_id, dealer_name, is_premium=False):
     logger.debug(f"[DB] db_follow_dealer: user={user_id} dealer={dealer_name}")
     async with client.db.acquire() as conn:
+        # Check free limit
+        if not is_premium:
+            count = await conn.fetchval(
+                "SELECT COUNT(*) FROM dealer_follows WHERE user_id=$1",
+                str(user_id)
+            )
+            if count >= FREE_DEALER_FOLLOW_LIMIT:
+                return False, f"You\'ve reached the free limit of {FREE_DEALER_FOLLOW_LIMIT} dealer follows. Upgrade to premium for unlimited follows!"
         await conn.execute(
             "INSERT INTO dealer_follows (user_id, dealer_name, timestamp) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING",
             str(user_id), dealer_name, int(datetime.now(timezone.utc).timestamp())
         )
+        return True, f"✅ Now following **{dealer_name}**!"
 
 async def db_unfollow_dealer(user_id, dealer_name):
     logger.debug(f"[DB] db_unfollow_dealer: user={user_id} dealer={dealer_name}")
@@ -825,6 +844,71 @@ async def db_get_completed_transactions(user_id):
             str(user_id)
         )
         return seller_count or 0, buyer_count or 0
+
+# ==================== KEYWORD WATCHLIST DB ====================
+
+FREE_DEALER_FOLLOW_LIMIT = 5
+FREE_KEYWORD_LIMIT = 3
+
+async def db_get_user_keywords(user_id):
+    async with client.db.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT * FROM keyword_watchlist WHERE user_id=$1 ORDER BY created_at ASC",
+            str(user_id)
+        )
+        return [dict(r) for r in rows]
+
+async def db_add_keyword(user_id, keyword, is_premium=False):
+    """Add keyword — returns (success, message)."""
+    async with client.db.acquire() as conn:
+        # Check limit for free users
+        if not is_premium:
+            count = await conn.fetchval(
+                "SELECT COUNT(*) FROM keyword_watchlist WHERE user_id=$1",
+                str(user_id)
+            )
+            if count >= FREE_KEYWORD_LIMIT:
+                return False, f"You've reached the free limit of {FREE_KEYWORD_LIMIT} keyword alerts. Upgrade to premium for unlimited keywords!"
+        # Check duplicate
+        existing = await conn.fetchrow(
+            "SELECT 1 FROM keyword_watchlist WHERE user_id=$1 AND LOWER(keyword)=LOWER($2)",
+            str(user_id), keyword
+        )
+        if existing:
+            return False, f"You're already watching the keyword **{keyword}**."
+        await conn.execute(
+            "INSERT INTO keyword_watchlist (user_id, keyword, created_at) VALUES ($1,$2,$3)",
+            str(user_id), keyword.lower().strip(), int(datetime.now(timezone.utc).timestamp())
+        )
+        return True, f"✅ Keyword **{keyword}** added to your watchlist!"
+
+async def db_remove_keyword(user_id, keyword):
+    async with client.db.acquire() as conn:
+        result = await conn.execute(
+            "DELETE FROM keyword_watchlist WHERE user_id=$1 AND LOWER(keyword)=LOWER($2)",
+            str(user_id), keyword.lower().strip()
+        )
+        return result != "DELETE 0"
+
+async def db_get_users_for_keyword(keyword):
+    """Get all users watching a specific keyword."""
+    async with client.db.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT user_id FROM keyword_watchlist WHERE $1 ILIKE '%' || keyword || '%'",
+            keyword
+        )
+        return [r["user_id"] for r in rows]
+
+async def db_get_dealer_follow_count(user_id):
+    async with client.db.acquire() as conn:
+        return await conn.fetchval(
+            "SELECT COUNT(*) FROM dealer_follows WHERE user_id=$1",
+            str(user_id)
+        ) or 0
+
+async def db_is_premium(user_id):
+    """Check if user has premium — placeholder until premium system is built."""
+    return False  # Everyone is free for now
 
 # ==================== LISTING NEGOTIATION DB ====================
 
@@ -2166,14 +2250,44 @@ async def send_usmf_alert(channel, parsed):
             try:
                 await db_add_pending_alert(uid, f"USMF: {parsed['item_title']}", parsed.get('forum_url', ''), "🇺🇸")
                 if uid not in bot_state["pending_pings"]:
-                        bot_state["pending_pings"][uid] = []
-                        bot_state["pending_pings"][uid].append({"name": "USMF Forum", "flag": "🇺🇸", "url": ""})
-                        if not bot_state["ping_task_running"]:
-                            asyncio.create_task(flush_pending_pings())
+                    bot_state["pending_pings"][uid] = []
+                bot_state["pending_pings"][uid].append({"name": "USMF Forum", "flag": "🇺🇸", "url": ""})
+                if not bot_state["ping_task_running"]:
+                    asyncio.create_task(flush_pending_pings())
             except Exception as ping_err:
                 logger.debug(f"[USMF Alert] Could not ping {uid}: {ping_err}")
     except Exception as e:
         logger.error(f"[USMF Alert] Failed: {e}")
+
+    # Keyword watchlist DMs
+    try:
+        item_title = parsed.get("item_title", "")
+        keyword_users = await db_get_users_for_keyword(item_title)
+        for uid in keyword_users:
+            try:
+                user = await client.fetch_user(int(uid))
+                kw_embed = discord.Embed(
+                    title="🔔 Keyword Alert — USMF",
+                    description=(
+                        f"A USMF listing matched one of your keywords!\n\n"
+                        f"**{item_title}**\n"
+                        f"Posted by: **{parsed.get('poster', 'Unknown')}**"
+                    ),
+                    color=discord.Color.dark_gold(),
+                    timestamp=datetime.now(timezone.utc)
+                )
+                forum_url = parsed.get("forum_url", "")
+                if forum_url:
+                    kw_embed.add_field(name="🔗 View Listing", value=f"[Click here]({forum_url})", inline=False)
+                kw_embed.set_footer(text="Adrian — Keyword Watchlist | You may need a free forum account to view this listing")
+                await user.send(embed=kw_embed)
+                logger.info(f"[Watchlist] Keyword DM sent to {uid} for USMF: {item_title}")
+            except discord.Forbidden:
+                pass
+            except Exception as kw_err:
+                logger.debug(f"[Watchlist] Could not DM {uid}: {kw_err}")
+    except Exception as e:
+        logger.error(f"[Watchlist] USMF keyword matching failed: {e}")
 
 async def send_waf_alert(channel, parsed, guild):
     """Send a formatted WAF Estate alert to members with the correct role."""
@@ -2244,14 +2358,44 @@ async def send_waf_alert(channel, parsed, guild):
             try:
                 await db_add_pending_alert(uid, f"WAF: {parsed['item_title']}", parsed.get('forum_url', ''), "🎖️")
                 if uid not in bot_state["pending_pings"]:
-                        bot_state["pending_pings"][uid] = []
-                        bot_state["pending_pings"][uid].append({"name": "WAF Forum", "flag": "🎖️", "url": ""})
-                        if not bot_state["ping_task_running"]:
-                            asyncio.create_task(flush_pending_pings())
+                    bot_state["pending_pings"][uid] = []
+                bot_state["pending_pings"][uid].append({"name": "WAF Forum", "flag": "🎖️", "url": ""})
+                if not bot_state["ping_task_running"]:
+                    asyncio.create_task(flush_pending_pings())
             except Exception as ping_err:
                 logger.debug(f"[WAF Alert] Could not ping {uid}: {ping_err}")
     except Exception as e:
         logger.error(f"[WAF Alert] Failed: {e}")
+
+    # Keyword watchlist DMs
+    try:
+        item_title = parsed.get("item_title", "")
+        keyword_users = await db_get_users_for_keyword(item_title)
+        for uid in keyword_users:
+            try:
+                user = await client.fetch_user(int(uid))
+                kw_embed = discord.Embed(
+                    title="🔔 Keyword Alert — WAF Forum",
+                    description=(
+                        f"A WAF listing matched one of your keywords!\n\n"
+                        f"**{item_title}**\n"
+                        f"Posted by: **{parsed.get('poster', 'Unknown')}**"
+                    ),
+                    color=discord.Color.dark_gold(),
+                    timestamp=datetime.now(timezone.utc)
+                )
+                forum_url = parsed.get("forum_url", "")
+                if forum_url:
+                    kw_embed.add_field(name="🔗 View Listing", value=f"[Click here]({forum_url})", inline=False)
+                kw_embed.set_footer(text="Adrian — Keyword Watchlist | You may need a free forum account to view this listing")
+                await user.send(embed=kw_embed)
+                logger.info(f"[Watchlist] Keyword DM sent to {uid} for WAF: {item_title}")
+            except discord.Forbidden:
+                pass
+            except Exception as kw_err:
+                logger.debug(f"[Watchlist] Could not DM {uid}: {kw_err}")
+    except Exception as e:
+        logger.error(f"[Watchlist] WAF keyword matching failed: {e}")
 
     try:
         # Every 25 WAF notifications, send a Militaria Alert ad
@@ -5665,6 +5809,82 @@ async def mywatchlist_cmd(interaction: discord.Interaction):
         )
     embed.set_footer(text="Watchlist entries expire after 90 days — Adrian")
     await interaction.followup.send(embed=embed, ephemeral=True)
+
+@client.tree.command(name="watchlist", description="Manage your keyword watchlist for forum alerts")
+async def watchlist_cmd(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    uid = str(interaction.user.id)
+    is_premium = await db_is_premium(uid)
+    keywords = await db_get_user_keywords(uid)
+    limit = "Unlimited" if is_premium else f"{FREE_KEYWORD_LIMIT}"
+
+    embed = discord.Embed(
+        title="🔔 Your Keyword Watchlist",
+        description=(
+            f"Get a DM when any forum alert (WAF/USMF) contains your keywords.\n"
+            f"**Keywords used:** {len(keywords)} / {limit}\n\n"
+        ) + (
+            "\n".join([f"• `{k['keyword']}`" for k in keywords]) if keywords else "*No keywords saved yet.*"
+        ),
+        color=discord.Color.dark_gold()
+    )
+    embed.set_footer(text="Adrian — Keyword Watchlist")
+
+    class WatchlistView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=300)
+
+        @discord.ui.button(label="➕ Add Keyword", style=discord.ButtonStyle.success)
+        async def add_keyword(self2, interaction2: discord.Interaction, button: discord.ui.Button):
+            class AddKeywordModal(discord.ui.Modal, title="Add Keyword"):
+                keyword = discord.ui.TextInput(
+                    label="Keyword to watch",
+                    placeholder="e.g. iron cross, M35 helmet, purple heart",
+                    max_length=50
+                )
+                async def on_submit(self3, interaction3: discord.Interaction):
+                    is_prem = await db_is_premium(str(interaction3.user.id))
+                    success, msg = await db_add_keyword(str(interaction3.user.id), self3.keyword.value, is_prem)
+                    color = discord.Color.green() if success else discord.Color.orange()
+                    await interaction3.response.send_message(
+                        embed=discord.Embed(description=msg, color=color),
+                        ephemeral=True
+                    )
+                    logger.info(f"[Watchlist] {interaction3.user} added keyword: {self3.keyword.value} success={success}")
+            await interaction2.response.send_modal(AddKeywordModal())
+
+        @discord.ui.button(label="➖ Remove Keyword", style=discord.ButtonStyle.danger)
+        async def remove_keyword(self2, interaction2: discord.Interaction, button: discord.ui.Button):
+            if not keywords:
+                await interaction2.response.send_message("You have no keywords to remove.", ephemeral=True)
+                return
+            options = [
+                discord.SelectOption(label=k["keyword"], value=k["keyword"])
+                for k in keywords
+            ][:25]
+
+            class RemoveSelect(discord.ui.View):
+                def __init__(self):
+                    super().__init__(timeout=120)
+
+                @discord.ui.select(placeholder="Select keyword to remove...", options=options)
+                async def select_keyword(self3, interaction3: discord.Interaction, select: discord.ui.Select):
+                    removed = await db_remove_keyword(str(interaction3.user.id), select.values[0])
+                    if removed:
+                        await interaction3.response.send_message(
+                            embed=discord.Embed(description=f"✅ Removed keyword **{select.values[0]}** from your watchlist.", color=discord.Color.green()),
+                            ephemeral=True
+                        )
+                    else:
+                        await interaction3.response.send_message("⚠️ Could not find that keyword.", ephemeral=True)
+
+            await interaction2.response.send_message(
+                "Select a keyword to remove:",
+                view=RemoveSelect(),
+                ephemeral=True
+            )
+
+    await interaction.followup.send(embed=embed, view=WatchlistView(), ephemeral=True)
 
 @client.tree.command(name="lookup", description="Look up another collector's public profile")
 @app_commands.describe(user="The Discord user to look up")
