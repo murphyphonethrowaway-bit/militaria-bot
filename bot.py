@@ -4263,6 +4263,7 @@ async def setup_cmd(interaction: discord.Interaction):
         await interaction.response.send_message("🚫 Only server administrators can run `/setup`.", ephemeral=True)
         return
 
+    await interaction.response.defer(ephemeral=True)
     logger.info(f"[Setup] /setup started by {interaction.user} in {interaction.guild.name} ({interaction.guild_id})")
     await db_save_server_config(str(interaction.guild_id), guild_name=interaction.guild.name, owner_id=str(interaction.guild.owner_id))
 
@@ -4308,7 +4309,7 @@ async def setup_cmd(interaction: discord.Interaction):
                 view=None
             )
 
-    await interaction.response.send_message(embed=rules_embed, view=SetupRulesView(), ephemeral=True)
+    await interaction.edit_original_response(embed=rules_embed, view=SetupRulesView())
     return
 
     # Build step 1 embed — also called from SetupRulesView after agreement
@@ -4735,6 +4736,25 @@ async def debug_cmd(interaction: discord.Interaction):
 
     embed.set_footer(text="Adrian Owner Dashboard")
     await interaction.followup.send(embed=embed, ephemeral=True)
+
+@client.tree.command(name="restart", description="[Owner] Restart the bot")
+async def restart_cmd(interaction: discord.Interaction):
+    if not is_bot_owner(interaction.user):
+        await interaction.response.send_message("❓ Unknown command.", ephemeral=True)
+        return
+    await interaction.response.send_message(
+        embed=discord.Embed(
+            title="🔄 Restarting...",
+            description="Adrian is restarting. I'll be back online in a few seconds!",
+            color=discord.Color.orange()
+        ),
+        ephemeral=False
+    )
+    logger.info(f"[Restart] Bot restart triggered by {interaction.user}")
+    await asyncio.sleep(2)
+    import sys
+    sys.exit(0)
+
 
 @client.tree.command(name="channellist", description="[Owner] List all channels the bot can see")
 async def channellist_cmd(interaction: discord.Interaction):
@@ -5809,6 +5829,101 @@ async def mywatchlist_cmd(interaction: discord.Interaction):
         )
     embed.set_footer(text="Watchlist entries expire after 90 days — Adrian")
     await interaction.followup.send(embed=embed, ephemeral=True)
+
+@client.tree.command(name="warn", description="Issue a warning to a user")
+@app_commands.describe(
+    user="The user to warn",
+    reason="Reason for the warning"
+)
+async def warn_cmd(interaction: discord.Interaction, user: discord.Member, reason: str):
+    # Must be server owner or have mod role
+    config = await db_get_server_config(str(interaction.guild_id))
+    mod_role_id = get_config_value(config, "mod_role_id") if config else None
+    is_mod = (
+        interaction.user.guild_permissions.manage_messages or
+        interaction.user.id == interaction.guild.owner_id or
+        is_bot_owner(interaction.user) or
+        (mod_role_id and any(r.id == int(mod_role_id) for r in interaction.user.roles))
+    )
+    if not is_mod:
+        await interaction.response.send_message("⚠️ You don't have permission to warn users.", ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True)
+
+    # Can't warn yourself or the bot
+    if user.id == interaction.user.id:
+        await interaction.followup.send("⚠️ You can't warn yourself.", ephemeral=True)
+        return
+    if user.id == client.user.id:
+        await interaction.followup.send("⚠️ You can't warn the bot.", ephemeral=True)
+        return
+
+    # Add warning to DB
+    await db_add_user_warning(
+        str(user.id),
+        reason,
+        warning_type="warning",
+        issued_by=str(interaction.user.id),
+        guild_id=str(interaction.guild_id)
+    )
+
+    warning_count = await db_get_user_warnings(str(user.id))
+
+    # DM the warned user
+    try:
+        warn_embed = discord.Embed(
+            title="⚠️ You have received a warning",
+            description=(
+                f"You have been warned in **{interaction.guild.name}**\n\n"
+                f"**Reason:** {reason}\n\n"
+                f"**Total warnings:** {warning_count}\n\n"
+                f"Please review the server rules to avoid further action."
+            ),
+            color=discord.Color.orange(),
+            timestamp=datetime.now(timezone.utc)
+        )
+        warn_embed.set_footer(text="Adrian — Estand Marketplace")
+        await user.send(embed=warn_embed)
+        dm_status = "✅ User was notified via DM"
+    except discord.Forbidden:
+        dm_status = "⚠️ Could not DM user — they may have DMs disabled"
+
+    # Log to mod log channel
+    try:
+        mod_log_id = get_config_value(config, "mod_log_channel_id") if config else None
+        if mod_log_id:
+            mod_channel = interaction.guild.get_channel(int(mod_log_id))
+            if mod_channel:
+                log_embed = discord.Embed(
+                    title="⚠️ User Warning Issued",
+                    color=discord.Color.orange(),
+                    timestamp=datetime.now(timezone.utc)
+                )
+                log_embed.add_field(name="User", value=f"{user.mention} ({user.display_name})", inline=True)
+                log_embed.add_field(name="Warned by", value=f"{interaction.user.mention}", inline=True)
+                log_embed.add_field(name="Reason", value=reason, inline=False)
+                log_embed.add_field(name="Total Warnings", value=str(warning_count), inline=True)
+                log_embed.set_footer(text="Adrian — Mod Log")
+                await mod_channel.send(embed=log_embed)
+    except Exception as e:
+        logger.debug(f"[Warn] Could not log to mod channel: {e}")
+
+    await interaction.followup.send(
+        embed=discord.Embed(
+            title="⚠️ Warning Issued",
+            description=(
+                f"**{user.display_name}** has been warned.\n\n"
+                f"**Reason:** {reason}\n"
+                f"**Total warnings:** {warning_count}\n"
+                f"{dm_status}"
+            ),
+            color=discord.Color.orange()
+        ),
+        ephemeral=True
+    )
+    logger.info(f"[Warn] {interaction.user} warned {user} ({user.id}) in {interaction.guild.name}: {reason}")
+
 
 @client.tree.command(name="watchlist", description="Manage your keyword watchlist for forum alerts")
 async def watchlist_cmd(interaction: discord.Interaction):
