@@ -4,6 +4,7 @@ import asyncpg
 from aiohttp import web
 import logging
 import traceback
+import psutil
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -514,6 +515,14 @@ bot_state = {
     "griffin_timer": None,
     "dealer_cooldowns": {},
     "waf_notification_count": 0,
+    "startup_time": None,
+    "alert_count": 0,
+    "error_count": 0,
+    "last_error": None,
+    "last_error_time": None,
+    "db_query_count": 0,
+    "cross_post_count": 0,
+    "estand_listing_count": 0,
     "question1_img_url": None,
     "question2_img_url": None,
     "question3_img_url": None,
@@ -748,7 +757,6 @@ async def db_get_all_stats():
         return {r["dealer_name"]: r["alert_count"] for r in rows}
 
 
-
 # ==================== SERVER CONFIG DB ====================
 
 async def db_get_server_config(guild_id):
@@ -869,6 +877,15 @@ async def db_get_completed_transactions(user_id):
             str(user_id)
         )
         return seller_count or 0, buyer_count or 0
+
+# ==================== HELPER FUNCTIONS ====================
+
+def format_format_stars(avg):
+    """Format a star rating for display."""
+    if avg is None:
+        return "No ratings yet"
+    full = int(avg)
+    return "⭐" * full + "☆" * (5 - full) + f" ({avg:.1f})"
 
 # ==================== ESTAND BLOCKED TAGS DB ====================
 
@@ -1461,9 +1478,9 @@ async def fetch_page(session, url, retries=3):
             async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
                 if resp.status == 200:
                     return await resp.read()
-                print(f"Attempt {attempt+1}/{retries} — status {resp.status} for {url}")
+                logger.debug(f"Attempt {attempt+1}/{retries} — status {resp.status} for {url}")
         except Exception as e:
-            print(f"Attempt {attempt+1}/{retries} — error: {e}")
+            logger.debug(f"Attempt {attempt+1}/{retries} — error: {e}")
             if attempt < retries - 1:
                 await asyncio.sleep(30)
     return None
@@ -1491,7 +1508,7 @@ def extract_item_links(html_bytes, selector, base_url):
                     links.add(text)
         return links
     except Exception as e:
-        print(f"Error parsing HTML: {e}")
+        logger.debug(f"Error parsing HTML: {e}")
         return set()
 
 # ==================== ALERTS ====================
@@ -1610,11 +1627,6 @@ async def cross_post_listing(thread, seller, starter_message=None):
         warnings = await db_get_user_warnings(str(seller.id))
         rank = get_rank(points, warnings > 0)
 
-        def stars(avg):
-            if avg is None:
-                return "No ratings yet"
-            full = int(avg)
-            return "⭐" * full + "☆" * (5-full) + f" ({avg})"
 
         logger.info(f"[CrossPost] Checking {len(all_servers)} server(s) for mirror destinations")
         mirror_count = 0
@@ -1896,7 +1908,7 @@ async def cross_post_listing(thread, seller, starter_message=None):
                 # Seller info
                 mirror_embed.add_field(
                     name="👤 Seller",
-                    value=f"{seller.display_name}\n{rank}\n{stars(seller_avg)} ({seller_count} sale(s))",
+                    value=f"{seller.display_name}\n{rank}\n{format_stars(seller_avg)} ({seller_count} sale(s))",
                     inline=True
                 )
 
@@ -1946,6 +1958,7 @@ async def cross_post_listing(thread, seller, starter_message=None):
                 )
 
                 mirror_count += 1
+                bot_state["cross_post_count"] += 1
                 logger.info(f"[CrossPost] Mirrored \'{thread.name}\' to {estate_channel.guild.name}")
 
             except Exception as e:
@@ -1968,13 +1981,13 @@ async def flush_pending_pings():
         await asyncio.sleep(30)  # Wait 30 seconds to batch alerts
         if not bot_state["pending_pings"]:
             return
-        
+
         pings = bot_state["pending_pings"].copy()
         bot_state["pending_pings"] = {}
-        
+
         servers = await db_get_all_servers()
         updates_channels = await get_all_server_channels("updates_channel_id", ADRIAN_UPDATES_CHANNEL_ID)
-        
+
         for uid, alerts in pings.items():
             try:
                 # Build batched message
@@ -1983,7 +1996,7 @@ async def flush_pending_pings():
                 else:
                     dealer_list = "\n".join([f"• {a['flag']} **{a['name']}**" for a in alerts])
                     msg = f"🆕 **{len(alerts)} dealers** have new items!\n{dealer_list}"
-                
+
                 for updates_channel in updates_channels:
                     member = updates_channel.guild.get_member(int(uid))
                     if member:
@@ -2006,30 +2019,30 @@ async def check_dealer(session, dealer, seen, channel):
 
     html_bytes = await fetch_page(session, url)
     if not html_bytes:
-        print(f"[{name}] Could not fetch page.")
+        logger.warning(f"[{name}] Could not fetch page.")
         return
 
     current_items = extract_item_links(html_bytes, selector, base_url)
     items_key = name + "_items"
 
     if not current_items:
-        print(f"[{name}] No items found with selector '{selector}' — skipping.")
+        logger.debug(f"[{name}] No items found with selector '{selector}' — skipping.")
         return
 
     old_items = set(seen.get(items_key, []))
     if not old_items:
         seen[items_key] = list(current_items)
-        print(f"[{name}] First check — saved {len(current_items)} items as baseline.")
+        logger.info(f"[{name}] First check — saved {len(current_items)} items as baseline.")
         return
 
     new_items = current_items - old_items
     if new_items:
-        print(f"[{name}] {len(new_items)} NEW ITEM(S) DETECTED!")
+        logger.info(f"[{name}] {len(new_items)} NEW ITEM(S) DETECTED!")
         seen[items_key] = list(current_items)
         await db_increment_stat(name)
         await send_alert(channel, name, url, logo_file)
     else:
-        print(f"[{name}] No new items ({len(current_items)} items unchanged).")
+        logger.debug(f"[{name}] No new items ({len(current_items)} items unchanged).")
 
 def _fetch_gmail_sync():
     """Synchronous Gmail IMAP fetch — run in thread to avoid blocking event loop."""
@@ -2101,6 +2114,30 @@ async def check_gmail_async():
     return triggered
 
 # ==================== BACKGROUND TASKS ====================
+async def health_log_task():
+    """Log bot health every 30 minutes so Railway logs stay active."""
+    await client.wait_until_ready()
+    while not client.is_closed():
+        try:
+            uptime = ""
+            if bot_state.get("startup_time"):
+                delta = datetime.now(timezone.utc) - bot_state["startup_time"]
+                h, rem = divmod(int(delta.total_seconds()), 3600)
+                m, s = divmod(rem, 60)
+                uptime = f"{h}h {m}m"
+            mem = psutil.Process().memory_info().rss / 1024 / 1024
+            guilds = len(client.guilds)
+            errors = bot_state.get("error_count", 0)
+            alerts = bot_state.get("alert_count", 0)
+            logger.info(
+                f"[Health] ✅ Online | Uptime: {uptime} | "
+                f"Guilds: {guilds} | Mem: {mem:.0f}MB | "
+                f"Alerts: {alerts} | Errors: {errors}"
+            )
+        except Exception as e:
+            logger.debug(f"[Health] Health log error: {e}")
+        await asyncio.sleep(1800)  # Every 30 minutes
+
 async def onboarding_reminder_task():
     """Every 24 hours, remind users who started /start but never finished."""
     await client.wait_until_ready()
@@ -2477,6 +2514,7 @@ async def send_waf_alert(channel, parsed, guild):
                 await waf_updates_channel.send(content=content_msg, file=discord.File(logo_file, filename="logo.png"), embed=embed, view=watch_view)
             else:
                 await waf_updates_channel.send(content=content_msg, embed=embed, view=watch_view)
+            bot_state["alert_count"] += 1
             logger.info(f"[WAF] Alert sent to {waf_updates_channel.guild.name}: {parsed['item_title']}")
         except Exception as e:
             logger.error(f"[WAF] Failed to send to {waf_updates_channel.guild.name}: {e}")
@@ -2667,9 +2705,9 @@ async def send_promo():
             else:
                 await channel.send(embed=embed)
             bot_state["last_promo"] = datetime.now(timezone.utc)
-            print("Promo message sent!")
+            logger.info("Promo message sent!")
         except Exception as e:
-            print(f"Failed to send promo: {e}")
+            logger.error(f"Failed to send promo: {e}")
 
 # ==================== SELLER PROFILE VIEW ====================
 
@@ -2709,7 +2747,7 @@ class SellerProfileView(discord.ui.View):
             joined = getattr(seller, "joined_at", None)
             join_ts = int(joined.timestamp()) if joined else 0
 
-            def stars(avg):
+            def format_stars(avg):
                 if avg is None: return "No ratings yet"
                 full = int(avg)
                 half = 1 if avg - full >= 0.5 else 0
@@ -2722,7 +2760,7 @@ class SellerProfileView(discord.ui.View):
             )
             embed.set_thumbnail(url=seller.display_avatar.url)
             embed.add_field(name="🎗️ Rank", value=f"{rank}\n{points:,} pts", inline=True)
-            embed.add_field(name="🏪 Seller Rating", value=f"{stars(seller_avg)}\n{seller_count} sale(s)", inline=True)
+            embed.add_field(name="🏪 Seller Rating", value=f"{format_stars(seller_avg)}\n{seller_count} sale(s)", inline=True)
             if join_ts:
                 embed.add_field(name="📅 Member Since", value=f"<t:{join_ts}:R>", inline=True)
             embed.add_field(name="🗓️ Account Age", value=f"<t:{account_ts}:R>", inline=True)
@@ -3246,7 +3284,7 @@ class BuyerIdentifyView(discord.ui.View):
             logger.error(f"[Estate] BuyerIdentify error: {e}\n{traceback.format_exc()}")
             try:
                 await interaction.response.send_message("⚠️ Something went wrong. Please try again.", ephemeral=True)
-            except: pass
+            except Exception: pass
 
 class EstateRatingView(discord.ui.View):
     def __init__(self, thread_id, buyer_id, seller_id):
@@ -3274,7 +3312,7 @@ class EstateRatingView(discord.ui.View):
             logger.error(f"[Estate] Rating error: {e}")
             try:
                 await interaction.response.send_message("⚠️ Something went wrong.", ephemeral=True)
-            except: pass
+            except Exception: pass
 
     @discord.ui.button(emoji="⭐", label="1", style=discord.ButtonStyle.secondary, custom_id="estate_rate_1")
     async def rate_1(self, i, b): await self._rate(i, 1)
@@ -3321,8 +3359,7 @@ class WatchItemView(discord.ui.View):
             logger.error(f"[WatchItem] Watch button error: {e}\n{traceback.format_exc()}")
             try:
                 await interaction.response.send_message("⚠️ Something went wrong. Please try again.", ephemeral=True)
-            except:
-                pass
+            except Exception: pass
 
     @discord.ui.button(label="Unwatch", emoji="🔕", style=discord.ButtonStyle.secondary, custom_id="unwatch_item")
     async def unwatch(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -3337,8 +3374,7 @@ class WatchItemView(discord.ui.View):
             logger.error(f"[WatchItem] Unwatch button error: {e}\n{traceback.format_exc()}")
             try:
                 await interaction.response.send_message("⚠️ Something went wrong. Please try again.", ephemeral=True)
-            except:
-                pass
+            except Exception: pass
 
     @discord.ui.button(label="Send to DM", emoji="📬", style=discord.ButtonStyle.secondary, custom_id="send_to_dm")
     async def send_to_dm(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -3359,8 +3395,7 @@ class WatchItemView(discord.ui.View):
             logger.error(f"[WatchItem] DM bookmark failed: {e}\n{traceback.format_exc()}")
             try:
                 await interaction.response.send_message("⚠️ Something went wrong sending the DM.", ephemeral=True)
-            except:
-                pass
+            except Exception: pass
 
 # ==================== FOLLOW DEALER BUTTONS ====================
 
@@ -3470,7 +3505,7 @@ class WarnModal(discord.ui.Modal, title="Warn Reviewer"):
                 )
                 await user.send(embed=dm_embed)
                 await interaction.response.send_message(f"⚠️ Warning sent to **{self.username}** via DM!", ephemeral=True)
-        except:
+        except Exception:
             await interaction.response.send_message(f"⚠️ Warning logged but could not DM **{self.username}** (DMs may be disabled).", ephemeral=True)
 
 class BlockModal(discord.ui.Modal, title="Block Reviewer"):
@@ -3553,7 +3588,7 @@ class CountrySelectView(discord.ui.View):
             logger.error(f"[CountrySelect] Toggle error: {e}\n{traceback.format_exc()}")
             try:
                 await interaction.response.send_message("⚠️ Something went wrong. Please try again.", ephemeral=True)
-            except: pass
+            except Exception: pass
 
     @discord.ui.button(emoji="0️⃣", style=discord.ButtonStyle.secondary, custom_id="country_Z")
     async def c_all(self, i, b): await self._toggle(i, "Z")
@@ -3659,7 +3694,7 @@ class ForumSelectView(discord.ui.View):
             logger.error(f"[ForumSelect] Error: {e}\n{traceback.format_exc()}")
             try:
                 await interaction.response.send_message("⚠️ Something went wrong. Please try again.", ephemeral=True)
-            except: pass
+            except Exception: pass
 
     @discord.ui.button(emoji="🟥", style=discord.ButtonStyle.secondary, custom_id="forum_waf")
     async def forum_waf(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -3804,7 +3839,7 @@ class FeedbackModal(discord.ui.Modal, title="Leave Feedback for the Developer"):
             logger.error(f"[Feedback] Error: {e}\n{traceback.format_exc()}")
             try:
                 await interaction.response.send_message("⚠️ Something went wrong. Please try again.", ephemeral=True)
-            except: pass
+            except Exception: pass
 
 async def show_question3(interaction: discord.Interaction, edit=True):
     """Show question 3 — country selection."""
@@ -3962,8 +3997,7 @@ class EraSelectView(discord.ui.View):
             logger.error(f"[EraSelect] Toggle error: {e}\n{traceback.format_exc()}")
             try:
                 await interaction.response.send_message("⚠️ Something went wrong. Please try again.", ephemeral=True)
-            except:
-                pass
+            except Exception: pass
 
 # ==================== REGION SELECT VIEW ====================
 
@@ -4057,7 +4091,7 @@ class RegionSelectView(discord.ui.View):
             logger.error(f"[RegionSelect] NA error: {e}\n{traceback.format_exc()}")
             try:
                 await interaction.response.send_message("⚠️ Something went wrong. Please try again.", ephemeral=True)
-            except: pass
+            except Exception: pass
 
     @discord.ui.button(emoji="🇪🇺", style=discord.ButtonStyle.secondary, custom_id="region_select_eu")
     async def region_eu(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -4068,7 +4102,7 @@ class RegionSelectView(discord.ui.View):
             logger.error(f"[RegionSelect] EU error: {e}\n{traceback.format_exc()}")
             try:
                 await interaction.response.send_message("⚠️ Something went wrong. Please try again.", ephemeral=True)
-            except: pass
+            except Exception: pass
 
     @discord.ui.button(emoji="🌍", style=discord.ButtonStyle.secondary, custom_id="region_select_both")
     async def region_both(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -4079,7 +4113,7 @@ class RegionSelectView(discord.ui.View):
             logger.error(f"[RegionSelect] Both error: {e}\n{traceback.format_exc()}")
             try:
                 await interaction.response.send_message("⚠️ Something went wrong. Please try again.", ephemeral=True)
-            except: pass
+            except Exception: pass
 
     @discord.ui.button(label="⏭️ Skip — Just the Estand", style=discord.ButtonStyle.secondary, custom_id="region_select_skip")
     async def skip_to_estand(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -4090,7 +4124,7 @@ class RegionSelectView(discord.ui.View):
             logger.error(f"[RegionSelect] Skip error: {e}\n{traceback.format_exc()}")
             try:
                 await interaction.response.send_message("⚠️ Something went wrong. Please try again.", ephemeral=True)
-            except: pass
+            except Exception: pass
 
 # ==================== SLASH COMMANDS ====================
 
@@ -4829,30 +4863,126 @@ async def debug_cmd(interaction: discord.Interaction):
     all_tasks = asyncio.all_tasks()
     running_tasks = [t.get_name() for t in all_tasks if not t.done()]
 
+    import os
+    import psutil
+
+    # Uptime
+    startup = bot_state.get("startup_time")
+    if startup:
+        uptime_delta = datetime.now(timezone.utc) - startup
+        hours, rem = divmod(int(uptime_delta.total_seconds()), 3600)
+        minutes, seconds = divmod(rem, 60)
+        uptime_str = f"{hours}h {minutes}m {seconds}s"
+    else:
+        uptime_str = "Unknown"
+
+    # Memory usage
+    try:
+        process = psutil.Process()
+        mem_mb = process.memory_info().rss / 1024 / 1024
+        mem_str = f"{mem_mb:.1f} MB"
+    except Exception:
+        mem_str = "N/A"
+
+    # Last error
+    last_err = bot_state.get("last_error")
+    last_err_time = bot_state.get("last_error_time")
+    if last_err and last_err_time:
+        err_str = f"`{str(last_err)[:50]}` <t:{int(last_err_time.timestamp())}:R>"
+    else:
+        err_str = "None"
+
     embed = discord.Embed(
         title="🔧 Adrian Debug Dashboard",
         color=discord.Color.dark_gold(),
         timestamp=datetime.now(timezone.utc)
     )
-    embed.add_field(name="Status", value=paused, inline=True)
-    embed.add_field(name="Guilds", value=f"{len(guilds)} servers", inline=True)
-    embed.add_field(name="Total Members", value=f"{total_members:,}", inline=True)
-    embed.add_field(name="Last Dealer Check", value=last_check, inline=True)
-    embed.add_field(name="Last Email Check", value=last_email, inline=True)
-    embed.add_field(name="WAF Alerts Sent", value=str(bot_state["waf_notification_count"]), inline=True)
-    embed.add_field(name="DB Pool", value=f"{db_size} total / {db_free} idle", inline=True)
-    embed.add_field(name="Griffin Buffer", value=f"{len(bot_state['griffin_buffer'])} pending", inline=True)
-    embed.add_field(name="Active Tasks", value=f"{len(running_tasks)}", inline=True)
-    embed.add_field(name="Python", value=platform.python_version(), inline=True)
-    embed.add_field(name="Discord.py", value=discord.__version__, inline=True)
-    embed.add_field(name="Dealers", value=f"{len(DEALERS)} web + {len(EMAIL_DEALERS)} email", inline=True)
+
+    # Core status
+    embed.add_field(name="🟢 Status", value=paused, inline=True)
+    embed.add_field(name="⏱️ Uptime", value=uptime_str, inline=True)
+    embed.add_field(name="💾 Memory", value=mem_str, inline=True)
+
+    # Network/guilds
+    embed.add_field(name="🌐 Servers", value=f"{len(guilds)}", inline=True)
+    embed.add_field(name="👥 Members", value=f"{total_members:,}", inline=True)
+    embed.add_field(name="🏪 Dealers", value=f"{len(DEALERS)} web + {len(EMAIL_DEALERS)} email", inline=True)
+
+    # Activity
+    embed.add_field(name="📬 Alerts Sent", value=str(bot_state.get("alert_count", 0)), inline=True)
+    embed.add_field(name="🌐 Cross-Posts", value=str(bot_state.get("cross_post_count", 0)), inline=True)
+    embed.add_field(name="🏷️ Estand Listings", value=str(bot_state.get("estand_listing_count", 0)), inline=True)
+
+    # Checks
+    embed.add_field(name="🔍 Last Dealer Check", value=last_check, inline=True)
+    embed.add_field(name="📧 Last Email Check", value=last_email, inline=True)
+    embed.add_field(name="📦 Griffin Buffer", value=f"{len(bot_state['griffin_buffer'])} pending", inline=True)
+
+    # Health
+    embed.add_field(name="🗄️ DB Pool", value=f"{db_size} total / {db_free} idle", inline=True)
+    embed.add_field(name="⚙️ Active Tasks", value=f"{len(running_tasks)}", inline=True)
+    embed.add_field(name="❌ Errors", value=f"{bot_state.get('error_count', 0)} total", inline=True)
+
+    # Last error
+    embed.add_field(name="🚨 Last Error", value=err_str, inline=False)
+
+    # Pending pings
+    pending = len(bot_state.get("pending_pings", {}))
+    embed.add_field(name="⏳ Pending Pings", value=f"{pending} users", inline=True)
+    embed.add_field(name="🐍 Python", value=platform.python_version(), inline=True)
+    embed.add_field(name="📡 Discord.py", value=discord.__version__, inline=True)
 
     # List all guilds
-    guild_list = "\n".join([f"• {g.name} ({g.id})" for g in guilds[:10]])
+    guild_list = "\n".join([f"• **{g.name}** `{g.id}` ({g.member_count})" for g in guilds[:10]])
     embed.add_field(name="Connected Servers", value=guild_list or "None", inline=False)
 
-    embed.set_footer(text="Adrian Owner Dashboard")
+    embed.set_footer(text="Adrian Owner Dashboard — /debug")
     await interaction.followup.send(embed=embed, ephemeral=True)
+
+@client.tree.command(name="dbstats", description="[Owner] Show database statistics")
+async def dbstats_cmd(interaction: discord.Interaction):
+    if not is_bot_owner(interaction.user):
+        await interaction.response.send_message("❓ Unknown command.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    try:
+        async with client.db.acquire() as conn:
+            # Row counts for key tables
+            tables = [
+                "server_config", "user_preferences", "dealer_follows",
+                "keyword_watchlist", "cross_post_mirrors", "scam_flags",
+                "user_warnings", "estand_blocked_tags", "listing_blocks"
+            ]
+            counts = {}
+            for table in tables:
+                try:
+                    count = await conn.fetchval(f"SELECT COUNT(*) FROM {table}")
+                    counts[table] = count or 0
+                except Exception:
+                    counts[table] = "N/A"
+
+            # DB size
+            try:
+                db_size = await conn.fetchval("SELECT pg_size_pretty(pg_database_size(current_database()))")
+            except Exception:
+                db_size = "N/A"
+
+        embed = discord.Embed(
+            title="🗄️ Database Statistics",
+            color=discord.Color.dark_gold(),
+            timestamp=datetime.now(timezone.utc)
+        )
+        embed.add_field(name="📦 DB Size", value=db_size, inline=False)
+        for table, count in counts.items():
+            embed.add_field(name=f"`{table}`", value=f"{count:,}" if isinstance(count, int) else count, inline=True)
+        embed.add_field(name="🔍 Queries This Session", value=f"{bot_state.get('db_query_count', 0):,}", inline=False)
+        embed.set_footer(text="Adrian DB Stats")
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        logger.info(f"[Admin] DB stats viewed by {interaction.user}")
+    except Exception as e:
+        await interaction.followup.send(f"⚠️ DB stats error: {e}", ephemeral=True)
+        logger.error(f"[Admin] DB stats error: {e}")
+
 
 @client.tree.command(name="setestate", description="[Owner] Manually set the estate channel for a server")
 @app_commands.describe(channel="The forum channel to use as the Estand")
@@ -5278,6 +5408,7 @@ async def start_cmd(interaction: discord.Interaction):
     await _show_start_onboarding(interaction)
 
 async def _show_start_onboarding(interaction):
+    logger.debug(f"[Start] Showing onboarding to {interaction.user} ({interaction.user.id})")
     existing = await db_get_user_region(str(interaction.user.id))
     region_str = {"NA": "🇺🇸 North America Only", "EU": "🇪🇺 Europe Only", "both": "🌍 All Dealers"}.get(existing, "Not set yet")
     embeds = []
@@ -5401,7 +5532,7 @@ async def joinwaf_cmd(interaction: discord.Interaction):
         view.add_item(select)
         await interaction.response.send_message("🎖️ **Select which WAF Estate categories you want alerts for:**", view=view, ephemeral=True)
     except Exception as e:
-        print(f"joinwaf error: {e}")
+        logger.error(f"[WAF] Join error: {e}")
         await interaction.response.send_message(f"⚠️ Error: {e}", ephemeral=True)
 
 @client.tree.command(name="leavewaf", description="Unsubscribe from WAF Estate alerts")
@@ -6356,7 +6487,7 @@ async def lookup_cmd(interaction: discord.Interaction, user: discord.Member):
     rank = get_rank(points, warnings > 0)
     top_percent = await db_get_top_percent(uid)
 
-    def stars(avg):
+    def format_stars(avg):
         if avg is None:
             return "No ratings yet"
         full = int(avg)
@@ -6375,8 +6506,8 @@ async def lookup_cmd(interaction: discord.Interaction, user: discord.Member):
     embed.add_field(name="🎗️ Rank", value=f"{rank}\n{points:,} pts", inline=True)
     embed.add_field(name="\u200b", value="\u200b", inline=True)
     embed.add_field(name="\u200b", value="\u200b", inline=True)
-    embed.add_field(name="🏪 Seller", value=f"{stars(seller_avg)}\n{seller_sales} sale(s)", inline=True)
-    embed.add_field(name="🛒 Buyer", value=f"{stars(buyer_avg)}\n{buyer_purchases} purchase(s)", inline=True)
+    embed.add_field(name="🏪 Seller", value=f"{format_stars(seller_avg)}\n{seller_sales} sale(s)", inline=True)
+    embed.add_field(name="🛒 Buyer", value=f"{format_stars(buyer_avg)}\n{buyer_purchases} purchase(s)", inline=True)
     if warnings > 0:
         embed.add_field(name="⚠️ Warnings", value=f"{warnings} active warning(s)", inline=False)
     embed.set_footer(text="Adrian — Collector Profile")
@@ -6663,7 +6794,7 @@ async def _send_profile(interaction, user):
     rank = get_rank(points, warnings > 0)
     top_percent = await db_get_top_percent(uid)
 
-    def stars(avg):
+    def format_stars(avg):
         if avg is None:
             return "No ratings yet"
         full = int(avg)
@@ -6691,8 +6822,8 @@ async def _send_profile(interaction, user):
 
     # Reputation
     embed.add_field(name="\u200b", value="**— Reputation —**", inline=False)
-    embed.add_field(name="🏪 Seller", value=f"{stars(seller_avg)}\n{seller_sales} sale(s)", inline=True)
-    embed.add_field(name="🛒 Buyer", value=f"{stars(buyer_avg)}\n{buyer_purchases} purchase(s)", inline=True)
+    embed.add_field(name="🏪 Seller", value=f"{format_stars(seller_avg)}\n{seller_sales} sale(s)", inline=True)
+    embed.add_field(name="🛒 Buyer", value=f"{format_stars(buyer_avg)}\n{buyer_purchases} purchase(s)", inline=True)
 
     embed.set_footer(text="Adrian — Collector Profile")
 
@@ -6775,7 +6906,6 @@ async def _send_profile(interaction, user):
                 ),
                 ephemeral=True
             )
-
 
 
     await interaction.followup.send(embed=embed, view=ProfileActionsView(), ephemeral=True)
@@ -6989,82 +7119,58 @@ async def on_guild_remove(guild):
     logger.info(f"[Guild] Removed from server: {guild.name} ({guild.id})")
 
 @client.event
-async def on_message(message):
-    """Mirror watched channels to the owner's server."""
-    try:
-        if message.author.bot:
-            return
-        watched = bot_state.get("watched_channels", {})
-        if str(message.channel.id) not in watched:
-            return
-        watch_info = watched[str(message.channel.id)]
-        mirror_channel = client.get_channel(watch_info["mirror_to"])
-        if not mirror_channel:
-            return
-
-        # Build mirror embed
-        embed = discord.Embed(
-            description=message.content or "*[no text]*",
-            color=discord.Color.dark_gold(),
-            timestamp=message.created_at
-        )
-        embed.set_author(
-            name=f"{message.author.display_name} — #{watch_info['channel_name']} | {watch_info['guild_name']}",
-            icon_url=message.author.display_avatar.url
-        )
-        # Include attachments
-        if message.attachments:
-            embed.set_image(url=message.attachments[0].url)
-            if len(message.attachments) > 1:
-                embed.add_field(name="Attachments", value=f"{len(message.attachments)} files", inline=True)
-
-        await mirror_channel.send(embed=embed)
-
-    except Exception as e:
-        logger.error(f"[Watch] Mirror error: {e}")
-
 @client.event
 async def on_message(message: discord.Message):
-    """Redirect any webhook message that lands in #adrian to #adrian-updates."""
+    """Handle incoming messages — mirror watched channels and redirect webhooks."""
     try:
-        if not message.webhook_id:
-            return
-        if not message.guild:
-            return
+        # ---- Watched channel mirroring (channelfeed feature) ----
+        if not message.author.bot:
+            watched = bot_state.get("watched_channels", {})
+            if str(message.channel.id) in watched:
+                watch_info = watched[str(message.channel.id)]
+                mirror_channel = client.get_channel(watch_info["mirror_to"])
+                if mirror_channel:
+                    embed = discord.Embed(
+                        description=message.content or "*[no text]*",
+                        color=discord.Color.dark_gold(),
+                        timestamp=message.created_at
+                    )
+                    embed.set_author(
+                        name=message.author.display_name,
+                        icon_url=message.author.display_avatar.url if message.author.display_avatar else None
+                    )
+                    embed.set_footer(text=f"#{message.channel.name} • {message.guild.name if message.guild else 'DM'}")
+                    if message.attachments:
+                        embed.set_image(url=message.attachments[0].url)
+                    await mirror_channel.send(embed=embed)
 
-        config = await db_get_server_config(str(message.guild.id))
-        if not config:
-            return
+        # ---- Webhook redirect — send to #adrian-updates if lands in #adrian ----
+        if message.webhook_id and message.guild:
+            config = await db_get_server_config(str(message.guild.id))
+            if config:
+                commands_channel_id = get_config_value(config, "channel_id")
+                updates_channel_id = get_config_value(config, "updates_channel_id")
+                if commands_channel_id and updates_channel_id:
+                    if str(message.channel.id) == str(commands_channel_id):
+                        updates_channel = message.guild.get_channel(int(updates_channel_id))
+                        if updates_channel:
+                            if message.embeds:
+                                fwd_embed = message.embeds[0]
+                            else:
+                                fwd_embed = discord.Embed(
+                                    description=message.content or "",
+                                    color=discord.Color.dark_gold()
+                                )
+                            fwd_embed.set_footer(text=f"Forwarded from #{message.channel.name} — Adrian")
+                            await updates_channel.send(embed=fwd_embed)
+                            try:
+                                await message.delete()
+                            except discord.Forbidden:
+                                pass
+                            logger.info(f"[Message] Redirected webhook from #adrian to #adrian-updates in {message.guild.name}")
 
-        commands_channel_id = get_config_value(config, "channel_id")
-        updates_channel_id = get_config_value(config, "updates_channel_id")
-
-        if not commands_channel_id or not updates_channel_id:
-            return
-
-        # If webhook posted in #adrian (commands channel), redirect to updates
-        if str(message.channel.id) == str(commands_channel_id):
-            updates_channel = message.guild.get_channel(int(updates_channel_id))
-            if updates_channel:
-                # Forward the message
-                fwd_embed = discord.Embed(
-                    description=message.content or "",
-                    color=discord.Color.dark_gold()
-                )
-                if message.embeds:
-                    # Forward first embed
-                    fwd_embed = message.embeds[0]
-                fwd_embed.set_footer(text=f"Forwarded from #{message.channel.name} — Adrian")
-                await updates_channel.send(embed=fwd_embed)
-                # Delete from wrong channel
-                try:
-                    await message.delete()
-                except discord.Forbidden:
-                    pass
-                logger.info(f"[Message] Redirected webhook from #adrian to #adrian-updates in {message.guild.name}")
     except Exception as e:
         logger.debug(f"[Message] on_message error: {e}")
-
 
 @client.event
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
@@ -7208,6 +7314,7 @@ async def on_thread_create(thread):
         embed.set_footer(text="Adrian — Estand Marketplace")
         view = SellerProfileView(str(seller_id))
         await thread.send(embed=embed, view=view)
+        bot_state["estand_listing_count"] += 1
         logger.info(f"[Estate] Check before you buy posted in {thread.name}")
 
         # Handle cross-posting (Option B and C)
@@ -7348,7 +7455,7 @@ async def on_thread_update(before, after):
             try:
                 starter = await after.fetch_message(after.id)
                 seller_id = starter.author.id
-            except:
+            except Exception:
                 # Fallback — use thread owner
                 seller_id = after.owner_id
 
@@ -7465,8 +7572,7 @@ async def on_thread_delete(thread):
                         buyer = None
                         try:
                             buyer = await client.fetch_user(int(buyer_name))
-                        except:
-                            pass
+                        except Exception: pass
                         if buyer:
                             try:
                                 buyer_embed = discord.Embed(
@@ -7541,6 +7647,7 @@ async def on_thread_delete(thread):
 async def on_ready():
     bot_state["startup_time"] = datetime.now(timezone.utc)
     bot_state["health_status"] = "ready"
+    bot_state["startup_time"] = datetime.now(timezone.utc)
     logger.info(f"[Startup] ============================")
     logger.info(f"[Startup] Adrian Bot Starting Up")
     logger.info(f"[Startup] Logged in as {client.user}")
@@ -7775,7 +7882,7 @@ async def handle_webhook(request):
             bot_state["griffin_buffer"].append((display_name, page_url))
             if bot_state["griffin_timer"] is None:
                 bot_state["griffin_timer"] = asyncio.create_task(send_griffin_combined())
-                print(f"[Griffin] Buffer started — waiting 5 minutes for more changes...")
+                logger.info("[Griffin] Buffer started — waiting 5 minutes for more changes...")
             return web.Response(text="OK", status=200)
 
         dealer = find_dealer(dealer_name)
@@ -7934,6 +8041,7 @@ async def main():
         async with client:
             tasks.append(asyncio.create_task(check_all_dealers()))
             tasks.append(asyncio.create_task(onboarding_reminder_task()))
+            tasks.append(asyncio.create_task(health_log_task()))
             tasks.append(asyncio.create_task(check_email_dealers()))
             tasks.append(asyncio.create_task(send_promo()))
             tasks.append(asyncio.create_task(start_web_server()))
