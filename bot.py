@@ -1387,8 +1387,6 @@ async def get_all_server_channels(channel_key, fallback_id=None):
     servers = await db_get_all_servers()
     channels = []
     for server in servers:
-        if server.get("setup_complete") != "1":
-            continue
         channel_id = get_config_value(server, channel_key)
         if channel_id:
             channel = client.get_channel(channel_id)
@@ -4736,6 +4734,10 @@ async def complete_setup(interaction):
         except Exception as e:
             results.append(f"⚠️ Could not create Guerrilla Warfare role: {e}")
 
+    # Mark setup complete early so alerts start flowing even if permissions fail
+    await db_save_server_config(str(guild.id), setup_complete=1)
+    logger.info(f"[Setup] Marked setup_complete for {guild.name}")
+
     # Set permissions on commands channel
     if commands_channel and verified_role:
         try:
@@ -4751,6 +4753,10 @@ async def complete_setup(interaction):
             await updates_channel.set_permissions(guild.default_role, view_channel=False)
             await updates_channel.set_permissions(verified_role, view_channel=True, send_messages=False)
             await updates_channel.set_permissions(guild.me, view_channel=True, send_messages=True)
+            # Server owner can always see it
+            owner = guild.owner
+            if owner:
+                await updates_channel.set_permissions(owner, view_channel=True, send_messages=True)
             results.append(f"✅ Set permissions on {updates_channel.mention} — only **Adrian Verified** can see it")
         except Exception as e:
             results.append(f"⚠️ Could not set permissions on updates channel: {e}")
