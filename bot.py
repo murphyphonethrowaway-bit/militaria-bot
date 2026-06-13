@@ -188,17 +188,20 @@ class MilitariaBot(discord.Client):
                     else:
                         raise
             await self.init_db()
-            # Sync to main guild instantly
-            guild = discord.Object(id=GUILD_ID)
-            self.tree.copy_global_to(guild=guild)
-            await self.tree.sync(guild=guild)
-            # Sync to test guild instantly
-            test_guild = discord.Object(id=TEST_GUILD_ID)
-            self.tree.copy_global_to(guild=test_guild)
-            await self.tree.sync(guild=test_guild)
-            # Sync globally for public bot use
+            # Sync to known guilds for instant command availability
+            for gid in [GUILD_ID, TEST_GUILD_ID]:
+                try:
+                    g = discord.Object(id=gid)
+                    self.tree.copy_global_to(guild=g)
+                    await self.tree.sync(guild=g)
+                    logger.info(f"Slash commands synced to guild {gid}")
+                except discord.Forbidden:
+                    logger.warning(f"Could not sync to guild {gid} — bot may not be in that server yet")
+                except Exception as sync_err:
+                    logger.warning(f"Guild sync failed for {gid}: {sync_err}")
+            # Sync globally so new servers get commands within ~1 hour
             await self.tree.sync()
-            logger.info("Slash commands synced globally and to both guilds!")
+            logger.info("Slash commands synced globally!")
         except Exception as e:
             logger.error(f"Setup failed: {e}")
             logger.error(traceback.format_exc())
