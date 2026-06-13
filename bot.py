@@ -883,11 +883,10 @@ async def db_get_completed_transactions(user_id):
 
 # ==================== HELPER FUNCTIONS ====================
 
-def format_format_stars(avg):
+def format_stars(avg):
     """Format a star rating for display."""
     if avg is None:
         return "No ratings yet"
-    full = int(avg)
     return "⭐" * full + "☆" * (5 - full) + f" ({avg:.1f})"
 
 # ==================== ESTAND BLOCKED TAGS DB ====================
@@ -1450,7 +1449,6 @@ def stars_display(rating):
         return "⭐ No ratings yet"
     full = int(rating)
     half = 1 if rating - full >= 0.5 else 0
-    empty = 5 - full - half
     return "⭐" * full + "✨" * half + "☆" * empty + f" {rating}/5"
 
 def get_all_dealers():
@@ -2748,11 +2746,6 @@ class SellerProfileView(discord.ui.View):
             joined = getattr(seller, "joined_at", None)
             join_ts = int(joined.timestamp()) if joined else 0
 
-            def format_stars(avg):
-                if avg is None: return "No ratings yet"
-                full = int(avg)
-                half = 1 if avg - full >= 0.5 else 0
-                return "⭐" * full + "✨" * half + "☆" * (5-full-half) + f" ({avg})"
 
             embed = discord.Embed(
                 title=f"🎖️ {seller.display_name}'s Seller Profile",
@@ -6518,13 +6511,6 @@ async def lookup_cmd(interaction: discord.Interaction, user: discord.Member):
     rank = get_rank(points, warnings > 0)
     top_percent = await db_get_top_percent(uid)
 
-    def format_stars(avg):
-        if avg is None:
-            return "No ratings yet"
-        full = int(avg)
-        half = 1 if avg - full >= 0.5 else 0
-        empty = 5 - full - half
-        return "⭐" * full + "✨" * half + "☆" * empty + f" ({avg})"
 
     title = f"🎖️ {user.display_name}'s Public Profile"
     if top_percent:
@@ -6891,13 +6877,6 @@ async def _send_profile(interaction, user):
     rank = get_rank(points, warnings > 0)
     top_percent = await db_get_top_percent(uid)
 
-    def format_stars(avg):
-        if avg is None:
-            return "No ratings yet"
-        full = int(avg)
-        half = 1 if avg - full >= 0.5 else 0
-        empty = 5 - full - half
-        return "⭐" * full + "✨" * half + "☆" * empty + f" ({avg})"
 
     title = f"🎖️ {user.display_name}'s Collector Profile"
     if top_percent:
