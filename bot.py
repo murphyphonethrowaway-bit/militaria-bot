@@ -99,7 +99,7 @@ EMAIL_DEALERS = [
     {"name": "Lakeside Trader", "flag": "🇺🇸", "region": "NA", "match": ["lakesidetrader.com", "lakeside trader"], "logo_file": "lakeside.png", "url": "https://www.lakesidetrader.com/recently-added-items/", "eras": [0], "countries": ['Z']},
     {"name": "Dutch Militaria", "flag": "🇳🇱", "region": "EU", "match": ["dutchmilitaria.com", "dutch militaria"], "logo_file": "dutch_militaria.png", "url": "https://dutchmilitaria.com/", "eras": [2, 3], "countries": ['D']},
     {"name": "Militaria Sales", "flag": "🇺🇸", "region": "NA", "match": ["militariasales.com", "militaria sales"], "logo_file": "militaria_sales.png", "url": "https://www.militariasales.com/new-item/", "eras": [2, 3, 6], "countries": ['A', 'D', 'J', 'G']},
-    {"name": "Military Collectibles", "flag": "🇺🇸", "region": "NA", "match": ["militarycollectibles.com", "military collectibles"], "logo_file": "military_collectibles.png", "url": "https://militarycollectibles.com/shop?s=n", "eras": [2, 3], "countries": ['D']},
+    {"name": "Military Collectibles", "flag": "🇺🇸", "region": "NA", "match": ["info@militarycollectibles.com", "militarycollectibles.com"], "logo_file": "military_collectibles.png", "url": "https://militarycollectibles.com/shop?s=n", "eras": [2, 3], "countries": ['D']},
     {"name": "Military Collectors HQ", "flag": "🇺🇸", "region": "NA", "match": ["militarycollectorshq.com", "military collectors hq"], "logo_file": "militarycollectorshq.png", "url": "https://militarycollectorshq.com/store-catalog", "eras": [0], "countries": ['Z']},
     {"name": "Soviet Orders", "flag": "🇺🇸", "region": "NA", "match": ["sovietorders.com", "soviet orders"], "logo_file": "Soviet_Orders.png", "url": "https://sovietorders.com/new-in-store/", "eras": [2, 3], "countries": ['E']},
     {"name": "Empire's Past", "flag": "🇺🇸", "region": "NA", "match": ["empirespast.com", "empire's past", "empires past"], "logo_file": "Empire_past.png", "url": "https://empirespast.com/newly-listed/", "eras": [2, 3], "countries": ['D', 'J']},
@@ -2098,16 +2098,19 @@ async def check_gmail_async():
             logger.debug(f"[Gmail] Body preview: {body[:100]}")
             matched = False
             for dealer in EMAIL_DEALERS:
+                # Match on sender email address only — no subject/keyword matching needed
+                dealer_matched = False
                 for keyword in dealer["match"]:
-                    if keyword.lower() in sender or keyword.lower() in subject:
-                        logger.info(f"[Gmail] Matched dealer: {dealer['name']}")
-                        triggered.append((dealer, subject, body))
-                        matched = True
+                    if keyword.lower() in sender.lower():
+                        dealer_matched = True
                         break
-                if matched:
+                if dealer_matched:
+                    logger.info(f"[Gmail] Matched dealer: {dealer['name']} (sender: {sender})")
+                    triggered.append((dealer, subject, body))
+                    matched = True
                     break
             if not matched:
-                logger.info(f"[Gmail] No dealer matched for: {subject}")
+                logger.info(f"[Gmail] No dealer matched for sender: {sender} | Subject: {subject}")
     except Exception as e:
         logger.error(f"[Gmail] Error checking email: {e}\n{traceback.format_exc()}")
     return triggered
