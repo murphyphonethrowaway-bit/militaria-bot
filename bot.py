@@ -1374,11 +1374,14 @@ async def get_server_role(guild, role_key, fallback_id=None):
     config = await db_get_server_config(str(guild.id))
     role_id = get_config_value(config, role_key) if config else None
     if role_id:
-        role = guild.get_role(role_id)
-        if role:
-            return role
+        try:
+            role = guild.get_role(int(role_id))
+            if role:
+                return role
+        except (ValueError, TypeError):
+            pass
     if fallback_id:
-        return guild.get_role(fallback_id)
+        return guild.get_role(int(fallback_id))
     return None
 
 async def get_all_server_channels(channel_key, fallback_id=None):
@@ -4064,7 +4067,7 @@ async def _show_estand_rules(interaction, edit=False):
                     config = await db_get_server_config(str(interaction2.guild.id))
                     estand_role_id = get_config_value(config, "estand_verified_role_id") if config else None
                     if estand_role_id:
-                        estand_role = interaction2.guild.get_role(int(estand_role_id))
+                        estand_role = interaction2.guild.get_role(int(estand_role_id)) if estand_role_id else None
                         if estand_role:
                             member = interaction2.guild.get_member(interaction2.user.id)
                             if member and estand_role not in member.roles:
@@ -5437,7 +5440,7 @@ async def start_cmd(interaction: discord.Interaction):
                         config = await db_get_server_config(str(interaction2.guild.id))
                         estand_role_id = get_config_value(config, "estand_verified_role_id") if config else None
                         if estand_role_id:
-                            estand_role = interaction2.guild.get_role(int(estand_role_id))
+                            estand_role = interaction2.guild.get_role(int(estand_role_id)) if estand_role_id else None
                             if estand_role:
                                 member = interaction2.guild.get_member(interaction2.user.id)
                                 if member and estand_role not in member.roles:
@@ -6798,7 +6801,7 @@ class WelcomeView(discord.ui.View):
                             config = await db_get_server_config(str(interaction2.guild.id))
                             estand_role_id = get_config_value(config, "estand_verified_role_id") if config else None
                             if estand_role_id:
-                                estand_role = interaction2.guild.get_role(int(estand_role_id))
+                                estand_role = interaction2.guild.get_role(int(estand_role_id)) if estand_role_id else None
                                 if estand_role:
                                     member = interaction2.guild.get_member(interaction2.user.id)
                                     if member and estand_role not in member.roles:
@@ -7154,7 +7157,7 @@ async def on_member_update(before: discord.Member, after: discord.Member):
         if not estand_role_id:
             return
 
-        if int(estand_role_id) not in added_roles:
+        if not estand_role_id or int(estand_role_id) not in added_roles:
             return
 
         logger.info(f"[Estand] Estand Verified role added to {after} ({after.id}) in {after.guild.name}")
