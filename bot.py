@@ -3742,6 +3742,31 @@ async def show_all_done(interaction: discord.Interaction, edit=True):
     except Exception as e:
         logger.error(f"[Final] Error showing final screen: {e}")
 
+    # Notify owner channel of new profile
+    try:
+        notify_channel = client.get_channel(1515727882394144908)
+        if notify_channel and interaction.guild:
+            user = interaction.user
+            region = await db_get_user_region(str(user.id))
+            points, _ = await db_get_user_points(str(user.id))
+            rank = get_rank(points, False)
+            region_str = {"NA": "🇺🇸 North America", "EU": "🇪🇺 Europe", "both": "🌍 All"}.get(region, "Not set")
+            notify_embed = discord.Embed(
+                title="🆕 New Collector Profile",
+                color=discord.Color.dark_gold(),
+                timestamp=datetime.now(timezone.utc)
+            )
+            notify_embed.set_thumbnail(url=user.display_avatar.url if user.display_avatar else None)
+            notify_embed.add_field(name="User", value=f"{user.mention} ({user.display_name})", inline=True)
+            notify_embed.add_field(name="Server", value=interaction.guild.name, inline=True)
+            notify_embed.add_field(name="Region", value=region_str, inline=True)
+            notify_embed.add_field(name="Rank", value=rank, inline=True)
+            notify_embed.set_footer(text="Adrian — New Member")
+            await notify_channel.send(embed=notify_embed)
+            logger.info(f"[Profile] New profile notification sent for {user} in {interaction.guild.name}")
+    except Exception as e:
+        logger.debug(f"[Profile] Could not send profile notification: {e}")
+
 class FinalScreenView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -7769,10 +7794,21 @@ async def on_ready():
     client.add_view(WelcomeView())
     logger.info("Persistent views registered.")
 
-    # Post welcome image to #Adrian on every startup
+    # Post welcome image to #Adrian on every startup — delete old one first
     try:
         adrian_channel = client.get_channel(CHANNEL_ID)
         if adrian_channel:
+            # Delete ALL existing messages in #adrian to keep it clean
+            try:
+                async for msg in adrian_channel.history(limit=50):
+                    try:
+                        await msg.delete()
+                    except Exception:
+                        pass
+                logger.info("[Startup] Cleared old messages from #adrian")
+            except Exception as ce:
+                logger.warning(f"[Startup] Could not clear #adrian: {ce}")
+
             welcome_file = os.path.join(SCRIPT_DIR, "logos", "adrian", "Adrian_welcome.png")
             if os.path.exists(welcome_file):
                 welcome_msg = await adrian_channel.send(
@@ -7786,6 +7822,38 @@ async def on_ready():
                 logger.warning("[Startup] Adrian_welcome.png not found in logos folder.")
         else:
             logger.warning("[Startup] Could not find #Adrian channel.")
+
+        # Also clean and refresh welcome message on all other configured servers
+        try:
+            all_servers = await db_get_all_servers()
+            for server in all_servers:
+                srv_channel_id = get_config_value(server, "channel_id")
+                if not srv_channel_id or int(srv_channel_id) == CHANNEL_ID:
+                    continue  # Skip main server, already handled above
+                srv_channel = client.get_channel(int(srv_channel_id))
+                if not srv_channel:
+                    continue
+                try:
+                    # Clear old messages
+                    async for msg in srv_channel.history(limit=50):
+                        try:
+                            await msg.delete()
+                        except Exception:
+                            pass
+                    # Post fresh welcome message
+                    welcome_file = os.path.join(SCRIPT_DIR, "logos", "adrian", "Adrian_welcome.png")
+                    if os.path.exists(welcome_file):
+                        welcome_msg = await srv_channel.send(
+                            file=discord.File(welcome_file, filename="Adrian_welcome.png"),
+                            view=WelcomeView()
+                        )
+                        await db_save_server_config(server["guild_id"], welcome_message_id=str(welcome_msg.id))
+                        logger.info(f"[Startup] Refreshed welcome in #{srv_channel.name} on {srv_channel.guild.name}")
+                except Exception as se:
+                    logger.warning(f"[Startup] Could not refresh welcome on server {server.get('guild_name')}: {se}")
+        except Exception as e:
+            logger.debug(f"[Startup] Multi-server welcome refresh error: {e}")
+
     except Exception as e:
         logger.error(f"[Startup] Failed to post welcome image: {e}")
     # Upload question images — use DB cache to avoid re-uploading every restart
