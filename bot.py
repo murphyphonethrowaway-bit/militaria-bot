@@ -3677,10 +3677,16 @@ async def show_question4(interaction: discord.Interaction, edit=True):
     text_embed.set_footer(text="Adrian — Discord's #1 Militaria Bot")
     embeds.append(text_embed)
 
-    if edit:
-        await interaction.response.edit_message(embeds=embeds, view=ForumSelectView())
-    else:
-        await interaction.response.send_message(embeds=embeds, view=ForumSelectView(), ephemeral=True)
+    try:
+        if interaction.response.is_done():
+            await interaction.edit_original_response(embeds=embeds, view=ForumSelectView())
+        else:
+            await interaction.response.edit_message(embeds=embeds, view=ForumSelectView())
+    except Exception as e:
+        logger.error(f"[Q4] Error showing forum question: {e}")
+        try:
+            await interaction.followup.send(embeds=embeds, view=ForumSelectView(), ephemeral=True)
+        except Exception: pass
 
 class ForumSelectView(discord.ui.View):
     def __init__(self):
@@ -3688,12 +3694,13 @@ class ForumSelectView(discord.ui.View):
 
     async def _save(self, interaction, choice):
         try:
+            await interaction.response.defer(ephemeral=True)
             await db_set_user_forums(str(interaction.user.id), choice)
             await show_all_done(interaction, edit=True)
         except Exception as e:
             logger.error(f"[ForumSelect] Error: {e}\n{traceback.format_exc()}")
             try:
-                await interaction.response.send_message("⚠️ Something went wrong. Please try again.", ephemeral=True)
+                await interaction.followup.send("⚠️ Something went wrong. Please try again.", ephemeral=True)
             except Exception: pass
 
     @discord.ui.button(emoji="🟥", style=discord.ButtonStyle.secondary, custom_id="forum_waf")
