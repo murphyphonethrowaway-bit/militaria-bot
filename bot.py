@@ -4100,7 +4100,8 @@ async def _show_estand_rules(interaction, edit=False):
 
         @discord.ui.button(label="❌ Decline", style=discord.ButtonStyle.danger, custom_id="estand_rules_decline")
         async def decline(self2, interaction2: discord.Interaction, button: discord.ui.Button):
-            await interaction2.response.edit_message(
+            await interaction2.response.defer(ephemeral=True)
+            await interaction2.edit_original_response(
                 embed=discord.Embed(
                     title="No problem!",
                     description="You can run `/start` again whenever you\'re ready to join the Estand marketplace.",
@@ -4109,10 +4110,8 @@ async def _show_estand_rules(interaction, edit=False):
                 view=None
             )
 
-    if edit:
-        await interaction.response.edit_message(embed=rules_embed, view=EstandRulesView())
-    else:
-        await interaction.edit_original_response(embed=rules_embed, view=EstandRulesView())
+    # Always keep in ephemeral flow
+    await interaction.edit_original_response(embed=rules_embed, view=EstandRulesView())
 
 
 class RegionSelectView(discord.ui.View):
@@ -5459,7 +5458,8 @@ async def start_cmd(interaction: discord.Interaction):
 
             @discord.ui.button(label="❌ Decline", style=discord.ButtonStyle.danger, custom_id="start_estand_rules_decline")
             async def decline(self2, interaction2: discord.Interaction, button: discord.ui.Button):
-                await interaction2.response.edit_message(
+                await interaction2.response.defer(ephemeral=True)
+                await interaction2.edit_original_response(
                     embed=discord.Embed(
                         title="No problem!",
                         description="You can run `/start` again whenever you\'re ready to join the Estand marketplace.",
@@ -6820,7 +6820,8 @@ class WelcomeView(discord.ui.View):
 
                 @discord.ui.button(label="❌ Decline", style=discord.ButtonStyle.danger)
                 async def decline(self2, interaction2: discord.Interaction, button2: discord.ui.Button):
-                    await interaction2.response.edit_message(
+                    await interaction2.response.defer(ephemeral=True)
+                    await interaction2.edit_original_response(
                         embed=discord.Embed(
                             title="No problem!",
                             description="You can click **Get Started** again whenever you\'re ready.",
