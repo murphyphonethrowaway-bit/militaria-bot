@@ -3305,9 +3305,169 @@ class SellerProfileView(discord.ui.View):
                                     ephemeral=True
                                 )
 
-                        # DM server owner
+                        # Try to get listing image from thread starter message
+                        try:
+                            if isinstance(interaction2.channel, discord.Thread):
+                                starter = await interaction2.channel.fetch_message(interaction2.channel.id)
+                                if starter and starter.attachments:
+                                    report_embed.set_thumbnail(url=starter.attachments[0].url)
+                                elif starter and starter.embeds and starter.embeds[0].image:
+                                    report_embed.set_thumbnail(url=starter.embeds[0].image.url)
+                        except Exception:
+                            pass
+
+                        # Build owner action view with full controls
+                        class BotOwnerReportActionView(discord.ui.View):
+                            def __init__(self):
+                                super().__init__(timeout=None)
+
+                            @discord.ui.button(label="⚠️ Warn Reporter", style=discord.ButtonStyle.secondary, row=0)
+                            async def warn_reporter_btn(self3, interaction3: discord.Interaction, b: discord.ui.Button):
+                                class WarnReporterModal(discord.ui.Modal, title="Warn Reporter"):
+                                    custom_msg = discord.ui.TextInput(
+                                        label="Warning message",
+                                        style=discord.TextStyle.paragraph,
+                                        placeholder="Leave blank for default message...",
+                                        required=False,
+                                        max_length=500
+                                    )
+                                    async def on_submit(self4, interaction4: discord.Interaction):
+                                        try:
+                                            default_msg = "We have reviewed your report. At this time, no action will be taken as no guidelines were violated."
+                                            final_msg = self4.custom_msg.value if self4.custom_msg.value else default_msg
+                                            warn_embed = discord.Embed(
+                                                title="⚠️ Report Review",
+                                                description=final_msg,
+                                                color=discord.Color.orange(),
+                                                timestamp=datetime.now(timezone.utc)
+                                            )
+                                            warn_embed.set_footer(text="Adrian — Estand Marketplace")
+                                            await reporter.send(embed=warn_embed)
+                                            await db_add_user_warning(
+                                                str(reporter.id),
+                                                f"False/invalid report on listing: {listing_name}. {final_msg}",
+                                                warning_type="report_abuse",
+                                                issued_by=str(interaction4.user.id),
+                                                guild_id=str(guild.id) if guild else None
+                                            )
+                                            # Log action to report channel
+                                            action_embed = discord.Embed(
+                                                title="📋 Action Taken — Warning Sent",
+                                                description=f"**{interaction4.user.display_name}** warned reporter {reporter.mention}",
+                                                color=discord.Color.orange(),
+                                                timestamp=datetime.now(timezone.utc)
+                                            )
+                                            action_embed.add_field(name="Warning Message", value=final_msg, inline=False)
+                                            action_embed.add_field(name="Listing", value=listing_name, inline=True)
+                                            action_embed.set_footer(text="Adrian — Report Log")
+                                            report_log = client.get_channel(1515954657975992401)
+                                            if report_log:
+                                                await report_log.send(embed=action_embed)
+                                            await interaction4.response.send_message(f"✅ Warning sent to {reporter.display_name} and logged.", ephemeral=True)
+                                        except discord.Forbidden:
+                                            await interaction4.response.send_message("⚠️ Could not DM the reporter.", ephemeral=True)
+                                await interaction3.response.send_modal(WarnReporterModal())
+
+                            @discord.ui.button(label="🗑️ Delete Listing", style=discord.ButtonStyle.danger, row=0)
+                            async def delete_listing_btn(self3, interaction3: discord.Interaction, b: discord.ui.Button):
+                                try:
+                                    thread = None
+                                    if guild:
+                                        thread = guild.get_thread(interaction2.channel_id)
+                                    if thread:
+                                        await thread.delete()
+                                        action_embed = discord.Embed(
+                                            title="📋 Action Taken — Listing Deleted",
+                                            description=f"**{interaction3.user.display_name}** deleted listing **{listing_name}**",
+                                            color=discord.Color.red(),
+                                            timestamp=datetime.now(timezone.utc)
+                                        )
+                                        action_embed.add_field(name="Server", value=guild.name if guild else "Unknown", inline=True)
+                                        action_embed.add_field(name="Seller", value=f"<@{_seller_id}>", inline=True)
+                                        action_embed.set_footer(text="Adrian — Report Log")
+                                        report_log = client.get_channel(1515954657975992401)
+                                        if report_log:
+                                            await report_log.send(embed=action_embed)
+                                        await interaction3.response.send_message("✅ Listing deleted and logged.", ephemeral=True)
+                                    else:
+                                        await interaction3.response.send_message("⚠️ Could not find the listing — it may already be deleted.", ephemeral=True)
+                                except discord.Forbidden:
+                                    await interaction3.response.send_message("⚠️ Missing permissions to delete.", ephemeral=True)
+
+                            @discord.ui.button(label="🚨 Warn Seller", style=discord.ButtonStyle.danger, row=0)
+                            async def warn_seller_btn(self3, interaction3: discord.Interaction, b: discord.ui.Button):
+                                class WarnSellerModal(discord.ui.Modal, title="Warn Seller"):
+                                    custom_msg = discord.ui.TextInput(
+                                        label="Warning message",
+                                        style=discord.TextStyle.paragraph,
+                                        placeholder="Describe the violation...",
+                                        max_length=500
+                                    )
+                                    async def on_submit(self4, interaction4: discord.Interaction):
+                                        try:
+                                            seller_user = await client.fetch_user(int(_seller_id))
+                                            warn_embed = discord.Embed(
+                                                title="⚠️ Listing Warning",
+                                                description=self4.custom_msg.value,
+                                                color=discord.Color.red(),
+                                                timestamp=datetime.now(timezone.utc)
+                                            )
+                                            warn_embed.add_field(name="Listing", value=listing_name, inline=True)
+                                            warn_embed.set_footer(text="Adrian — Estand Marketplace")
+                                            await seller_user.send(embed=warn_embed)
+                                            await db_add_user_warning(
+                                                str(_seller_id),
+                                                f"Listing warning: {listing_name}. {self4.custom_msg.value}",
+                                                warning_type="listing_violation",
+                                                issued_by=str(interaction4.user.id),
+                                                guild_id=str(guild.id) if guild else None
+                                            )
+                                            action_embed = discord.Embed(
+                                                title="📋 Action Taken — Seller Warned",
+                                                description=f"**{interaction4.user.display_name}** warned seller <@{_seller_id}>",
+                                                color=discord.Color.red(),
+                                                timestamp=datetime.now(timezone.utc)
+                                            )
+                                            action_embed.add_field(name="Warning", value=self4.custom_msg.value, inline=False)
+                                            action_embed.add_field(name="Listing", value=listing_name, inline=True)
+                                            action_embed.set_footer(text="Adrian — Report Log")
+                                            report_log = client.get_channel(1515954657975992401)
+                                            if report_log:
+                                                await report_log.send(embed=action_embed)
+                                            await interaction4.response.send_message(f"✅ Warning sent to seller and logged.", ephemeral=True)
+                                        except discord.Forbidden:
+                                            await interaction4.response.send_message("⚠️ Could not DM the seller.", ephemeral=True)
+                                await interaction3.response.send_modal(WarnSellerModal())
+
+                            @discord.ui.button(label="✅ No Action", style=discord.ButtonStyle.secondary, row=1)
+                            async def no_action_btn(self3, interaction3: discord.Interaction, b: discord.ui.Button):
+                                action_embed = discord.Embed(
+                                    title="📋 No Action Taken",
+                                    description=f"**{interaction3.user.display_name}** reviewed and dismissed report on **{listing_name}**",
+                                    color=discord.Color.greyple(),
+                                    timestamp=datetime.now(timezone.utc)
+                                )
+                                action_embed.set_footer(text="Adrian — Report Log")
+                                report_log = client.get_channel(1515954657975992401)
+                                if report_log:
+                                    await report_log.send(embed=action_embed)
+                                for child in self3.children:
+                                    child.disabled = True
+                                await interaction3.message.edit(view=self3)
+                                await interaction3.response.send_message("✅ Report dismissed and logged.", ephemeral=True)
+
+                        # Post to bot report log channel with full action buttons
+                        report_log_channel = client.get_channel(1515954657975992401)
+                        if report_log_channel:
+                            await report_log_channel.send(embed=report_embed, view=BotOwnerReportActionView())
+                            logger.info(f"[Estate] Report logged to report channel")
+
+                        # DM server owner with same controls
                         if guild and guild.owner:
-                            await guild.owner.send(embed=report_embed, view=OwnerReportView())
+                            try:
+                                await guild.owner.send(embed=report_embed, view=BotOwnerReportActionView())
+                            except discord.Forbidden:
+                                logger.warning(f"[Estate] Could not DM server owner for report")
 
                         # Post to mod log if configured
                         config = await db_get_server_config(str(guild.id)) if guild else None
@@ -3315,9 +3475,9 @@ class SellerProfileView(discord.ui.View):
                         if mod_log_id:
                             mod_channel = guild.get_channel(int(mod_log_id)) if guild else None
                             if mod_channel:
-                                await mod_channel.send(embed=report_embed)
+                                await mod_channel.send(embed=report_embed, view=BotOwnerReportActionView())
 
-                        await interaction2.response.send_message("✅ Your report has been sent to the server owner.", ephemeral=True)
+                        await interaction2.response.send_message("✅ Your report has been submitted.", ephemeral=True)
                         logger.info(f"[Estate] Report submitted by {reporter.id} on listing by {_seller_id}")
                     except discord.Forbidden:
                         await interaction2.response.send_message("⚠️ Could not reach the server owner.", ephemeral=True)
