@@ -156,6 +156,16 @@ EMAIL_DEALERS = [
 
 USMF_CHANNEL_ID = 1513271593273655387  # #adrian — test server
 
+USMF_CATEGORIES = [
+    {"name": "FS Field & Personal Gear", "emoji": "🎒", "keywords": ["field", "personal gear", "gear"]},
+    {"name": "FS Knives and Other Weapons & Accessories", "emoji": "🗡️", "keywords": ["knife", "knives", "weapon", "bayonet", "blade"]},
+    {"name": "FS Medals, Decorations, Ribbons, & Accessories", "emoji": "🏅", "keywords": ["medal", "decoration", "ribbon", "award"]},
+    {"name": "FS Books, Photos, Ephemera, & Research Material", "emoji": "📚", "keywords": ["book", "photo", "ephemera", "research", "document", "paper"]},
+    {"name": "FS Miscellaneous", "emoji": "📦", "keywords": ["misc", "miscellaneous"]},
+    {"name": "FS Cloth & Metal Insignia", "emoji": "🎖️", "keywords": ["cloth", "metal", "insignia", "patch", "badge", "pin"]},
+    {"name": "FS Uniforms", "emoji": "🪖", "keywords": ["uniform", "tunic", "jacket", "trousers", "coat"]},
+]
+
 
 # ==================== BOT SETUP ====================
 intents = discord.Intents.all()
@@ -354,7 +364,8 @@ class MilitariaBot(discord.Client):
                 "ALTER TABLE server_config ADD COLUMN IF NOT EXISTS estand_verified_role_id TEXT",
                 "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS estand_agreed INTEGER DEFAULT 0",
                 "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS created_at BIGINT DEFAULT 0",
-                "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS waf_categories TEXT DEFAULT ''", 
+                "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS waf_categories TEXT DEFAULT ''",
+                "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS usmf_categories TEXT DEFAULT ''", 
                 "ALTER TABLE server_config ADD COLUMN IF NOT EXISTS accept_cross_posts INTEGER DEFAULT 0",
                 "ALTER TABLE server_config ADD COLUMN IF NOT EXISTS estate_cross_posts_channel_id TEXT",
                 "ALTER TABLE server_config ADD COLUMN IF NOT EXISTS estate_sold_tag_id TEXT",
@@ -2594,11 +2605,22 @@ def parse_usmf_email(subject, body):
         fallback = re.search(r"https?://www\.usmilitariaforum\.com/\S+", body)
         topic_url = fallback.group(0).strip() if fallback else ""
 
-    logger.debug(f"[USMF] Parsed: title='{item_title}' | category='{category}' | price='{price_str}' | url='{topic_url}'")
+    # Match category to USMF_CATEGORIES
+    matched_category = category  # Use raw category from email by default
+    for cat in USMF_CATEGORIES:
+        if cat["name"].lower() in category.lower() or category.lower() in cat["name"].lower():
+            matched_category = cat["name"]
+            break
+        for keyword in cat["keywords"]:
+            if keyword.lower() in category.lower():
+                matched_category = cat["name"]
+                break
+
+    logger.debug(f"[USMF] Parsed: title='{item_title}' | category='{matched_category}' | price='{price_str}' | url='{topic_url}'")
 
     return {
         "item_title": item_title,
-        "category": category,
+        "category": matched_category,
         "price_str": price_str,
         "forum_url": topic_url,
     }
@@ -2655,7 +2677,28 @@ async def send_usmf_alert(channel, parsed):
     except Exception as e:
         logger.error(f"[USMF] Failed to log: {e}")
 
-    # Ping matched users
+    # Ping subscribed users in channel then immediately delete
+    try:
+        category_name = parsed.get("category", "")
+        if category_name:
+            async with client.db.acquire() as conn:
+                rows = await conn.fetch(
+                    "SELECT user_id FROM user_preferences WHERE usmf_categories LIKE $1",
+                    f"%{category_name}%"
+                )
+            if rows:
+                mentions = " ".join([f"<@{row['user_id']}>" for row in rows])
+                for usmf_updates_channel in usmf_updates_channels:
+                    try:
+                        ping_msg = await usmf_updates_channel.send(mentions)
+                        await ping_msg.delete()
+                    except Exception as pe:
+                        logger.debug(f"[USMF] Ping error: {pe}")
+                logger.info(f"[USMF] Pinged {len(rows)} user(s) for category: {category_name}")
+    except Exception as e:
+        logger.error(f"[USMF] Ping error: {e}")
+
+    # Legacy pending pings (keep for backwards compatibility)
     try:
         usmf_users = await db_get_users_for_forum("usmf")
         for uid in usmf_users:
@@ -2776,22 +2819,40 @@ async def send_waf_alert(channel, parsed, guild):
         file = discord.File(logo_file, filename="logo.png")
         embed.set_thumbnail(url="attachment://logo.png")
 
-    content_msg = f"<@&{parsed['role_id']}>" if role else None
-
     watch_view = WatchItemView(parsed["forum_url"], parsed["item_title"], price_str) if parsed["forum_url"] else None
 
-    # Post to #adrian-updates
+    # Post to #adrian-updates (no role ping — users get DMs based on their profile)
     waf_updates_channels = await get_all_server_channels("updates_channel_id", ADRIAN_UPDATES_CHANNEL_ID)
     for waf_updates_channel in waf_updates_channels:
         try:
             if file and os.path.exists(logo_file):
-                await waf_updates_channel.send(content=content_msg, file=discord.File(logo_file, filename="logo.png"), embed=embed, view=watch_view)
+                await waf_updates_channel.send(file=discord.File(logo_file, filename="logo.png"), embed=embed, view=watch_view)
             else:
-                await waf_updates_channel.send(content=content_msg, embed=embed, view=watch_view)
+                await waf_updates_channel.send(embed=embed, view=watch_view)
             bot_state["alert_count"] += 1
             logger.info(f"[WAF] Alert sent to {waf_updates_channel.guild.name}: {parsed['item_title']}")
         except Exception as e:
             logger.error(f"[WAF] Failed to send to {waf_updates_channel.guild.name}: {e}")
+
+    # Ping subscribed users in channel then immediately delete
+    try:
+        role_id_str = str(parsed["role_id"])
+        async with client.db.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT user_id FROM user_preferences WHERE waf_categories LIKE $1",
+                f"%{role_id_str}%"
+            )
+        if rows:
+            mentions = " ".join([f"<@{row['user_id']}>" for row in rows])
+            for waf_updates_channel in waf_updates_channels:
+                try:
+                    ping_msg = await waf_updates_channel.send(mentions)
+                    await ping_msg.delete()
+                except Exception as pe:
+                    logger.debug(f"[WAF] Ping error: {pe}")
+            logger.info(f"[WAF] Pinged {len(rows)} user(s) for category: {parsed['category']}")
+    except Exception as e:
+        logger.error(f"[WAF] Ping error: {e}")
 
     # Log to private mod channel
     try:
@@ -4117,7 +4178,7 @@ async def show_question4(interaction: discord.Interaction, edit=True):
         embeds.append(img_embed)
 
     text_embed = discord.Embed(
-        description="🟥 **WAF** — Wehrmacht Awards Forum\n❌ **None** — Skip forum notifications",
+        description="🟥 **WAF** — Wehrmacht Awards Forum\n🟩 **USMF** — US Militaria Forum\n✅ **Both** — WAF & USMF\n❌ **None** — Skip forum notifications",
         color=discord.Color.dark_gold()
     )
     text_embed.set_footer(text="Adrian — Discord's #1 Militaria Bot")
@@ -4145,6 +4206,10 @@ class ForumSelectView(discord.ui.View):
             # If user wants WAF or both — ask which categories
             if choice == "waf":
                 await show_waf_categories(interaction)
+            elif choice == "usmf":
+                await show_usmf_categories(interaction)
+            elif choice == "both":
+                await show_waf_categories(interaction, then_usmf=True)
             else:
                 await show_all_done(interaction, edit=True)
         except Exception as e:
@@ -4157,11 +4222,19 @@ class ForumSelectView(discord.ui.View):
     async def forum_waf(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._save(interaction, "waf")
 
+    @discord.ui.button(emoji="🟩", style=discord.ButtonStyle.secondary, custom_id="forum_usmf")
+    async def forum_usmf(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._save(interaction, "usmf")
+
+    @discord.ui.button(emoji="✅", style=discord.ButtonStyle.secondary, custom_id="forum_both")
+    async def forum_both(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._save(interaction, "both")
+
     @discord.ui.button(emoji="❌", style=discord.ButtonStyle.secondary, custom_id="forum_none")
     async def forum_none(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._save(interaction, "none")
 
-async def show_waf_categories(interaction: discord.Interaction):
+async def show_waf_categories(interaction: discord.Interaction, then_usmf=False):
     """Ask user which WAF categories they want to follow."""
     # Build options from WAF_CATEGORIES (skip All WAF Updates)
     options = [
@@ -4206,49 +4279,107 @@ async def show_waf_categories(interaction: discord.Interaction):
             if not self2.selected:
                 await interaction2.followup.send("Please select at least one category.", ephemeral=True)
                 return
-            # Assign selected WAF roles on all guilds the user is in
-            assigned = 0
-            for guild in client.guilds:
-                member = guild.get_member(interaction2.user.id)
-                if not member:
-                    continue
-                for role_id_str in self2.selected:
-                    role = guild.get_role(int(role_id_str))
-                    if role and role not in member.roles:
-                        try:
-                            await member.add_roles(role, reason="WAF category subscription via /start")
-                            assigned += 1
-                        except Exception:
-                            pass
-            # Save to user_preferences
             cat_names = [cat["name"] for cat in WAF_CATEGORIES if str(cat["role_id"]) in self2.selected]
             await db_save_user_waf_categories(str(interaction2.user.id), self2.selected)
-            logger.info(f"[Start] {interaction2.user} subscribed to {len(cat_names)} WAF categories")
+            logger.info(f"[Start] {interaction2.user} subscribed to {len(cat_names)} WAF categories: {cat_names}")
+            if then_usmf:
+                await show_usmf_categories(interaction2)
+            else:
+                await show_all_done(interaction2, edit=True)
+
+        @discord.ui.button(label="⏭️ All Categories", style=discord.ButtonStyle.secondary, row=1)
+        async def all_cats(self2, interaction2: discord.Interaction, button: discord.ui.Button):
+            await interaction2.response.defer(ephemeral=True)
+            all_ids = [str(cat["role_id"]) for cat in WAF_CATEGORIES if cat["name"] != "All WAF Updates"]
+            await db_save_user_waf_categories(str(interaction2.user.id), all_ids)
+            logger.info(f"[Start] {interaction2.user} subscribed to ALL WAF categories")
+            if then_usmf:
+                await show_usmf_categories(interaction2)
+            else:
+                await show_all_done(interaction2, edit=True)
+
+    await interaction.edit_original_response(embed=embed, view=WAFCategoryView())
+
+
+async def db_save_user_usmf_categories(user_id, cat_names):
+    """Save user\'s USMF category names to user_preferences."""
+    cats_str = ",".join(cat_names)
+    async with client.db.acquire() as conn:
+        await conn.execute(
+            """INSERT INTO user_preferences (user_id, usmf_categories, updated_at)
+               VALUES ($1, $2, $3)
+               ON CONFLICT (user_id) DO UPDATE SET usmf_categories=$2, updated_at=$3""",
+            str(user_id), cats_str, int(datetime.now(timezone.utc).timestamp())
+        )
+
+async def show_usmf_categories(interaction: discord.Interaction):
+    """Ask user which USMF categories they want to follow."""
+    options = [
+        discord.SelectOption(
+            label=cat["name"][:100],
+            value=cat["name"],
+            emoji=cat.get("emoji", "📦")
+        )
+        for cat in USMF_CATEGORIES
+    ]
+
+    embed = discord.Embed(
+        title="🦅 USMF Categories",
+        description=(
+            "Which **US Militaria Forum** categories do you want to follow?\n\n"
+            "Select as many as you like, then click **Save**."
+        ),
+        color=discord.Color.dark_gold()
+    )
+    embed.set_footer(text="Adrian — Forum Categories")
+
+    class USMFCategoryView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=300)
+            self.selected = []
+
+        @discord.ui.select(
+            placeholder="Select USMF categories...",
+            options=options,
+            min_values=1,
+            max_values=len(options)
+        )
+        async def select_cats(self2, interaction2: discord.Interaction, select: discord.ui.Select):
+            self2.selected = select.values
+            await interaction2.response.defer(ephemeral=True)
+
+        @discord.ui.button(label="✅ Save", style=discord.ButtonStyle.success, row=1)
+        async def save(self2, interaction2: discord.Interaction, button: discord.ui.Button):
+            await interaction2.response.defer(ephemeral=True)
+            if not self2.selected:
+                await interaction2.followup.send("Please select at least one category.", ephemeral=True)
+                return
+            await db_save_user_usmf_categories(str(interaction2.user.id), self2.selected)
+            logger.info(f"[Start] {interaction2.user} subscribed to {len(self2.selected)} USMF categories")
             await show_all_done(interaction2, edit=True)
 
         @discord.ui.button(label="⏭️ All Categories", style=discord.ButtonStyle.secondary, row=1)
         async def all_cats(self2, interaction2: discord.Interaction, button: discord.ui.Button):
             await interaction2.response.defer(ephemeral=True)
-            # Assign all WAF roles
-            for guild in client.guilds:
-                member = guild.get_member(interaction2.user.id)
-                if not member:
-                    continue
-                for cat in WAF_CATEGORIES:
-                    if cat["name"] == "All WAF Updates":
-                        continue
-                    role = guild.get_role(cat["role_id"])
-                    if role and role not in member.roles:
-                        try:
-                            await member.add_roles(role, reason="WAF all categories via /start")
-                        except Exception:
-                            pass
-            all_ids = [str(cat["role_id"]) for cat in WAF_CATEGORIES if cat["name"] != "All WAF Updates"]
-            await db_save_user_waf_categories(str(interaction2.user.id), all_ids)
-            logger.info(f"[Start] {interaction2.user} subscribed to ALL WAF categories")
+            all_names = [cat["name"] for cat in USMF_CATEGORIES]
+            await db_save_user_usmf_categories(str(interaction2.user.id), all_names)
+            logger.info(f"[Start] {interaction2.user} subscribed to ALL USMF categories")
             await show_all_done(interaction2, edit=True)
 
-    await interaction.edit_original_response(embed=embed, view=WAFCategoryView())
+    await interaction.edit_original_response(embed=embed, view=USMFCategoryView())
+
+
+async def db_save_user_usmf_categories(user_id, category_names):
+    """Save user\'s USMF category names to user_preferences."""
+    cats_str = ",".join(category_names)
+    now = int(datetime.now(timezone.utc).timestamp())
+    async with client.db.acquire() as conn:
+        await conn.execute(
+            """INSERT INTO user_preferences (user_id, usmf_categories, updated_at)
+               VALUES ($1, $2, $3)
+               ON CONFLICT (user_id) DO UPDATE SET usmf_categories=$2, updated_at=$3""",
+            str(user_id), cats_str, now
+        )
 
 
 async def db_save_user_waf_categories(user_id, role_ids):
