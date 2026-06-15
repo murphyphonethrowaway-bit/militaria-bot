@@ -2248,7 +2248,6 @@ def _fetch_gmail_sync():
     # All Gmail folders/tabs to check
     folders = [
         "INBOX",
-        "[Gmail]/All Mail",
         "[Gmail]/Spam",
         '"[Gmail]/Promotions"',
         '"[Gmail]/Updates"',
