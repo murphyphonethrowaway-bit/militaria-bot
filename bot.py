@@ -6818,7 +6818,8 @@ class WelcomeView(discord.ui.View):
             await interaction.response.send_message(f"⏳ Please wait {remaining}s before trying again.", ephemeral=True)
             return
 
-        await interaction.response.defer(ephemeral=True)
+        # Send ephemeral response first — never edit the public welcome message
+        await interaction.response.send_message("👋 Loading...", ephemeral=True)
 
         # Check if user has agreed to Estand rules
         try:
