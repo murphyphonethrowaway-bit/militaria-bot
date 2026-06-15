@@ -2768,7 +2768,6 @@ class SellerProfileView(discord.ui.View):
             joined = getattr(seller, "joined_at", None)
             join_ts = int(joined.timestamp()) if joined else 0
 
-
             embed = discord.Embed(
                 title=f"🎖️ {seller.display_name}'s Seller Profile",
                 color=discord.Color.dark_gold(),
@@ -2794,7 +2793,7 @@ class SellerProfileView(discord.ui.View):
     @discord.ui.button(label="I'll Take It!", emoji="💰", style=discord.ButtonStyle.success, custom_id="estate_ill_take_it")
     async def ill_take_it(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
-            self.seller_id = self._get_seller_id(interaction) or self.seller_id
+            self.seller_id = await self._get_seller_id_async(interaction) or self.seller_id
             if str(interaction.user.id) == str(self.seller_id):
                 await interaction.response.send_message("🚫 You can't buy your own listing!", ephemeral=True)
                 return
@@ -2832,7 +2831,7 @@ class SellerProfileView(discord.ui.View):
     @discord.ui.button(label="Make an Offer", emoji="🤝", style=discord.ButtonStyle.success, custom_id="estate_make_offer")
     async def make_offer(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
-            self.seller_id = self._get_seller_id(interaction) or self.seller_id
+            self.seller_id = await self._get_seller_id_async(interaction) or self.seller_id
             if str(interaction.user.id) == str(self.seller_id):
                 await interaction.response.send_message("🚫 You can't make an offer on your own listing!", ephemeral=True)
                 return
@@ -6851,7 +6850,7 @@ class WelcomeView(discord.ui.View):
             # Already agreed — go straight to onboarding
             await _show_start_onboarding(interaction)
 
-    @discord.ui.button(label="🪪 View My Profile", style=discord.ButtonStyle.primary, custom_id="welcome_view_profile")
+    @discord.ui.button(label="👤 View My Profile", style=discord.ButtonStyle.primary, custom_id="welcome_view_profile")
     async def view_profile(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         # Check if user exists in DB at all (not just if region is set)
@@ -7434,24 +7433,20 @@ async def on_thread_create(thread):
         # Wait for Discord to create the starter message
         await asyncio.sleep(3)
 
-        # Fetch the starter message directly
+        # Fetch the starter message
+        starter = None
         try:
             starter = await thread.fetch_message(thread.id)
             logger.info(f"[Estate] Starter message found: {starter.content[:50] if starter.content else 'no text'}")
         except Exception as e:
             logger.warning(f"[Estate] Could not fetch starter message: {e} — posting anyway")
 
-        # Post check before you buy
-        embed = discord.Embed(
-            title="🏪 Estand Listing",
-            description="Use the buttons below to check the seller\'s profile, make an offer, or contact the seller.",
-            color=discord.Color.dark_gold()
-        )
-        embed.set_footer(text="Adrian — Estand Marketplace")
+        # Post seller action buttons
         view = SellerProfileView(str(seller_id))
-        await thread.send(embed=embed, view=view)
+        await thread.send(view=view)
         bot_state["estand_listing_count"] += 1
-        logger.info(f"[Estate] Check before you buy posted in {thread.name}")
+        logger.info(f"[Estate] Buttons posted in {thread.name}")
+
 
         # Handle cross-posting (Option B and C)
         # Re-fetch config in case it was loaded via server list fallback
@@ -7534,15 +7529,9 @@ async def on_thread_create(thread):
         # Try one more time after longer wait
         try:
             await asyncio.sleep(15)
-            embed = discord.Embed(
-                title="🏪 Estand Listing",
-                description="Use the buttons below to check the seller\'s profile, make an offer, or contact the seller.",
-                color=discord.Color.dark_gold()
-            )
-            embed.set_footer(text="Adrian — Estand Marketplace")
             view = SellerProfileView(str(thread.owner_id))
-            await thread.send(embed=embed, view=view)
-            logger.info(f"[Estate] Check before you buy posted on retry in {thread.name}")
+            await thread.send(view=view)
+            logger.info(f"[Estate] Buttons posted on retry in {thread.name}")
         except Exception as retry_err:
             logger.error(f"[Estate] Retry also failed: {retry_err}")
     except Exception as e:
