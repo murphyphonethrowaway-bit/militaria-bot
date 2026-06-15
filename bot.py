@@ -7619,16 +7619,150 @@ async def on_thread_update(before, after):
             except Exception as e:
                 logger.error(f"[CrossPost] Error marking mirrors sold: {e}")
 
-            # Post buyer identification message in the thread
+            # Post sold notification in the thread
             embed = discord.Embed(
-                title="🏷️ Item Marked as Sold!",
-                description="Congratulations on your sale! 🎉\n\nIf you are the **buyer** of this item, please click the button below to identify yourself. The seller will then be asked to rate you as a buyer.",
-                color=discord.Color.dark_gold(),
+                title="🔴 Item Sold!",
+                description="This listing has been marked as sold. Thank you for using the Estand Marketplace! 🎉",
+                color=discord.Color.red(),
                 timestamp=datetime.now(timezone.utc)
             )
-            embed.set_footer(text="Adrian — Forum Alert | You may need to make a free forum account to see this listing")
-            await after.send(embed=embed, view=BuyerIdentifyView(str(after.id), str(seller_id)))
-            logger.info(f"[Estate] Buyer identification message sent in thread {after.name}")
+            embed.set_footer(text="Adrian — Estand Marketplace")
+            await after.send(embed=embed)
+            logger.info(f"[Estate] Sold notification posted in thread {after.name}")
+
+            # DM the seller with a post-sale message tool
+            try:
+                seller_user = await client.fetch_user(int(seller_id))
+                if seller_user:
+                    default_message = (
+                        f"Hi! Thanks for your purchase of **{after.name}**. "
+                        f"I\'ll be in touch shortly to arrange payment and shipping details. "
+                        f"Please feel free to message me here if you have any questions!"
+                    )
+
+                    class PostSaleMessageView(discord.ui.View):
+                        def __init__(self):
+                            super().__init__(timeout=86400)  # 24 hours
+
+                        @discord.ui.button(label="✉️ Contact Buyer", style=discord.ButtonStyle.success)
+                        async def send_message(self2, interaction2: discord.Interaction, button: discord.ui.Button):
+                            class PostSaleModal(discord.ui.Modal, title="Contact Your Buyer"):
+                                buyer_username = discord.ui.TextInput(
+                                    label="Buyer\'s Discord username",
+                                    placeholder="e.g. username or username#1234",
+                                    max_length=100
+                                )
+                                message_text = discord.ui.TextInput(
+                                    label="Your message",
+                                    style=discord.TextStyle.paragraph,
+                                    default=default_message,
+                                    max_length=1000
+                                )
+                                async def on_submit(self3, interaction3: discord.Interaction):
+                                    try:
+                                        await interaction3.response.defer(ephemeral=True)
+                                        # Try to find buyer by username in the guild
+                                        username_input = self3.buyer_username.value.strip()
+                                        buyer_user = None
+
+                                        if interaction3.guild:
+                                            # Search guild members by name
+                                            for member in interaction3.guild.members:
+                                                if (member.name.lower() == username_input.lower() or
+                                                    member.display_name.lower() == username_input.lower() or
+                                                    str(member).lower() == username_input.lower()):
+                                                    buyer_user = member
+                                                    break
+
+                                        if not buyer_user:
+                                            await interaction3.followup.send(
+                                                f"⚠️ Could not find **{username_input}** on this server. Make sure you typed their exact Discord username.",
+                                                ephemeral=True
+                                            )
+                                            return
+
+                                        # Save buyer to transaction
+                                        await db_set_transaction_buyer(str(after.id), str(buyer_user.id))
+
+                                        buyer_embed = discord.Embed(
+                                            title="📦 Message from your seller",
+                                            description=self3.message_text.value,
+                                            color=discord.Color.dark_gold(),
+                                            timestamp=datetime.now(timezone.utc)
+                                        )
+                                        buyer_embed.add_field(name="Listing", value=after.name, inline=True)
+                                        buyer_embed.add_field(name="Seller", value=seller_user.display_name, inline=True)
+                                        buyer_embed.set_footer(text="Adrian — Estand Marketplace")
+                                        await buyer_user.send(embed=buyer_embed)
+
+                                        await interaction3.followup.send(
+                                            f"✅ Message sent to **{buyer_user.display_name}**! They\'ll also be prompted to rate you as a seller.",
+                                            ephemeral=True
+                                        )
+
+                                        # Now prompt buyer to rate the seller
+                                        try:
+                                            rating_embed = discord.Embed(
+                                                title="⭐ Rate Your Seller",
+                                                description=f"How was your experience buying from **{seller_user.display_name}**?\n\nClick a star rating below:",
+                                                color=discord.Color.dark_gold(),
+                                                timestamp=datetime.now(timezone.utc)
+                                            )
+                                            rating_embed.set_footer(text="Adrian — Estand Marketplace")
+                                            await buyer_user.send(embed=rating_embed, view=EstateRatingView(str(after.id), str(buyer_user.id), str(seller_id)))
+                                        except Exception:
+                                            pass
+
+                                        # Disable button after sending
+                                        for child in self2.children:
+                                            child.disabled = True
+                                        await interaction2.message.edit(view=self2)
+
+                                        logger.info(f"[Estate] Post-sale message sent from seller {seller_id} to buyer {buyer_user.id}")
+
+                                    except discord.Forbidden:
+                                        await interaction3.followup.send(
+                                            "⚠️ Could not DM the buyer — they may have DMs disabled.",
+                                            ephemeral=True
+                                        )
+                                    except Exception as e:
+                                        logger.error(f"[Estate] Post-sale message error: {e}")
+                                        await interaction3.followup.send("⚠️ Something went wrong.", ephemeral=True)
+
+                            await interaction2.response.send_modal(PostSaleModal())
+
+                        @discord.ui.button(label="⏭️ Skip", style=discord.ButtonStyle.secondary)
+                        async def skip(self2, interaction2: discord.Interaction, button: discord.ui.Button):
+                            for child in self2.children:
+                                child.disabled = True
+                            await interaction2.response.edit_message(
+                                embed=discord.Embed(
+                                    description="No problem — you can always message the buyer directly once they identify themselves.",
+                                    color=discord.Color.dark_gold()
+                                ),
+                                view=self2
+                            )
+
+                    seller_embed = discord.Embed(
+                        title="🎉 Your item sold!",
+                        description=(
+                            f"Congratulations on selling **{after.name}**!\n\n"
+                            "Click **Contact Buyer** to enter the buyer\'s Discord username and send them a message. "
+                            "I\'ve pre-written one for you that you can customize.\n\n"
+                            "The buyer will also be prompted to rate you as a seller once you contact them."
+                        ),
+                        color=discord.Color.green(),
+                        timestamp=datetime.now(timezone.utc)
+                    )
+                    seller_embed.add_field(name="Listing", value=after.name, inline=True)
+                    seller_embed.add_field(name="Server", value=after.guild.name, inline=True)
+                    seller_embed.set_footer(text="Adrian — Estand Marketplace")
+                    await seller_user.send(embed=seller_embed, view=PostSaleMessageView())
+                    logger.info(f"[Estate] Post-sale DM sent to seller {seller_id}")
+            except discord.Forbidden:
+                logger.warning(f"[Estate] Could not DM seller {seller_id} — DMs disabled")
+            except Exception as e:
+                logger.error(f"[Estate] Post-sale seller DM error: {e}")
 
     except Exception as e:
         logger.error(f"[Estate] on_thread_update error: {e}\n{traceback.format_exc()}")
@@ -7798,7 +7932,6 @@ async def on_ready():
     client.add_view(CountrySelectView())
     client.add_view(ForumSelectView())
     client.add_view(FinalScreenView())
-    client.add_view(BuyerIdentifyView("placeholder", "placeholder"))
     client.add_view(SellerProfileView("placeholder"))
     client.add_view(EstateRatingView("placeholder", "placeholder", "placeholder"))
     client.add_view(SetupEstateConfirmView())
