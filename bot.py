@@ -1897,22 +1897,22 @@ async def cross_post_listing(thread, seller, starter_message=None):
 
                 # Build mirror embed
                 guild_name = thread.guild.name
-                mirror_embed = discord.Embed(
-                    title=f"🌐 {thread.name}",
-                    description=(
-                        f"{description_snippet}\n\n" if description_snippet else ""
-                    ) + (
-                        f"*Originally posted in **{guild_name}***"
-                    ),
-                    color=discord.Color.dark_gold(),
-                    timestamp=datetime.now(timezone.utc)
-                )
 
-                # Seller info
-                mirror_embed.add_field(
-                    name="👤 Seller",
-                    value=f"{seller.display_name}\n{rank}\n{format_stars(seller_avg)} ({seller_count} sale(s))",
-                    inline=True
+                # Description
+                desc_parts = []
+                if description_snippet:
+                    desc_parts.append(f"{description_snippet}")
+                desc_parts.append(f"")
+                desc_parts.append(f"🏪 **{seller.display_name}** — {rank}")
+                desc_parts.append(f"{format_stars(seller_avg)}  •  {seller_count} sale(s)")
+                desc_parts.append(f"")
+                desc_parts.append(f"📍 *Cross-posted from **{guild_name}***")
+
+                mirror_embed = discord.Embed(
+                    title=thread.name,
+                    description="\n".join(desc_parts),
+                    color=discord.Color.from_rgb(180, 140, 60),
+                    timestamp=datetime.now(timezone.utc)
                 )
 
                 # Image
@@ -1920,7 +1920,10 @@ async def cross_post_listing(thread, seller, starter_message=None):
                     mirror_embed.set_image(url=image_url)
                 # Extra images posted as separate messages below
 
-                mirror_embed.set_footer(text="Adrian — Cross-Posted Listing | Click 'Contact Seller' to negotiate via DM")
+                mirror_embed.set_footer(
+                    text="Adrian Estand  •  Cross-Posted Listing",
+                    icon_url="https://cdn.discordapp.com/attachments/1513273241043599530/1513273241043599530/discord_pfp.png"
+                )
 
                 # Post to destination forum channel
                 tags_to_apply = []
@@ -1953,17 +1956,9 @@ async def cross_post_listing(thread, seller, starter_message=None):
                     thread.name, str(mirror_thread.id)
                 )
 
-                # Add contact seller button with visible embed
-                mirror_embed_buttons = discord.Embed(
-                    title="🏪 Estand Listing",
-                    description="Use the buttons below to check the seller\'s profile, make an offer, or contact the seller.",
-                    color=discord.Color.dark_gold()
-                )
-                mirror_embed_buttons.set_footer(text="Adrian — Estand Marketplace")
-                await mirror_thread.send(
-                    embed=mirror_embed_buttons,
-                    view=SellerProfileView(str(seller.id))
-                )
+                # Action buttons — no extra embed needed
+                await mirror_thread.send(view=SellerProfileView(str(seller.id)))
+
 
                 mirror_count += 1
                 bot_state["cross_post_count"] += 1
