@@ -2116,17 +2116,48 @@ async def check_dealer(session, dealer, seen, channel):
         logger.debug(f"[{name}] No new items ({len(current_items)} items unchanged).")
 
 def _fetch_gmail_sync():
-    """Synchronous Gmail IMAP fetch — run in thread to avoid blocking event loop."""
+    """Synchronous Gmail IMAP fetch — checks all folders including Promotions, Updates, Social tabs."""
     raw_emails = []
+    # All Gmail folders/tabs to check
+    folders = [
+        "INBOX",
+        "[Gmail]/All Mail",
+        "[Gmail]/Spam",
+        '"[Gmail]/Promotions"',
+        '"[Gmail]/Updates"',
+        '"[Gmail]/Social"',
+        '"[Gmail]/Forums"',
+    ]
     try:
         mail = imaplib.IMAP4_SSL("imap.gmail.com", timeout=20)
         mail.login(GMAIL_USER, GMAIL_APP_PASSWORD)
-        mail.select("inbox")
-        _, messages = mail.search(None, "UNSEEN")
-        email_ids = messages[0].split()
-        for eid in email_ids:
-            _, msg_data = mail.fetch(eid, "(RFC822)")
-            raw_emails.append(msg_data[0][1])
+
+        seen_ids = set()
+        for folder in folders:
+            try:
+                status, _ = mail.select(folder, readonly=False)
+                if status != "OK":
+                    continue
+                _, messages = mail.search(None, "UNSEEN")
+                email_ids = messages[0].split()
+                new_in_folder = 0
+                for eid in email_ids:
+                    # Avoid duplicates across folders
+                    _, uid_data = mail.fetch(eid, "(UID)")
+                    uid = uid_data[0].decode() if uid_data and uid_data[0] else str(eid)
+                    if uid in seen_ids:
+                        continue
+                    seen_ids.add(uid)
+                    _, msg_data = mail.fetch(eid, "(RFC822)")
+                    if msg_data and msg_data[0] and msg_data[0][1]:
+                        raw_emails.append(msg_data[0][1])
+                        new_in_folder += 1
+                if new_in_folder > 0:
+                    logger.info(f"[Gmail] Found {new_in_folder} unread email(s) in {folder}")
+            except Exception as fe:
+                logger.debug(f"[Gmail] Could not read folder {folder}: {fe}")
+                continue
+
         try:
             mail.logout()
         except Exception:
