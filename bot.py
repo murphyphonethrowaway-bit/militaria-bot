@@ -2841,9 +2841,17 @@ async def send_waf_alert(channel, parsed, guild):
     try:
         role_id_str = str(parsed["role_id"])
         async with client.db.acquire() as conn:
+            # Use comma-bounded search to prevent partial ID matches
             rows = await conn.fetch(
-                "SELECT user_id FROM user_preferences WHERE waf_categories LIKE $1",
-                f"%{role_id_str}%"
+                """SELECT user_id FROM user_preferences WHERE
+                   waf_categories = $1 OR
+                   waf_categories LIKE $2 OR
+                   waf_categories LIKE $3 OR
+                   waf_categories LIKE $4""",
+                role_id_str,
+                f"{role_id_str},%",
+                f"%,{role_id_str},%",
+                f"%,{role_id_str}"
             )
         if rows:
             mentions = " ".join([f"<@{row['user_id']}>" for row in rows])
