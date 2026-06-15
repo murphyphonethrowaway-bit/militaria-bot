@@ -232,7 +232,8 @@ class MilitariaBot(discord.Client):
             ''')
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS seen_emails (
-                    msg_id TEXT PRIMARY KEY
+                    msg_id TEXT PRIMARY KEY,
+                    seen_at BIGINT DEFAULT 0
                 )
             ''')
             await conn.execute('''
@@ -326,28 +327,26 @@ class MilitariaBot(discord.Client):
                     timestamp BIGINT NOT NULL
                 )
             ''')
-            # Add new columns if they don't exist (safe migration)
-            try:
-                await conn.execute("ALTER TABLE server_config ADD COLUMN view_all_channels INTEGER DEFAULT 0")
-            except Exception as _e:
-
-                logger.debug(f"[Silent] {_e}")
-            try:
-                await conn.execute("ALTER TABLE server_config ADD COLUMN welcome_message_id TEXT")
-            except Exception:
-                pass
-            try:
-                await conn.execute("ALTER TABLE server_config ADD COLUMN estand_verified_role_id TEXT")
-            except Exception:
-                pass
-            try:
-                await conn.execute("ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS estand_agreed INTEGER DEFAULT 0")
-            except Exception:
-                pass
-            try:
-                await conn.execute("ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS created_at BIGINT DEFAULT 0")
-            except Exception:
-                pass  # Column already exists
+            # Safe migrations — IF NOT EXISTS prevents startup noise
+            migrations = [
+                "ALTER TABLE server_config ADD COLUMN IF NOT EXISTS view_all_channels INTEGER DEFAULT 0",
+                "ALTER TABLE server_config ADD COLUMN IF NOT EXISTS welcome_message_id TEXT",
+                "ALTER TABLE server_config ADD COLUMN IF NOT EXISTS estand_verified_role_id TEXT",
+                "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS estand_agreed INTEGER DEFAULT 0",
+                "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS created_at BIGINT DEFAULT 0",
+                "ALTER TABLE server_config ADD COLUMN IF NOT EXISTS accept_cross_posts INTEGER DEFAULT 0",
+                "ALTER TABLE server_config ADD COLUMN IF NOT EXISTS estate_cross_posts_channel_id TEXT",
+                "ALTER TABLE server_config ADD COLUMN IF NOT EXISTS estate_sold_tag_id TEXT",
+                "ALTER TABLE server_config ADD COLUMN IF NOT EXISTS estate_name TEXT",
+                "ALTER TABLE server_config ADD COLUMN IF NOT EXISTS updates_channel_id TEXT",
+                "ALTER TABLE server_config ADD COLUMN IF NOT EXISTS verified_role_id TEXT",
+                "ALTER TABLE seen_emails ADD COLUMN IF NOT EXISTS seen_at BIGINT DEFAULT 0",
+            ]
+            for migration in migrations:
+                try:
+                    await conn.execute(migration)
+                except Exception as _e:
+                    logger.debug(f"[Migration] {_e}")
 
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS estand_blocked_tags (
@@ -739,7 +738,7 @@ async def db_is_email_seen(msg_id):
 
 async def db_mark_email_seen(msg_id):
     async with client.db.acquire() as conn:
-        await conn.execute("INSERT INTO seen_emails (msg_id) VALUES ($1) ON CONFLICT DO NOTHING", msg_id)
+        await conn.execute("INSERT INTO seen_emails (msg_id, seen_at) VALUES ($1, $2) ON CONFLICT DO NOTHING", msg_id, int(datetime.now(timezone.utc).timestamp()))
 
 async def db_get_stat(dealer_name):
     async with client.db.acquire() as conn:
@@ -8152,18 +8151,61 @@ async def start_web_server():
 async def daily_cleanup():
     await client.wait_until_ready()
     while not client.is_closed():
-        await asyncio.sleep(3600)  # Run every hour instead of daily
+        await asyncio.sleep(3600)  # Every hour
         try:
+            # Clean DB alerts
             await db_cleanup_old_alerts()
+
+            # Clean command cooldowns
             cleanup_cooldowns()
-            logger.info("[Cleanup] Hourly cleanup complete")
+
+            # Clean dealer_cooldowns — remove entries older than 2 hours
+            now = datetime.now(timezone.utc)
+            expired_dealers = [
+                k for k, v in list(bot_state["dealer_cooldowns"].items())
+                if (now - v).total_seconds() > 7200
+            ]
+            for k in expired_dealers:
+                del bot_state["dealer_cooldowns"][k]
+            if expired_dealers:
+                logger.debug(f"[Cleanup] Cleared {len(expired_dealers)} dealer cooldown entries")
+
+            # Clear any stuck pending_pings older than 1 hour
+            stuck = [uid for uid, pings in list(bot_state["pending_pings"].items()) if not pings]
+            for uid in stuck:
+                del bot_state["pending_pings"][uid]
+
+            # Clear griffin buffer if it's been sitting too long (>2 hours)
+            if bot_state.get("griffin_timer"):
+                buf_age = (now - bot_state["griffin_timer"]).total_seconds() if isinstance(bot_state.get("griffin_timer"), datetime) else 0
+                if buf_age > 7200:
+                    bot_state["griffin_buffer"] = []
+                    bot_state["griffin_timer"] = None
+                    logger.warning("[Cleanup] Cleared stale Griffin buffer")
+
+            # Log memory usage
+            try:
+                mem_mb = psutil.Process().memory_info().rss / 1024 / 1024
+                logger.info(f"[Cleanup] Hourly cleanup complete | Mem: {mem_mb:.0f}MB | "
+                           f"Pending pings: {len(bot_state['pending_pings'])} | "
+                           f"Dealer cooldowns: {len(bot_state['dealer_cooldowns'])}")
+            except Exception:
+                logger.info("[Cleanup] Hourly cleanup complete")
+
         except Exception as e:
             logger.error(f"[Cleanup] Error: {e}")
-        # Run full cleanup once per day
-        if datetime.now(timezone.utc).hour == 3:  # 3am UTC
+
+        # Run full cleanup once per day at 3am UTC
+        if datetime.now(timezone.utc).hour == 3:
             try:
                 await db_cleanup_watchlist()
-                logger.info("[Cleanup] Daily cleanup complete")
+                # Clean seen_emails table — keep only last 7 days
+                async with client.db.acquire() as conn:
+                    deleted = await conn.execute(
+                        "DELETE FROM seen_emails WHERE seen_at < $1",
+                        int((datetime.now(timezone.utc).timestamp()) - 604800)
+                    )
+                logger.info(f"[Cleanup] Daily cleanup complete")
             except Exception as e:
                 logger.error(f"[Cleanup] Daily cleanup error: {e}")
 
