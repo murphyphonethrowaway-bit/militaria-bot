@@ -354,6 +354,7 @@ class MilitariaBot(discord.Client):
                 "ALTER TABLE server_config ADD COLUMN IF NOT EXISTS estand_verified_role_id TEXT",
                 "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS estand_agreed INTEGER DEFAULT 0",
                 "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS created_at BIGINT DEFAULT 0",
+                "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS waf_categories TEXT DEFAULT ''", 
                 "ALTER TABLE server_config ADD COLUMN IF NOT EXISTS accept_cross_posts INTEGER DEFAULT 0",
                 "ALTER TABLE server_config ADD COLUMN IF NOT EXISTS estate_cross_posts_channel_id TEXT",
                 "ALTER TABLE server_config ADD COLUMN IF NOT EXISTS estate_sold_tag_id TEXT",
@@ -4116,7 +4117,7 @@ async def show_question4(interaction: discord.Interaction, edit=True):
         embeds.append(img_embed)
 
     text_embed = discord.Embed(
-        description="🟥 **WAF** — Wehrmacht Awards Forum only\n🟩 **USMF** — US Militaria Forum only\n✅ **Both** — WAF & USMF\n❌ **None** — Skip forum notifications",
+        description="🟥 **WAF** — Wehrmacht Awards Forum\n❌ **None** — Skip forum notifications",
         color=discord.Color.dark_gold()
     )
     text_embed.set_footer(text="Adrian — Discord's #1 Militaria Bot")
@@ -4141,7 +4142,11 @@ class ForumSelectView(discord.ui.View):
         try:
             await interaction.response.defer(ephemeral=True)
             await db_set_user_forums(str(interaction.user.id), choice)
-            await show_all_done(interaction, edit=True)
+            # If user wants WAF or both — ask which categories
+            if choice == "waf":
+                await show_waf_categories(interaction)
+            else:
+                await show_all_done(interaction, edit=True)
         except Exception as e:
             logger.error(f"[ForumSelect] Error: {e}\n{traceback.format_exc()}")
             try:
@@ -4152,17 +4157,111 @@ class ForumSelectView(discord.ui.View):
     async def forum_waf(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._save(interaction, "waf")
 
-    @discord.ui.button(emoji="🟩", style=discord.ButtonStyle.secondary, custom_id="forum_usmf")
-    async def forum_usmf(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._save(interaction, "usmf")
-
-    @discord.ui.button(emoji="✅", style=discord.ButtonStyle.secondary, custom_id="forum_both")
-    async def forum_both(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._save(interaction, "both")
-
     @discord.ui.button(emoji="❌", style=discord.ButtonStyle.secondary, custom_id="forum_none")
     async def forum_none(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._save(interaction, "none")
+
+async def show_waf_categories(interaction: discord.Interaction):
+    """Ask user which WAF categories they want to follow."""
+    # Build options from WAF_CATEGORIES (skip All WAF Updates)
+    options = [
+        discord.SelectOption(
+            label=cat["name"][:100],
+            value=str(cat["role_id"]),
+            emoji=cat.get("emoji", "🎖️")
+        )
+        for cat in WAF_CATEGORIES if cat["name"] != "All WAF Updates"
+    ]
+
+    embed = discord.Embed(
+        title="🎖️ WAF Categories",
+        description=(
+            "Which **Wehrmacht Awards Forum** categories do you want to follow?\n\n"
+            "You\'ll only get notified for the categories you select.\n"
+            "Select as many as you like, then click **Save**."
+        ),
+        color=discord.Color.dark_gold()
+    )
+    embed.set_footer(text="Adrian — Step 5 of 5")
+
+    class WAFCategoryView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=300)
+            self.selected = []
+
+        @discord.ui.select(
+            placeholder="Select WAF categories...",
+            options=options,
+            min_values=1,
+            max_values=len(options)
+        )
+        async def select_cats(self2, interaction2: discord.Interaction, select: discord.ui.Select):
+            self2.selected = select.values
+            # Just store — wait for save button
+            await interaction2.response.defer(ephemeral=True)
+
+        @discord.ui.button(label="✅ Save", style=discord.ButtonStyle.success, row=1)
+        async def save(self2, interaction2: discord.Interaction, button: discord.ui.Button):
+            await interaction2.response.defer(ephemeral=True)
+            if not self2.selected:
+                await interaction2.followup.send("Please select at least one category.", ephemeral=True)
+                return
+            # Assign selected WAF roles on all guilds the user is in
+            assigned = 0
+            for guild in client.guilds:
+                member = guild.get_member(interaction2.user.id)
+                if not member:
+                    continue
+                for role_id_str in self2.selected:
+                    role = guild.get_role(int(role_id_str))
+                    if role and role not in member.roles:
+                        try:
+                            await member.add_roles(role, reason="WAF category subscription via /start")
+                            assigned += 1
+                        except Exception:
+                            pass
+            # Save to user_preferences
+            cat_names = [cat["name"] for cat in WAF_CATEGORIES if str(cat["role_id"]) in self2.selected]
+            await db_save_user_waf_categories(str(interaction2.user.id), self2.selected)
+            logger.info(f"[Start] {interaction2.user} subscribed to {len(cat_names)} WAF categories")
+            await show_all_done(interaction2, edit=True)
+
+        @discord.ui.button(label="⏭️ All Categories", style=discord.ButtonStyle.secondary, row=1)
+        async def all_cats(self2, interaction2: discord.Interaction, button: discord.ui.Button):
+            await interaction2.response.defer(ephemeral=True)
+            # Assign all WAF roles
+            for guild in client.guilds:
+                member = guild.get_member(interaction2.user.id)
+                if not member:
+                    continue
+                for cat in WAF_CATEGORIES:
+                    if cat["name"] == "All WAF Updates":
+                        continue
+                    role = guild.get_role(cat["role_id"])
+                    if role and role not in member.roles:
+                        try:
+                            await member.add_roles(role, reason="WAF all categories via /start")
+                        except Exception:
+                            pass
+            all_ids = [str(cat["role_id"]) for cat in WAF_CATEGORIES if cat["name"] != "All WAF Updates"]
+            await db_save_user_waf_categories(str(interaction2.user.id), all_ids)
+            logger.info(f"[Start] {interaction2.user} subscribed to ALL WAF categories")
+            await show_all_done(interaction2, edit=True)
+
+    await interaction.edit_original_response(embed=embed, view=WAFCategoryView())
+
+
+async def db_save_user_waf_categories(user_id, role_ids):
+    """Save user\'s WAF category role IDs to user_preferences."""
+    cats_str = ",".join(role_ids)
+    async with client.db.acquire() as conn:
+        await conn.execute(
+            """INSERT INTO user_preferences (user_id, waf_categories, updated_at)
+               VALUES ($1, $2, $3)
+               ON CONFLICT (user_id) DO UPDATE SET waf_categories=$2, updated_at=$3""",
+            str(user_id), cats_str, int(datetime.now(timezone.utc).timestamp())
+        )
+
 
 async def show_all_done(interaction: discord.Interaction, edit=True):
     """Show final screen after all questions answered."""
