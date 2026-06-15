@@ -3794,7 +3794,7 @@ async def show_all_done(interaction: discord.Interaction, edit=True):
         if notify_channel and interaction.guild:
             user = interaction.user
             region = await db_get_user_region(str(user.id))
-            points, _ = await db_get_user_points(str(user.id))
+            points = await db_get_user_points(str(user.id))
             rank = get_rank(points, False)
             region_str = {"NA": "🇺🇸 North America", "EU": "🇪🇺 Europe", "both": "🌍 All"}.get(region, "Not set")
             notify_embed = discord.Embed(
@@ -4107,7 +4107,7 @@ async def _show_estand_rules(interaction, edit=False):
             try:
                 async with client.db.acquire() as conn:
                     await conn.execute(
-                        "INSERT INTO user_preferences (user_id, estand_agreed, created_at) VALUES ($1, 1, $2) ON CONFLICT (user_id) DO UPDATE SET estand_agreed=1",
+                        "INSERT INTO user_preferences (user_id, estand_agreed, created_at, updated_at) VALUES ($1, 1, $2, $2) ON CONFLICT (user_id) DO UPDATE SET estand_agreed=1, updated_at=$2",
                         str(interaction2.user.id), int(datetime.now(timezone.utc).timestamp())
                     )
                 # Grant Estand Verified role if available
@@ -5489,7 +5489,7 @@ async def start_cmd(interaction: discord.Interaction):
                     async with client.db.acquire() as conn2:
                         now = int(datetime.now(timezone.utc).timestamp())
                         await conn2.execute(
-                            "INSERT INTO user_preferences (user_id, estand_agreed, created_at) VALUES ($1, 1, $2) ON CONFLICT (user_id) DO UPDATE SET estand_agreed=1",
+                            "INSERT INTO user_preferences (user_id, estand_agreed, created_at, updated_at) VALUES ($1, 1, $2, $2) ON CONFLICT (user_id) DO UPDATE SET estand_agreed=1, updated_at=$2",
                             str(interaction2.user.id), now
                         )
                     if interaction2.guild:
@@ -6851,7 +6851,7 @@ class WelcomeView(discord.ui.View):
                         async with client.db.acquire() as conn2:
                             now = int(datetime.now(timezone.utc).timestamp())
                             await conn2.execute(
-                                "INSERT INTO user_preferences (user_id, estand_agreed, created_at) VALUES ($1, 1, $2) ON CONFLICT (user_id) DO UPDATE SET estand_agreed=1",
+                                "INSERT INTO user_preferences (user_id, estand_agreed, created_at, updated_at) VALUES ($1, 1, $2, $2) ON CONFLICT (user_id) DO UPDATE SET estand_agreed=1, updated_at=$2",
                                 str(interaction2.user.id), now
                             )
                         # Grant Estand Verified role — try by ID first, fall back to name
