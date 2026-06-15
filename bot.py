@@ -4747,11 +4747,13 @@ async def complete_setup(interaction):
                 reason="Created by Adrian setup"
             )
             results.append("✅ Created **Adrian Verified** role")
-            await db_save_server_config(str(guild.id), verified_role_id=str(verified_role.id))
         except Exception as e:
             results.append(f"⚠️ Could not create Adrian Verified role: {e}")
     else:
         results.append("✅ **Adrian Verified** role already exists")
+    if verified_role:
+        await db_save_server_config(str(guild.id), verified_role_id=str(verified_role.id))
+        logger.info(f"[Setup] Adrian Verified role ID saved: {verified_role.id} for {guild.name}")
 
     # Create Estand Verified role
     estand_verified_role = discord.utils.get(guild.roles, name="Estand Verified")
@@ -4763,11 +4765,13 @@ async def complete_setup(interaction):
                 reason="Created by Adrian setup — grants access to Estand marketplace"
             )
             results.append("✅ Created **Estand Verified** role")
-            await db_save_server_config(str(guild.id), estand_verified_role_id=str(estand_verified_role.id))
         except Exception as e:
             results.append(f"⚠️ Could not create Estand Verified role: {e}")
     else:
         results.append("✅ **Estand Verified** role already exists")
+    if estand_verified_role:
+        await db_save_server_config(str(guild.id), estand_verified_role_id=str(estand_verified_role.id))
+        logger.info(f"[Setup] Estand Verified role ID saved: {estand_verified_role.id} for {guild.name}")
 
     # Create Guerrilla Warfare role
     gw_role = discord.utils.get(guild.roles, name="Guerrilla Warfare")
