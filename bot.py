@@ -1805,7 +1805,76 @@ async def cross_post_listing(thread, seller, starter_message=None):
                                                                     if self.message.value:
                                                                         back_embed.add_field(name="Message", value=self.message.value, inline=False)
                                                                     back_embed.set_footer(text="Adrian — Estand Marketplace")
-                                                                    await seller_user.send(embed=back_embed)
+
+                                                                    # Give seller buttons to continue negotiating
+                                                                    class SellerCounterResponseView(discord.ui.View):
+                                                                        def __init__(self):
+                                                                            super().__init__(timeout=86400)
+
+                                                                        async def _disable(self2, interaction_x):
+                                                                            for child in self2.children:
+                                                                                child.disabled = True
+                                                                            try:
+                                                                                await interaction_x.message.edit(view=self2)
+                                                                            except Exception: pass
+
+                                                                        @discord.ui.button(label="✅ Accept", style=discord.ButtonStyle.success)
+                                                                        async def accept(self2, interaction_x: discord.Interaction, btn: discord.ui.Button):
+                                                                            await self2._disable(interaction_x)
+                                                                            try:
+                                                                                accept_embed = discord.Embed(
+                                                                                    title="🎉 Seller accepted your counter offer!",
+                                                                                    description=f"**{seller_user.display_name}** accepted your offer of **{self.price.value}** for **{_item_title}**!\n\nThey will be in touch to finalize the sale.",
+                                                                                    color=discord.Color.green()
+                                                                                )
+                                                                                accept_embed.set_footer(text="Adrian — Estand Marketplace")
+                                                                                await buyer_user.send(embed=accept_embed)
+                                                                                await interaction_x.response.send_message("✅ You accepted the counter! The buyer has been notified.", ephemeral=True)
+                                                                            except discord.Forbidden:
+                                                                                await interaction_x.response.send_message("⚠️ Could not notify the buyer.", ephemeral=True)
+
+                                                                        @discord.ui.button(label="💰 Counter", style=discord.ButtonStyle.primary)
+                                                                        async def counter_again(self2, interaction_x: discord.Interaction, btn: discord.ui.Button):
+                                                                            class SellerCounterAgainModal(discord.ui.Modal, title="Send Counter Offer"):
+                                                                                price = discord.ui.TextInput(label="Your price", placeholder="e.g. $350", max_length=50)
+                                                                                message = discord.ui.TextInput(label="Message (optional)", style=discord.TextStyle.paragraph, required=False, max_length=500)
+
+                                                                                async def on_submit(self3, interaction_y: discord.Interaction):
+                                                                                    await self2._disable(interaction_x)
+                                                                                    try:
+                                                                                        new_counter_embed = discord.Embed(
+                                                                                            title="💰 Counter Offer Received!",
+                                                                                            description=f"The seller of **{_item_title}** has sent you a counter offer.",
+                                                                                            color=discord.Color.gold()
+                                                                                        )
+                                                                                        new_counter_embed.add_field(name="Asking Price", value=self3.price.value, inline=True)
+                                                                                        if self3.message.value:
+                                                                                            new_counter_embed.add_field(name="Message", value=self3.message.value, inline=False)
+                                                                                        new_counter_embed.add_field(name="Seller", value=f"<@{seller_user.id}>", inline=True)
+                                                                                        new_counter_embed.set_footer(text="Adrian — Estand Marketplace")
+                                                                                        await buyer_user.send(embed=new_counter_embed, view=BuyerResponseView())
+                                                                                        await interaction_y.response.send_message("✅ Counter sent to the buyer!", ephemeral=True)
+                                                                                    except discord.Forbidden:
+                                                                                        await interaction_y.response.send_message("⚠️ Could not DM the buyer.", ephemeral=True)
+
+                                                                            await interaction_x.response.send_modal(SellerCounterAgainModal())
+
+                                                                        @discord.ui.button(label="❌ Decline", style=discord.ButtonStyle.danger)
+                                                                        async def decline(self2, interaction_x: discord.Interaction, btn: discord.ui.Button):
+                                                                            await self2._disable(interaction_x)
+                                                                            try:
+                                                                                dec_embed = discord.Embed(
+                                                                                    title="❌ Seller declined your counter offer",
+                                                                                    description=f"**{seller_user.display_name}** passed on your counter for **{_item_title}**.",
+                                                                                    color=discord.Color.red()
+                                                                                )
+                                                                                dec_embed.set_footer(text="Adrian — Estand Marketplace")
+                                                                                await buyer_user.send(embed=dec_embed)
+                                                                                await interaction_x.response.send_message("You declined the counter. The buyer has been notified.", ephemeral=True)
+                                                                            except discord.Forbidden:
+                                                                                await interaction_x.response.send_message("⚠️ Could not notify the buyer.", ephemeral=True)
+
+                                                                    await seller_user.send(embed=back_embed, view=SellerCounterResponseView())
                                                                     await interaction5.response.send_message("✅ Your counter has been sent to the seller!", ephemeral=True)
                                                                 except discord.Forbidden:
                                                                     await interaction5.response.send_message("⚠️ Could not reach the seller.", ephemeral=True)
@@ -7475,7 +7544,7 @@ async def on_thread_create(thread):
         logger.info(f"[Estate] New listing: {thread.name} by {seller_id}")
 
         # Wait for Discord to create the starter message
-        await asyncio.sleep(3)
+        await asyncio.sleep(5)
 
         # Fetch the starter message
         starter = None
@@ -7576,6 +7645,66 @@ async def on_thread_create(thread):
             view = SellerProfileView(str(thread.owner_id))
             await thread.send(view=view)
             logger.info(f"[Estate] Buttons posted on retry in {thread.name}")
+
+            # Still trigger cross-posting even on retry
+            try:
+                config = await db_get_server_config(str(thread.guild.id))
+                cp_val = config.get("accept_cross_posts") or get_config_value(config, "accept_cross_posts") if config else None
+                if str(cp_val) == "1":
+                    seller = await client.fetch_user(thread.owner_id)
+                    if seller:
+                        applied_tag_names = [t.name.lower() for t in (thread.applied_tags or [])]
+                        if "cross-posted" in applied_tag_names:
+                            logger.info(f"[CrossPost] Auto-mirroring on retry: {thread.name}")
+                            asyncio.create_task(cross_post_listing(thread, seller, None))
+                        else:
+                            dm_embed = discord.Embed(
+                                title="🌐 Cross-post your listing?",
+                                description=(
+                                    f"Your listing **{thread.name}** was just posted in **{thread.guild.name}**!\n\n"
+                                    "Would you like to cross-post it to other Adrian servers so more buyers can see it?\n\n"
+                                    "✅ More exposure across multiple servers\n"
+                                    "💬 Interested buyers will contact you via DM\n"
+                                    "🆓 Completely free"
+                                ),
+                                color=discord.Color.dark_gold()
+                            )
+
+                            class CrossPostOfferViewRetry(discord.ui.View):
+                                def __init__(self):
+                                    super().__init__(timeout=3600)
+
+                                @discord.ui.button(label="🌐 Yes — Cross-post my listing", style=discord.ButtonStyle.success)
+                                async def yes_crosspost(self2, interaction: discord.Interaction, button: discord.ui.Button):
+                                    for child in self2.children:
+                                        child.disabled = True
+                                    await interaction.response.edit_message(
+                                        embed=discord.Embed(title="🌐 Cross-posting...", color=discord.Color.dark_gold()),
+                                        view=self2
+                                    )
+                                    count = await cross_post_listing(thread, seller, None)
+                                    await interaction.edit_original_response(
+                                        embed=discord.Embed(
+                                            title="✅ Listing Cross-Posted!",
+                                            description=f"Mirrored to **{count}** other Adrian server(s)!",
+                                            color=discord.Color.green()
+                                        )
+                                    )
+
+                                @discord.ui.button(label="❌ No thanks", style=discord.ButtonStyle.secondary)
+                                async def no_crosspost(self2, interaction: discord.Interaction, button: discord.ui.Button):
+                                    for child in self2.children:
+                                        child.disabled = True
+                                    await interaction.response.edit_message(
+                                        embed=discord.Embed(description="No problem! Your listing stays local.", color=discord.Color.dark_gold()),
+                                        view=self2
+                                    )
+
+                            await seller.send(embed=dm_embed, view=CrossPostOfferViewRetry())
+                            logger.info(f"[CrossPost] DM sent to seller on retry for {thread.name}")
+            except Exception as cp_err:
+                logger.error(f"[CrossPost] Retry cross-post error: {cp_err}")
+
         except Exception as retry_err:
             logger.error(f"[Estate] Retry also failed: {retry_err}")
     except Exception as e:
