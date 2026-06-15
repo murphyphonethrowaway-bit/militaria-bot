@@ -3835,7 +3835,7 @@ class FollowDealerView(discord.ui.View):
         super().__init__(timeout=None)
         self.dealer_name = dealer_name
 
-    @discord.ui.button(label="Follow Dealer", emoji="🔔", style=discord.ButtonStyle.secondary, custom_id="follow_dealer")
+    @discord.ui.button(emoji="🔔", style=discord.ButtonStyle.secondary, custom_id="follow_dealer")
     async def follow(self, interaction: discord.Interaction, button: discord.ui.Button):
         user_id = str(interaction.user.id)
         if await db_is_following(user_id, self.dealer_name):
@@ -3844,7 +3844,7 @@ class FollowDealerView(discord.ui.View):
         await db_follow_dealer(user_id, self.dealer_name)
         await interaction.response.send_message(f"🔔 You are now following **{self.dealer_name}**! You'll receive a DM whenever they have new items.", ephemeral=True)
 
-    @discord.ui.button(label="Unfollow Dealer", emoji="🔕", style=discord.ButtonStyle.secondary, custom_id="unfollow_dealer")
+    @discord.ui.button(emoji="🔕", style=discord.ButtonStyle.secondary, custom_id="unfollow_dealer")
     async def unfollow(self, interaction: discord.Interaction, button: discord.ui.Button):
         user_id = str(interaction.user.id)
         if not await db_is_following(user_id, self.dealer_name):
