@@ -4206,16 +4206,7 @@ class RegionSelectView(discord.ui.View):
                 await interaction.response.send_message("⚠️ Something went wrong. Please try again.", ephemeral=True)
             except Exception: pass
 
-    @discord.ui.button(label="⏭️ Skip — Just the Estand", style=discord.ButtonStyle.secondary, custom_id="region_select_skip")
-    async def skip_to_estand(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            logger.info(f"[Start] {interaction.user} skipped alerts, going straight to Estand rules")
-            await _show_estand_rules(interaction, edit=True)
-        except Exception as e:
-            logger.error(f"[RegionSelect] Skip error: {e}\n{traceback.format_exc()}")
-            try:
-                await interaction.response.send_message("⚠️ Something went wrong. Please try again.", ephemeral=True)
-            except Exception: pass
+
 
 # ==================== SLASH COMMANDS ====================
 
@@ -6863,16 +6854,24 @@ class WelcomeView(discord.ui.View):
                                 "INSERT INTO user_preferences (user_id, estand_agreed, created_at) VALUES ($1, 1, $2) ON CONFLICT (user_id) DO UPDATE SET estand_agreed=1",
                                 str(interaction2.user.id), now
                             )
-                        # Grant Estand Verified role if available
+                        # Grant Estand Verified role — try by ID first, fall back to name
                         if interaction2.guild:
                             config = await db_get_server_config(str(interaction2.guild.id))
                             estand_role_id = get_config_value(config, "estand_verified_role_id") if config else None
+                            estand_role = None
                             if estand_role_id:
-                                estand_role = interaction2.guild.get_role(int(estand_role_id)) if estand_role_id else None
+                                estand_role = interaction2.guild.get_role(int(estand_role_id))
+                            if not estand_role:
+                                estand_role = discord.utils.get(interaction2.guild.roles, name="Estand Verified")
                                 if estand_role:
-                                    member = interaction2.guild.get_member(interaction2.user.id)
-                                    if member and estand_role not in member.roles:
-                                        await member.add_roles(estand_role, reason="Agreed to Estand rules via Get Started")
+                                    await db_save_server_config(str(interaction2.guild.id), estand_verified_role_id=str(estand_role.id))
+                            if estand_role:
+                                member = interaction2.guild.get_member(interaction2.user.id)
+                                if member and estand_role not in member.roles:
+                                    await member.add_roles(estand_role, reason="Agreed to Estand rules via Get Started")
+                                    logger.info(f"[Welcome] Granted Estand Verified to {interaction2.user} in {interaction2.guild.name}")
+                            else:
+                                logger.warning(f"[Welcome] Could not find Estand Verified role in {interaction2.guild.name}")
                     except Exception as e:
                         logger.error(f"[Welcome] Estand rules save error: {e}")
                     # Now show onboarding
