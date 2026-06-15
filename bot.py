@@ -3735,15 +3735,34 @@ class ForumSelectView(discord.ui.View):
 
 async def show_all_done(interaction: discord.Interaction, edit=True):
     """Show final screen after all questions answered."""
-    # Assign Adrian Verified role — use server config ID first, fallback to hardcoded
+    # Assign Adrian Verified role
     try:
         if interaction.guild:
-            verified_role = await get_server_role(interaction.guild, "verified_role_id", ADRIAN_VERIFIED_ROLE_ID)
-            if verified_role and verified_role not in interaction.user.roles:
-                await interaction.user.add_roles(verified_role, reason="Completed /start onboarding")
-                logger.info(f"[Adrian] Verified role assigned to {interaction.user} in {interaction.guild.name}")
+            config = await db_get_server_config(str(interaction.guild.id))
+            role_id = get_config_value(config, "verified_role_id") if config else None
+            logger.info(f"[Adrian] verified_role_id from DB: {role_id} for guild {interaction.guild.name}")
+
+            # Try by ID first, fall back to name
+            verified_role = None
+            if role_id:
+                verified_role = interaction.guild.get_role(int(role_id))
+            if not verified_role:
+                verified_role = discord.utils.get(interaction.guild.roles, name="Adrian Verified")
+                if verified_role:
+                    logger.info(f"[Adrian] Found role by name fallback: {verified_role.id}")
+                    await db_save_server_config(str(interaction.guild.id), verified_role_id=str(verified_role.id))
+
+            if verified_role:
+                member = interaction.guild.get_member(interaction.user.id)
+                if member and verified_role not in member.roles:
+                    await member.add_roles(verified_role, reason="Completed /start onboarding")
+                    logger.info(f"[Adrian] Verified role assigned to {interaction.user} in {interaction.guild.name}")
+                elif member:
+                    logger.info(f"[Adrian] {interaction.user} already has Adrian Verified role")
+            else:
+                logger.warning(f"[Adrian] Could not find Adrian Verified role in {interaction.guild.name}")
     except Exception as e:
-        logger.error(f"[Adrian] Could not assign verified role: {e}")
+        logger.error(f"[Adrian] Could not assign verified role: {e}\n{traceback.format_exc()}")
 
     embeds = []
     # Show adrain_5th image first, then the thank you image
@@ -4087,13 +4106,27 @@ async def _show_estand_rules(interaction, edit=False):
                 if interaction2.guild:
                     config = await db_get_server_config(str(interaction2.guild.id))
                     estand_role_id = get_config_value(config, "estand_verified_role_id") if config else None
+                    logger.info(f"[Estand] estand_verified_role_id from DB: {estand_role_id} for guild {interaction2.guild.name}")
+
+                    # Try by ID first, fall back to name
+                    estand_role = None
                     if estand_role_id:
-                        estand_role = interaction2.guild.get_role(int(estand_role_id)) if estand_role_id else None
+                        estand_role = interaction2.guild.get_role(int(estand_role_id))
+                    if not estand_role:
+                        estand_role = discord.utils.get(interaction2.guild.roles, name="Estand Verified")
                         if estand_role:
-                            member = interaction2.guild.get_member(interaction2.user.id)
-                            if member and estand_role not in member.roles:
-                                await member.add_roles(estand_role, reason="Agreed to Estand rules")
-                                logger.info(f"[Estand] Granted Estand Verified to {interaction2.user} in {interaction2.guild.name}")
+                            logger.info(f"[Estand] Found role by name fallback: {estand_role.id}")
+                            await db_save_server_config(str(interaction2.guild.id), estand_verified_role_id=str(estand_role.id))
+
+                    if estand_role:
+                        member = interaction2.guild.get_member(interaction2.user.id)
+                        if member and estand_role not in member.roles:
+                            await member.add_roles(estand_role, reason="Agreed to Estand rules")
+                            logger.info(f"[Estand] Granted Estand Verified to {interaction2.user} in {interaction2.guild.name}")
+                        elif member:
+                            logger.info(f"[Estand] {interaction2.user} already has Estand Verified role")
+                    else:
+                        logger.warning(f"[Estand] Could not find Estand Verified role in {interaction2.guild.name}")
             except Exception as e:
                 logger.error(f"[Estand] Rules agree error: {e}")
 
