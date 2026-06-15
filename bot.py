@@ -237,6 +237,16 @@ class MilitariaBot(discord.Client):
                 )
             ''')
             await conn.execute('''
+                CREATE TABLE IF NOT EXISTS seen_dealer_items (
+                    id SERIAL PRIMARY KEY,
+                    dealer_name TEXT NOT NULL,
+                    item_id TEXT NOT NULL,
+                    item_title TEXT,
+                    seen_at BIGINT DEFAULT 0,
+                    UNIQUE(dealer_name, item_id)
+                )
+            ''')
+            await conn.execute('''
                 CREATE TABLE IF NOT EXISTS dealer_stats (
                     dealer_name TEXT PRIMARY KEY,
                     alert_count INTEGER DEFAULT 0
@@ -886,6 +896,63 @@ def format_stars(avg):
     if avg is None:
         return "No ratings yet"
     return "⭐" * full + "☆" * (5 - full) + f" ({avg:.1f})"
+
+# ==================== SEEN DEALER ITEMS ====================
+
+import re as _re
+
+def parse_snapshot_items(snapshot_text):
+    """Parse item numbers and titles from a Changedetection.io snapshot."""
+    if not snapshot_text:
+        return []
+    items = []
+    # Match "Item Number: XXXXX" pattern (Griffin style)
+    item_number_matches = _re.findall(r'Item Number[:\\s]+([A-Za-z0-9\\-]+)', snapshot_text)
+    for item_id in item_number_matches:
+        items.append(item_id.strip())
+    # If no item numbers found, try extracting product titles/links
+    if not items:
+        # Match lines that look like product titles (short lines with capital words)
+        lines = [l.strip() for l in snapshot_text.splitlines() if l.strip()]
+        for line in lines:
+            # Skip navigation, prices, generic text
+            if len(line) < 5 or len(line) > 150:
+                continue
+            if line.startswith('$') or line.startswith('€') or line.startswith('*'):
+                continue
+            if any(skip in line.lower() for skip in ['menu', 'cart', 'search', 'home', 'contact', 'shipping', 'add to']):
+                continue
+            items.append(line[:100])
+    return items
+
+async def db_get_seen_items(dealer_name):
+    """Get all seen item IDs for a dealer."""
+    async with client.db.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT item_id FROM seen_dealer_items WHERE dealer_name=$1",
+            dealer_name
+        )
+        return {r["item_id"] for r in rows}
+
+async def db_save_seen_items(dealer_name, item_ids, item_titles=None):
+    """Save new item IDs as seen for a dealer."""
+    now = int(datetime.now(timezone.utc).timestamp())
+    async with client.db.acquire() as conn:
+        for item_id in item_ids:
+            title = (item_titles or {}).get(item_id, "")
+            await conn.execute(
+                "INSERT INTO seen_dealer_items (dealer_name, item_id, item_title, seen_at) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING",
+                dealer_name, item_id, title, now
+            )
+
+async def db_cleanup_seen_items():
+    """Remove seen items older than 90 days to prevent DB bloat."""
+    cutoff = int(datetime.now(timezone.utc).timestamp()) - (90 * 86400)
+    async with client.db.acquire() as conn:
+        deleted = await conn.execute(
+            "DELETE FROM seen_dealer_items WHERE seen_at < $1", cutoff
+        )
+        logger.debug(f"[Cleanup] Removed old seen dealer items")
 
 # ==================== ESTAND BLOCKED TAGS DB ====================
 
@@ -8539,6 +8606,32 @@ async def handle_webhook(request):
                 display_name = url_name
             else:
                 display_name = watch_title.replace(" – Griffin Militaria", "").replace(" - Griffin Militaria", "").strip() or page_name or "New Items"
+            # Check snapshot for new Griffin items
+            try:
+                body_text = await request.text()
+                snapshot_text = ""
+                if body_text:
+                    try:
+                        import json as _json2
+                        body_json = _json2.loads(body_text)
+                        if isinstance(body_json, list) and body_json:
+                            snapshot_text = body_json[0].get("original_context", {}).get("current_snapshot", "") or ""
+                    except Exception:
+                        snapshot_text = body_text
+
+                if snapshot_text:
+                    parsed_items = parse_snapshot_items(snapshot_text)
+                    if parsed_items:
+                        seen = await db_get_seen_items("Griffin Militaria")
+                        new_items = [i for i in parsed_items if i not in seen]
+                        if not new_items:
+                            logger.info(f"[Griffin] No new items in {display_name} — skipping")
+                            return web.Response(text="No new items", status=200)
+                        await db_save_seen_items("Griffin Militaria", new_items)
+                        logger.info(f"[Griffin] {len(new_items)} new item(s) in {display_name}")
+            except Exception as ge:
+                logger.debug(f"[Griffin] Snapshot check error: {ge} — buffering anyway")
+
             bot_state["griffin_buffer"].append((display_name, page_url))
             if bot_state["griffin_timer"] is None:
                 bot_state["griffin_timer"] = asyncio.create_task(send_griffin_combined())
@@ -8549,6 +8642,39 @@ async def handle_webhook(request):
         if not dealer:
             logger.warning(f"[Webhook] Unknown dealer: {dealer_name}")
             return web.Response(text="Unknown dealer", status=404)
+
+        # Parse snapshot to check for genuinely new items
+        try:
+            body_text = await request.text()
+            snapshot_text = ""
+            if body_text:
+                try:
+                    import json as _json
+                    body_json = _json.loads(body_text)
+                    if isinstance(body_json, list) and body_json:
+                        snapshot_text = body_json[0].get("original_context", {}).get("current_snapshot", "") or ""
+                    elif isinstance(body_json, dict):
+                        snapshot_text = body_json.get("original_context", {}).get("current_snapshot", "") or ""
+                except Exception:
+                    snapshot_text = body_text
+
+            if snapshot_text:
+                parsed_items = parse_snapshot_items(snapshot_text)
+                if parsed_items:
+                    seen = await db_get_seen_items(dealer_name)
+                    new_items = [i for i in parsed_items if i not in seen]
+                    if not new_items:
+                        logger.info(f"[Webhook] {dealer_name} — no new items (all {len(parsed_items)} already seen) — skipping alert")
+                        return web.Response(text="No new items", status=200)
+                    # Save new items as seen
+                    await db_save_seen_items(dealer_name, new_items)
+                    logger.info(f"[Webhook] {dealer_name} — {len(new_items)} NEW item(s) detected: {new_items[:3]}")
+                else:
+                    logger.debug(f"[Webhook] {dealer_name} — could not parse items from snapshot, firing alert anyway")
+            else:
+                logger.debug(f"[Webhook] {dealer_name} — no snapshot in payload, firing alert anyway")
+        except Exception as se:
+            logger.debug(f"[Webhook] Snapshot check error: {se} — firing alert anyway")
 
         # Post to ALL servers' updates channels
         updates_channels = await get_all_server_channels("updates_channel_id", ADRIAN_UPDATES_CHANNEL_ID)
@@ -8697,6 +8823,7 @@ async def daily_cleanup():
         if datetime.now(timezone.utc).hour == 3:
             try:
                 await db_cleanup_watchlist()
+                await db_cleanup_seen_items()
                 # Clean seen_emails table — keep only last 7 days
                 async with client.db.acquire() as conn:
                     deleted = await conn.execute(
