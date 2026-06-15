@@ -96,7 +96,6 @@ DEALERS = [
 EMAIL_DEALERS = [
     {"name": "The Ruptured Duck", "flag": "🇺🇸", "region": "NA", "match": ["therupturedduck.com", "ruptured duck"], "logo_file": "ruptured_duck.png", "url": "https://www.therupturedduck.com/collections/recently-added-items", "eras": [2, 3], "countries": ['A', 'D']},
     {"name": "War's End Shop", "flag": "🇺🇸", "region": "NA", "match": ["warsendshop.com", "war's end", "wars end"], "logo_file": "warsend.png", "url": "https://www.warsendshop.com/collections/new-items", "eras": [0], "countries": ['D']},
-    {"name": "Lakeside Trader", "flag": "🇺🇸", "region": "NA", "match": ["lakesidetrader.com", "lakeside trader"], "logo_file": "lakeside.png", "url": "https://www.lakesidetrader.com/recently-added-items/", "eras": [0], "countries": ['Z']},
     {"name": "Dutch Militaria", "flag": "🇳🇱", "region": "EU", "match": ["dutchmilitaria.com", "dutch militaria"], "logo_file": "dutch_militaria.png", "url": "https://dutchmilitaria.com/", "eras": [2, 3], "countries": ['D']},
     {"name": "Militaria Sales", "flag": "🇺🇸", "region": "NA", "match": ["militariasales.com", "militaria sales"], "logo_file": "militaria_sales.png", "url": "https://www.militariasales.com/new-item/", "eras": [2, 3, 6], "countries": ['A', 'D', 'J', 'G']},
     {"name": "Military Collectibles", "flag": "🇺🇸", "region": "NA", "match": ["info@militarycollectibles.com", "militarycollectibles.com"], "logo_file": "military_collectibles.png", "url": "https://militarycollectibles.com/shop?s=n", "eras": [2, 3], "countries": ['D']},
@@ -1611,10 +1610,12 @@ async def cross_post_listing(thread, seller, starter_message=None):
 
         # Get image from starter message if available
         image_url = None
+        extra_image_urls = []
         extra_images = 0
         if starter_message and starter_message.attachments:
             image_url = starter_message.attachments[0].url
-            extra_images = len(starter_message.attachments) - 1
+            extra_image_urls = [a.url for a in starter_message.attachments[1:]]
+            extra_images = len(extra_image_urls)
 
         # Get description snippet from starter message
         description_snippet = ""
@@ -1917,12 +1918,7 @@ async def cross_post_listing(thread, seller, starter_message=None):
                 # Image
                 if image_url:
                     mirror_embed.set_image(url=image_url)
-                if extra_images > 0:
-                    mirror_embed.add_field(
-                        name="📷 Photos",
-                        value=f"+{extra_images} more photo(s)",
-                        inline=True
-                    )
+                # Extra images posted as separate messages below
 
                 mirror_embed.set_footer(text="Adrian — Cross-Posted Listing | Click 'Contact Seller' to negotiate via DM")
 
@@ -1939,6 +1935,16 @@ async def cross_post_listing(thread, seller, starter_message=None):
                     embed=mirror_embed,
                     applied_tags=tags_to_apply
                 )
+
+                # Post extra images if any
+                if extra_image_urls:
+                    for img_url in extra_image_urls[:4]:  # Max 4 extra images
+                        try:
+                            extra_embed = discord.Embed(color=discord.Color.dark_gold())
+                            extra_embed.set_image(url=img_url)
+                            await mirror_thread.send(embed=extra_embed)
+                        except Exception as ie:
+                            logger.debug(f"[CrossPost] Could not post extra image: {ie}")
 
                 # Save mirror to DB
                 await db_save_cross_post_mirror(
@@ -2722,18 +2728,33 @@ class SellerProfileView(discord.ui.View):
         self.seller_id = seller_id
 
     def _get_seller_id(self, interaction: discord.Interaction):
-        """Get seller ID from self or fall back to thread owner."""
+        """Get seller ID from self or fall back to DB lookup."""
         if self.seller_id and self.seller_id != "placeholder":
             return self.seller_id
-        # Fall back to thread owner
+        return None
+
+    async def _get_seller_id_async(self, interaction: discord.Interaction):
+        """Get seller ID — checks DB for cross-posted mirrors."""
+        if self.seller_id and self.seller_id != "placeholder":
+            return self.seller_id
+        # Check DB for cross-post mirror
         if isinstance(interaction.channel, discord.Thread):
-            return str(interaction.channel.owner_id)
+            try:
+                async with client.db.acquire() as conn:
+                    row = await conn.fetchrow(
+                        "SELECT seller_id FROM cross_post_mirrors WHERE mirror_thread_id=$1",
+                        str(interaction.channel.id)
+                    )
+                    if row:
+                        return str(row["seller_id"])
+            except Exception as e:
+                logger.debug(f"[SellerProfile] DB lookup error: {e}")
         return None
 
     @discord.ui.button(label="Check Seller Profile", emoji="🔍", style=discord.ButtonStyle.primary, custom_id="estate_check_seller")
     async def check_seller(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
-            seller_id = self._get_seller_id(interaction)
+            seller_id = await self._get_seller_id_async(interaction)
             if not seller_id:
                 await interaction.response.send_message("⚠️ Could not find seller.", ephemeral=True)
                 return
