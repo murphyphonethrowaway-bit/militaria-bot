@@ -7821,69 +7821,64 @@ async def on_ready():
     client.add_view(WelcomeView())
     logger.info("Persistent views registered.")
 
-    # Post welcome image to #Adrian on every startup — delete old one first
+    # Post welcome image to all configured #adrian channels on startup
     try:
-        adrian_channel = client.get_channel(CHANNEL_ID)
-        if adrian_channel:
-            # Delete ALL existing messages in #adrian to keep it clean
-            try:
-                async for msg in adrian_channel.history(limit=50):
-                    try:
-                        await msg.delete()
-                    except Exception:
-                        pass
-                logger.info("[Startup] Cleared old messages from #adrian")
-            except Exception as ce:
-                logger.warning(f"[Startup] Could not clear #adrian: {ce}")
-
-            welcome_file = os.path.join(SCRIPT_DIR, "logos", "adrian", "Adrian_welcome.png")
-            if os.path.exists(welcome_file):
-                welcome_msg = await adrian_channel.send(
-                    file=discord.File(welcome_file, filename="Adrian_welcome.png"),
-                    view=WelcomeView()
-                )
-                # Save message ID for reaction watching
-                await db_save_server_config(str(adrian_channel.guild.id), welcome_message_id=str(welcome_msg.id))
-                logger.info("[Startup] Welcome image posted to #Adrian with buttons.")
-            else:
-                logger.warning("[Startup] Adrian_welcome.png not found in logos folder.")
+        welcome_file = os.path.join(SCRIPT_DIR, "logos", "adrian", "Adrian_welcome.png")
+        if not os.path.exists(welcome_file):
+            logger.warning("[Startup] Adrian_welcome.png not found — skipping welcome post")
         else:
-            logger.warning("[Startup] Could not find #Adrian channel.")
+            # Build list of all channels to refresh — deduplicated by channel ID
+            channels_to_refresh = {}
 
-        # Also clean and refresh welcome message on all other configured servers
-        try:
-            all_servers = await db_get_all_servers()
-            for server in all_servers:
-                srv_channel_id = get_config_value(server, "channel_id")
-                if not srv_channel_id or int(srv_channel_id) == CHANNEL_ID:
-                    continue  # Skip main server, already handled above
-                srv_channel = client.get_channel(int(srv_channel_id))
-                if not srv_channel:
-                    continue
+            # Always include hardcoded main server channel
+            main_channel = client.get_channel(CHANNEL_ID)
+            if main_channel:
+                channels_to_refresh[CHANNEL_ID] = (main_channel, str(main_channel.guild.id))
+
+            # Add all configured servers
+            try:
+                all_servers = await db_get_all_servers()
+                for server in all_servers:
+                    srv_channel_id = get_config_value(server, "channel_id")
+                    guild_id = get_config_value(server, "guild_id")
+                    if not srv_channel_id:
+                        continue
+                    srv_channel_id = int(srv_channel_id)
+                    srv_channel = client.get_channel(srv_channel_id)
+                    if srv_channel:
+                        channels_to_refresh[srv_channel_id] = (srv_channel, str(guild_id))
+            except Exception as e:
+                logger.warning(f"[Startup] Could not load server list: {e}")
+
+            # Refresh each channel
+            for channel_id, (channel, guild_id) in channels_to_refresh.items():
                 try:
-                    # Clear old messages
-                    async for msg in srv_channel.history(limit=50):
-                        try:
-                            await msg.delete()
-                        except Exception:
-                            pass
+                    # Bulk delete up to 100 messages (must be under 14 days old)
+                    try:
+                        deleted = await channel.purge(limit=100, reason="Adrian startup cleanup")
+                        logger.info(f"[Startup] Cleared {len(deleted)} messages from #{channel.name} in {channel.guild.name}")
+                    except discord.Forbidden:
+                        logger.warning(f"[Startup] No permission to purge #{channel.name} in {channel.guild.name}")
+                    except Exception as pe:
+                        logger.warning(f"[Startup] Purge failed for #{channel.name}: {pe}")
+
                     # Post fresh welcome message
-                    welcome_file = os.path.join(SCRIPT_DIR, "logos", "adrian", "Adrian_welcome.png")
-                    if os.path.exists(welcome_file):
-                        welcome_msg = await srv_channel.send(
-                            file=discord.File(welcome_file, filename="Adrian_welcome.png"),
-                            view=WelcomeView()
-                        )
-                        await db_save_server_config(server["guild_id"], welcome_message_id=str(welcome_msg.id))
-                        logger.info(f"[Startup] Refreshed welcome in #{srv_channel.name} on {srv_channel.guild.name}")
+                    welcome_msg = await channel.send(
+                        file=discord.File(welcome_file, filename="Adrian_welcome.png"),
+                        view=WelcomeView()
+                    )
+                    await db_save_server_config(guild_id, welcome_message_id=str(welcome_msg.id))
+                    logger.info(f"[Startup] Welcome posted to #{channel.name} in {channel.guild.name}")
+
+                    await asyncio.sleep(0.5)  # Small delay between servers
+
                 except Exception as se:
-                    logger.warning(f"[Startup] Could not refresh welcome on server {server.get('guild_name')}: {se}")
-        except Exception as e:
-            logger.debug(f"[Startup] Multi-server welcome refresh error: {e}")
+                    logger.warning(f"[Startup] Could not refresh #{channel.name}: {se}")
 
     except Exception as e:
-        logger.error(f"[Startup] Failed to post welcome image: {e}")
-    # Upload question images — use DB cache to avoid re-uploading every restart
+        logger.error(f"[Startup] Welcome post error: {e}\n{traceback.format_exc()}")
+
+        # Upload question images — use DB cache to avoid re-uploading every restart
     try:
         img_host_channel = client.get_channel(IMAGE_HOST_CHANNEL_ID)
         if img_host_channel:
