@@ -3597,7 +3597,10 @@ class CountrySelectView(discord.ui.View):
             text_embed.set_footer(text="Adrian — Discord's #1 Militaria Bot")
             embeds.append(text_embed)
 
-            await interaction.response.edit_message(embeds=embeds, view=CountrySelectView(list(self.selected)))
+            if interaction.response.is_done():
+                await interaction.edit_original_response(embeds=embeds, view=CountrySelectView(list(self.selected)))
+            else:
+                await interaction.response.edit_message(embeds=embeds, view=CountrySelectView(list(self.selected)))
         except Exception as e:
             logger.error(f"[CountrySelect] Toggle error: {e}\n{traceback.format_exc()}")
             try:
@@ -3946,10 +3949,11 @@ async def show_question3(interaction: discord.Interaction, edit=True):
     text_embed.set_footer(text="Adrian — Discord's #1 Militaria Bot")
     embeds.append(text_embed)
 
-    if edit:
-        await interaction.response.edit_message(embeds=embeds, view=CountrySelectView(existing_countries or []))
+    if interaction.response.is_done():
+        await interaction.edit_original_response(embeds=embeds, view=CountrySelectView(existing_countries or []))
     else:
-        await interaction.response.send_message(embeds=embeds, view=CountrySelectView(existing_countries or []), ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
+        await interaction.edit_original_response(embeds=embeds, view=CountrySelectView(existing_countries or []))
 
 async def show_question2(interaction: discord.Interaction, edit=True):
     """Show question 2 — era selection."""
@@ -3980,10 +3984,11 @@ async def show_question2(interaction: discord.Interaction, edit=True):
     text_embed.set_footer(text="Adrian — Discord's #1 Militaria Bot")
     embeds.append(text_embed)
 
-    if edit:
-        await interaction.response.edit_message(embeds=embeds, view=EraSelectView(existing_eras or []))
+    if interaction.response.is_done():
+        await interaction.edit_original_response(embeds=embeds, view=EraSelectView(existing_eras or []))
     else:
-        await interaction.response.send_message(embeds=embeds, view=EraSelectView(existing_eras or []), ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
+        await interaction.edit_original_response(embeds=embeds, view=EraSelectView(existing_eras or []))
 
 class EraSelectView(discord.ui.View):
     def __init__(self, selected_eras=None):
@@ -4062,7 +4067,10 @@ class EraSelectView(discord.ui.View):
             text_embed.set_footer(text="Adrian — Discord's #1 Militaria Bot")
             embeds.append(text_embed)
 
-            await interaction.response.edit_message(embeds=embeds, view=EraSelectView(list(self.selected)))
+            if interaction.response.is_done():
+                await interaction.edit_original_response(embeds=embeds, view=EraSelectView(list(self.selected)))
+            else:
+                await interaction.response.edit_message(embeds=embeds, view=EraSelectView(list(self.selected)))
         except Exception as e:
             logger.error(f"[EraSelect] Toggle error: {e}\n{traceback.format_exc()}")
             try:
