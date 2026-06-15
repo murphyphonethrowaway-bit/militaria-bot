@@ -237,6 +237,16 @@ class MilitariaBot(discord.Client):
                 )
             ''')
             await conn.execute('''
+                CREATE TABLE IF NOT EXISTS waf_thread_stats (
+                    forum_url TEXT PRIMARY KEY,
+                    item_title TEXT,
+                    notification_count INTEGER DEFAULT 0,
+                    bump_count INTEGER DEFAULT 0,
+                    last_price TEXT,
+                    last_notified BIGINT DEFAULT 0
+                )
+            ''')
+            await conn.execute('''
                 CREATE TABLE IF NOT EXISTS seen_dealer_items (
                     id SERIAL PRIMARY KEY,
                     dealer_name TEXT NOT NULL,
@@ -896,6 +906,41 @@ def format_stars(avg):
     if avg is None:
         return "No ratings yet"
     return "⭐" * full + "☆" * (5 - full) + f" ({avg:.1f})"
+
+# ==================== WAF THREAD STATS ====================
+
+async def db_increment_waf_thread(forum_url, item_title, price_str="", is_bump=False):
+    """Track notification and bump counts per WAF thread."""
+    now = int(datetime.now(timezone.utc).timestamp())
+    async with client.db.acquire() as conn:
+        if is_bump:
+            await conn.execute(
+                """INSERT INTO waf_thread_stats (forum_url, item_title, bump_count, last_price, last_notified)
+                   VALUES ($1, $2, 1, $3, $4)
+                   ON CONFLICT (forum_url) DO UPDATE SET
+                   bump_count = waf_thread_stats.bump_count + 1,
+                   last_price = COALESCE(NULLIF($3, \'\'), waf_thread_stats.last_price),
+                   last_notified = $4""",
+                forum_url, item_title, price_str, now
+            )
+        else:
+            await conn.execute(
+                """INSERT INTO waf_thread_stats (forum_url, item_title, notification_count, last_price, last_notified)
+                   VALUES ($1, $2, 1, $3, $4)
+                   ON CONFLICT (forum_url) DO UPDATE SET
+                   notification_count = waf_thread_stats.notification_count + 1,
+                   last_price = COALESCE(NULLIF($3, \'\'), waf_thread_stats.last_price),
+                   last_notified = $4""",
+                forum_url, item_title, price_str, now
+            )
+
+async def db_get_waf_thread_stats(forum_url):
+    """Get stats for a WAF thread."""
+    async with client.db.acquire() as conn:
+        return await conn.fetchrow(
+            "SELECT notification_count, bump_count, last_price FROM waf_thread_stats WHERE forum_url=$1",
+            forum_url
+        )
 
 # ==================== SEEN DEALER ITEMS ====================
 
@@ -2400,7 +2445,7 @@ async def _check_all_dealers_inner():
 
 # ==================== WAF EMAIL PARSER ====================
 
-BUMP_KEYWORDS = ["up", "bump", "still available", "still for sale", "ttt", "btt", "to the top", "glws", "price reduced", "price drop", "make offer", "reduced"]
+BUMP_KEYWORDS = ["up", "bump", "still available", "still for sale", "ttt", "btt", "to the top", "glws", "price reduced", "price drop", "make offer", "reduced", "price drop", "lowered", "will consider", "open to offers", "bump it up", "bringing to top", "back to top", "anyone interested", "still here", "available", "taking offers"]
 
 def parse_waf_email(subject, body):
     """Parse a WAF email and extract item title, prices and check if it's a bump."""
@@ -2429,10 +2474,15 @@ def parse_waf_email(subject, body):
     is_bump = False
     if msg_body_clean:
         msg_lower = msg_body_clean.lower().strip()
-        is_bump = (
-            any(keyword == msg_lower for keyword in BUMP_KEYWORDS) or
-            (len(msg_lower) < 15 and any(keyword in msg_lower for keyword in BUMP_KEYWORDS))
-        )
+        # Exact match on short messages
+        exact_match = any(keyword == msg_lower for keyword in BUMP_KEYWORDS)
+        # Short message (under 60 chars) containing a bump keyword
+        short_bump = len(msg_lower) < 60 and any(keyword in msg_lower for keyword in BUMP_KEYWORDS)
+        # Message starts with a bump keyword
+        starts_with_bump = any(msg_lower.startswith(keyword) for keyword in BUMP_KEYWORDS)
+        # Message is ONLY bump content — no price mentioned
+        has_price = bool(re.search(r"[\$€£]\s*\d{2,}", msg_lower))
+        is_bump = (exact_match or short_bump or starts_with_bump) and not has_price
 
     # Extract prices from message body only (avoids grabbing node IDs from URLs)
     price_pattern = r"(?:[\$\u20ac\xa3]\s*\d{2,6}(?:[.,]\d{2})?|\d{2,6}(?:[.,]\d{2})?\s*(?:EUR|USD|GBP))"
@@ -2562,6 +2612,9 @@ async def send_usmf_alert(channel, parsed):
         color=discord.Color.dark_blue(),
         timestamp=datetime.now(timezone.utc)
     )
+    embed.add_field(name="📬 Notification #", value=str(notif_count), inline=True)
+    if bump_count > 0:
+        embed.add_field(name="🔄 Times Bumped", value=str(bump_count), inline=True)
     embed.set_footer(text="Adrian — Forum Alert | You may need to make a free forum account to see this listing")
 
     logo_file = os.path.join(SCRIPT_DIR, "logos", "usmf.png")
@@ -2638,13 +2691,46 @@ async def send_usmf_alert(channel, parsed):
 
 async def send_waf_alert(channel, parsed, guild):
     """Send a formatted WAF Estate alert to members with the correct role."""
+    forum_url = parsed.get("forum_url", "")
+    item_title = parsed.get("item_title", "Unknown")
+    price_str_raw = " | ".join(parsed["prices"]) if parsed["prices"] else ""
+
     if parsed["is_bump"]:
-        logger.info(f"[WAF] Skipping bump for: {parsed['item_title']}")
-        return
+        # Track bump but check for price drop first
+        if forum_url:
+            await db_increment_waf_thread(forum_url, item_title, price_str_raw, is_bump=True)
+            stats = await db_get_waf_thread_stats(forum_url)
+            last_price = stats["last_price"] if stats else None
+            bump_count = stats["bump_count"] if stats else 1
+            notif_count = stats["notification_count"] if stats else 0
+
+            # Only alert if there is a new lower price
+            if price_str_raw and last_price and price_str_raw != last_price:
+                logger.info(f"[WAF] Price drop detected for: {item_title} — {last_price} → {price_str_raw}")
+                # Fall through to send a price drop alert below
+                parsed["is_bump"] = False
+                parsed["price_drop"] = True
+                parsed["old_price"] = last_price
+            else:
+                logger.info(f"[WAF] Bump silently ignored for: {item_title} (bump #{bump_count})")
+                return
+        else:
+            logger.info(f"[WAF] Bump silently ignored for: {item_title}")
+            return
 
     role = guild.get_role(parsed["role_id"]) if guild else None
 
     price_str = " | ".join(parsed["prices"]) if parsed["prices"] else ""
+
+    # Track notification count
+    if forum_url:
+        await db_increment_waf_thread(forum_url, item_title, price_str, is_bump=False)
+        stats = await db_get_waf_thread_stats(forum_url)
+        notif_count = stats["notification_count"] if stats else 1
+        bump_count = stats["bump_count"] if stats else 0
+    else:
+        notif_count = 1
+        bump_count = 0
 
     # Look up emoji for this category
     cat_emoji = "🎖️"
@@ -2655,15 +2741,19 @@ async def send_waf_alert(channel, parsed, guild):
 
     # Embed: category as title, item name in description
     description = f"**{parsed['item_title']}**\n"
-    if price_str:
+    if parsed.get("price_drop") and parsed.get("old_price"):
+        description += f"\n💰 ~~{parsed['old_price']}~~ → **{price_str}** 📉\n"
+    elif price_str:
         description += f"\n💰 **{price_str}**\n"
     if parsed["forum_url"]:
         description += f"\n[**View Listing →**]({parsed['forum_url']})"
 
+    embed_color = discord.Color.green() if parsed.get("price_drop") else discord.Color.dark_gold()
+    embed_title = f"📉 Price Drop — {parsed['category']}" if parsed.get("price_drop") else f"{cat_emoji} {parsed['category']}"
     embed = discord.Embed(
-        title=f"{cat_emoji} {parsed['category']}",
+        title=embed_title,
         description=description,
-        color=discord.Color.dark_gold(),
+        color=embed_color,
         timestamp=datetime.now(timezone.utc)
     )
     embed.set_footer(text="Adrian — Forum Alert | You may need to make a free forum account to see this listing")
@@ -8708,9 +8798,9 @@ async def handle_webhook(request):
                 embed.set_thumbnail(url="attachment://logo.png")
 
             if file:
-                await channel.send(file=file, embed=embed)
+                await channel.send(file=file, embed=embed, view=FollowDealerView(dealer_name))
             else:
-                await channel.send(embed=embed)
+                await channel.send(embed=embed, view=FollowDealerView(dealer_name))
         logger.info(f"[Webhook] Alert sent for {dealer_name} to {len(updates_channels)} server(s)!")
 
         return web.Response(text="OK", status=200)
