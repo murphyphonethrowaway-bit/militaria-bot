@@ -3777,7 +3777,7 @@ class WatchItemView(discord.ui.View):
         self.item_title = item_title
         self.price = price
 
-    @discord.ui.button(label="Watch Item", emoji="🔔", style=discord.ButtonStyle.secondary, custom_id="watch_item")
+    @discord.ui.button(emoji="🔔", style=discord.ButtonStyle.secondary, custom_id="watch_item")
     async def watch(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             user_id = str(interaction.user.id)
@@ -3792,7 +3792,7 @@ class WatchItemView(discord.ui.View):
                 await interaction.response.send_message("⚠️ Something went wrong. Please try again.", ephemeral=True)
             except Exception: pass
 
-    @discord.ui.button(label="Unwatch", emoji="🔕", style=discord.ButtonStyle.secondary, custom_id="unwatch_item")
+    @discord.ui.button(emoji="🔕", style=discord.ButtonStyle.secondary, custom_id="unwatch_item")
     async def unwatch(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             user_id = str(interaction.user.id)
@@ -3807,7 +3807,7 @@ class WatchItemView(discord.ui.View):
                 await interaction.response.send_message("⚠️ Something went wrong. Please try again.", ephemeral=True)
             except Exception: pass
 
-    @discord.ui.button(label="Send to DM", emoji="📬", style=discord.ButtonStyle.secondary, custom_id="send_to_dm")
+    @discord.ui.button(emoji="📬", style=discord.ButtonStyle.secondary, custom_id="send_to_dm")
     async def send_to_dm(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             price_line = f"\n💰 **{self.price}**" if self.price else ""
