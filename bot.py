@@ -2499,24 +2499,39 @@ def parse_waf_email(subject, body):
     # Determine category from the email subject line
     # Subject format: "A new post in your Forum Channel subscription: CATEGORY NAME"
     subject_cat_match = re.search(r"subscription:\s*(.+)", subject, re.IGNORECASE)
-    subject_category = subject_cat_match.group(1).strip().lower() if subject_cat_match else ""
+    subject_category = subject_cat_match.group(1).strip() if subject_cat_match else ""
+    subject_category_lower = subject_category.lower()
 
-    # Match subject category to a WAF role by name first
+    # Use subject category directly as display name — Gmail is already correct
+    # Just need to find the matching role for pinging
     matched_role_id = None
+    category_name = subject_category if subject_category else "All WAF Updates"
+
+    # Try exact match first (case insensitive)
     for cat in WAF_CATEGORIES:
         if cat["name"] == "All WAF Updates":
             continue
-        if subject_category and cat["name"].lower() == subject_category:
+        if cat["name"].lower() == subject_category_lower:
             matched_role_id = cat["role_id"]
             break
 
-    # Fall back to keyword matching against subject category string
+    # Try partial match — subject contains category name or vice versa
+    if not matched_role_id:
+        for cat in WAF_CATEGORIES:
+            if cat["name"] == "All WAF Updates":
+                continue
+            cat_lower = cat["name"].lower()
+            if cat_lower in subject_category_lower or subject_category_lower in cat_lower:
+                matched_role_id = cat["role_id"]
+                break
+
+    # Fall back to keyword matching
     if not matched_role_id:
         for cat in WAF_CATEGORIES:
             if cat["name"] == "All WAF Updates":
                 continue
             for keyword in cat["keywords"]:
-                if keyword.lower() in subject_category:
+                if keyword.lower() in subject_category_lower:
                     matched_role_id = cat["role_id"]
                     break
             if matched_role_id:
@@ -2525,13 +2540,9 @@ def parse_waf_email(subject, body):
     # Default to All WAF Updates
     if not matched_role_id:
         matched_role_id = WAF_CATEGORIES[0]["role_id"]
-
-    # Resolve category display name from role ID
-    category_name = "General"
-    for cat in WAF_CATEGORIES:
-        if cat["role_id"] == matched_role_id:
-            category_name = cat["name"]
-            break
+        logger.debug(f"[WAF] Could not match category '{subject_category}' — defaulting to All WAF Updates")
+    else:
+        logger.debug(f"[WAF] Matched '{subject_category}' to role {matched_role_id}")
 
     logger.debug(f"[WAF] Parsed: title='{item_title}' | category='{category_name}' | poster='{poster}' | url='{forum_url}' | prices={clean_prices} | bump={is_bump}")
 
