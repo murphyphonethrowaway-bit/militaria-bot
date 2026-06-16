@@ -5879,6 +5879,7 @@ async def show_public_profile(interaction, user: discord.Member):
     # Build embed
     name_line = user.display_name
     badges = ""
+    if user.id == BOT_OWNER_ID: badges += " 🛠️"
     if is_beta: badges += " 🤖"
     if is_premium: badges += " ❤️"
 
@@ -5943,6 +5944,7 @@ async def show_private_profile(interaction):
     is_beta = await db_is_beta_tester(uid)
 
     badges = ""
+    if interaction.user.id == BOT_OWNER_ID: badges += " 🛠️"
     if is_beta: badges += " 🤖"
     if is_premium: badges += " ❤️"
 
@@ -6008,29 +6010,126 @@ async def show_private_profile(interaction):
 
     embed.set_footer(text="Adrian — Your Private Profile | Run /start to update preferences")
 
-    # Build view with followed dealers dropdown
-    view = discord.ui.View(timeout=120)
-    if follows:
+    # 4 action buttons
+    view = discord.ui.View(timeout=300)
+
+    # Button 1 — Manage followed dealers
+    dealers_btn = discord.ui.Button(label="🔔 Dealers", style=discord.ButtonStyle.secondary, row=0)
+    async def on_dealers(interaction2: discord.Interaction):
+        await interaction2.response.defer(ephemeral=True)
+        current_follows = await db_get_follows(uid)
+        if not current_follows:
+            await interaction2.followup.send("You\'re not following any dealers yet. Click 🔔 on any dealer alert to follow them.", ephemeral=True)
+            return
+        dealer_options = [
+            discord.SelectOption(label=f["dealer_name"][:100], value=f["dealer_name"])
+            for f in current_follows[:25]
+        ]
+        unfollow_view = discord.ui.View(timeout=120)
         unfollow_select = discord.ui.Select(
-            placeholder="🔕 Unfollow a dealer...",
+            placeholder="🔕 Select a dealer to unfollow...",
             options=dealer_options,
             min_values=1,
             max_values=1
         )
-        async def on_unfollow(interaction2: discord.Interaction):
+        async def on_unfollow(interaction3: discord.Interaction):
             dealer = unfollow_select.values[0]
-            if dealer == "none":
-                await interaction2.response.defer(ephemeral=True)
-                return
             async with client.db.acquire() as conn:
-                await conn.execute(
-                    "DELETE FROM dealer_follows WHERE user_id=$1 AND dealer_name=$2",
-                    uid, dealer
-                )
-            await interaction2.response.send_message(f"🔕 Unfollowed **{dealer}**.", ephemeral=True)
-            logger.info(f"[Profile] {interaction2.user} unfollowed {dealer}")
+                await conn.execute("DELETE FROM dealer_follows WHERE user_id=$1 AND dealer_name=$2", uid, dealer)
+            await interaction3.response.send_message(f"🔕 Unfollowed **{dealer}**.", ephemeral=True)
+            logger.info(f"[Profile] {interaction3.user} unfollowed {dealer}")
         unfollow_select.callback = on_unfollow
-        view.add_item(unfollow_select)
+        unfollow_view.add_item(unfollow_select)
+        follow_embed = discord.Embed(
+            title="🔔 Your Followed Dealers",
+            description="\n".join([f"• {f['dealer_name']}" for f in current_follows]),
+            color=discord.Color.dark_gold()
+        )
+        follow_embed.set_footer(text=f"{len(current_follows)}/{FREE_DEALER_FOLLOW_LIMIT} dealer follows used")
+        await interaction2.followup.send(embed=follow_embed, view=unfollow_view, ephemeral=True)
+    dealers_btn.callback = on_dealers
+    view.add_item(dealers_btn)
+
+    # Button 2 — Manage forum categories
+    forums_btn = discord.ui.Button(label="🎖️ Forum Categories", style=discord.ButtonStyle.secondary, row=0)
+    async def on_forums(interaction2: discord.Interaction):
+        await interaction2.response.defer(ephemeral=True)
+        async with client.db.acquire() as conn:
+            pref_row = await conn.fetchrow("SELECT waf_categories, usmf_categories FROM user_preferences WHERE user_id=$1", uid)
+        waf_cats = (pref_row["waf_categories"] or "") if pref_row else ""
+        usmf_cats = (pref_row["usmf_categories"] or "") if pref_row else ""
+        waf_list = [c for c in waf_cats.split(",") if c]
+        usmf_list = [c for c in usmf_cats.split(",") if c]
+        cats_embed = discord.Embed(title="🎖️ Your Forum Subscriptions", color=discord.Color.dark_gold())
+        cats_embed.add_field(
+            name="WAF Categories",
+            value="\n".join([f"• {c}" for c in waf_list]) if waf_list else "None selected",
+            inline=False
+        )
+        cats_embed.add_field(
+            name="USMF Categories",
+            value="\n".join([f"• {c}" for c in usmf_list]) if usmf_list else "None selected",
+            inline=False
+        )
+        cats_embed.set_footer(text="Run /start to update your forum subscriptions")
+        await interaction2.followup.send(embed=cats_embed, ephemeral=True)
+    forums_btn.callback = on_forums
+    view.add_item(forums_btn)
+
+    # Button 3 — Buy Premium
+    premium_btn = discord.ui.Button(label="Buy Premium", emoji="❤️", style=discord.ButtonStyle.danger, row=0)
+    async def on_premium(interaction2: discord.Interaction):
+        await interaction2.response.send_message(
+            "❤️ Adrian Premium is coming soon! We\'ll announce it when it\'s available.",
+            ephemeral=True
+        )
+    premium_btn.callback = on_premium
+    view.add_item(premium_btn)
+
+    # Button 4 — Clear profile
+    clear_btn = discord.ui.Button(label="🗑️ Clear Profile", style=discord.ButtonStyle.danger, row=0)
+    async def on_clear(interaction2: discord.Interaction):
+        confirm_view = discord.ui.View(timeout=60)
+        yes_btn = discord.ui.Button(label="Yes, clear my profile", style=discord.ButtonStyle.danger)
+        no_btn = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.secondary)
+        async def on_yes(interaction3: discord.Interaction):
+            async with client.db.acquire() as conn:
+                await conn.execute("DELETE FROM user_preferences WHERE user_id=$1", uid)
+                await conn.execute("DELETE FROM dealer_follows WHERE user_id=$1", uid)
+            if interaction3.guild:
+                member = interaction3.guild.get_member(int(uid))
+                if member:
+                    roles_to_remove = [r for r in member.roles if r.name in ("Adrian Verified", "Estand Verified", "NA", "EU", "WAF", "USMF", "Adrian Premium")]
+                    if roles_to_remove:
+                        try:
+                            await member.remove_roles(*roles_to_remove, reason="Profile cleared")
+                        except Exception:
+                            pass
+            await interaction3.response.edit_message(
+                embed=discord.Embed(title="🗑️ Profile Cleared", description="Your Adrian profile has been reset. Run `/start` to set up again.", color=discord.Color.red()),
+                view=None
+            )
+            logger.info(f"[Profile] {interaction3.user} cleared their profile")
+        async def on_no(interaction3: discord.Interaction):
+            await interaction3.response.edit_message(
+                embed=discord.Embed(description="Cancelled.", color=discord.Color.green()),
+                view=None
+            )
+        yes_btn.callback = on_yes
+        no_btn.callback = on_no
+        confirm_view.add_item(yes_btn)
+        confirm_view.add_item(no_btn)
+        await interaction2.response.send_message(
+            embed=discord.Embed(
+                title="⚠️ Clear Profile?",
+                description="This will delete all your preferences, dealer follows and remove your Adrian roles.\n\nAre you sure?",
+                color=discord.Color.red()
+            ),
+            view=confirm_view,
+            ephemeral=True
+        )
+    clear_btn.callback = on_clear
+    view.add_item(clear_btn)
 
     await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
