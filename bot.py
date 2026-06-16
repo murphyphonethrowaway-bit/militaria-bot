@@ -6060,6 +6060,8 @@ async def show_private_profile(interaction):
         usmf_cats = (pref_row["usmf_categories"] or "") if pref_row else ""
         waf_list = [c for c in waf_cats.split(",") if c]
         usmf_list = [c for c in usmf_cats.split(",") if c]
+
+        # Show current subscriptions
         cats_embed = discord.Embed(title="🎖️ Your Forum Subscriptions", color=discord.Color.dark_gold())
         cats_embed.add_field(
             name="WAF Categories",
@@ -6071,8 +6073,99 @@ async def show_private_profile(interaction):
             value="\n".join([f"• {c}" for c in usmf_list]) if usmf_list else "None selected",
             inline=False
         )
-        cats_embed.set_footer(text="Run /start to update your forum subscriptions")
-        await interaction2.followup.send(embed=cats_embed, ephemeral=True)
+        cats_embed.set_footer(text="Select a forum below to update your categories")
+
+        # Forum picker view
+        forum_pick_view = discord.ui.View(timeout=120)
+        forum_select = discord.ui.Select(
+            placeholder="Which forum do you want to update?",
+            options=[
+                discord.SelectOption(label="WAF — Wehrmacht Awards Forum", value="waf", emoji="🟥"),
+                discord.SelectOption(label="USMF — US Militaria Forum", value="usmf", emoji="🟩"),
+            ],
+            min_values=1,
+            max_values=1
+        )
+
+        async def on_forum_pick(interaction3: discord.Interaction):
+            chosen = forum_select.values[0]
+            await interaction3.response.defer(ephemeral=True)
+
+            if chosen == "waf":
+                options = [
+                    discord.SelectOption(
+                        label=cat["name"][:100],
+                        value=cat["name"],
+                        emoji=cat.get("emoji", "🎖️"),
+                        default=cat["name"] in waf_list
+                    )
+                    for cat in WAF_CATEGORIES if cat["name"] != "All WAF Updates"
+                ]
+                title = "🟥 WAF Categories"
+                save_key = "waf"
+            else:
+                options = [
+                    discord.SelectOption(
+                        label=cat["name"][:100],
+                        value=cat["name"],
+                        emoji=cat.get("emoji", "📦"),
+                        default=cat["name"] in usmf_list
+                    )
+                    for cat in USMF_CATEGORIES
+                ]
+                title = "🟩 USMF Categories"
+                save_key = "usmf"
+
+            cat_view = discord.ui.View(timeout=120)
+            cat_selected = []
+
+            cat_select = discord.ui.Select(
+                placeholder=f"Select {title} categories...",
+                options=options,
+                min_values=1,
+                max_values=len(options)
+            )
+
+            async def on_cat_select(interaction4: discord.Interaction):
+                nonlocal cat_selected
+                cat_selected = list(cat_select.values)
+                await interaction4.response.defer(ephemeral=True)
+            cat_select.callback = on_cat_select
+            cat_view.add_item(cat_select)
+
+            save_btn2 = discord.ui.Button(label="✅ Save", style=discord.ButtonStyle.success, row=1)
+            async def on_save(interaction4: discord.Interaction):
+                await interaction4.response.defer(ephemeral=True)
+                selected = cat_selected or list(cat_select.values) if cat_select.values else cat_selected
+                if not selected:
+                    await interaction4.followup.send("Please select at least one category first.", ephemeral=True)
+                    return
+                if save_key == "waf":
+                    await db_save_user_waf_categories(str(uid), selected)
+                else:
+                    await db_save_user_usmf_categories(str(uid), selected)
+                await interaction4.followup.send(
+                    embed=discord.Embed(
+                        title="✅ Categories Saved",
+                        description=f"Updated **{title}** subscriptions:\n" + "\n".join([f"• {c}" for c in selected]),
+                        color=discord.Color.green()
+                    ),
+                    ephemeral=True
+                )
+                logger.info(f"[Profile] {interaction4.user} updated {save_key} categories: {selected}")
+            save_btn2.callback = on_save
+            cat_view.add_item(save_btn2)
+
+            cat_embed = discord.Embed(
+                title=title,
+                description="Select the categories you want to follow then click **Save**.",
+                color=discord.Color.dark_gold()
+            )
+            await interaction3.followup.send(embed=cat_embed, view=cat_view, ephemeral=True)
+
+        forum_select.callback = on_forum_pick
+        forum_pick_view.add_item(forum_select)
+        await interaction2.followup.send(embed=cats_embed, view=forum_pick_view, ephemeral=True)
     forums_btn.callback = on_forums
     view.add_item(forums_btn)
 
