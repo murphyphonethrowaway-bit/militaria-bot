@@ -1142,7 +1142,7 @@ async def db_remove_scam_flag(flagged_user_id):
 
 # ==================== KEYWORD WATCHLIST DB ====================
 
-FREE_DEALER_FOLLOW_LIMIT = 5
+FREE_DEALER_FOLLOW_LIMIT = 20
 FREE_KEYWORD_LIMIT = 3
 
 async def db_get_user_keywords(user_id):
@@ -4199,6 +4199,34 @@ async def db_set_user_forums(user_id, forums_choice):
 
 # ==================== /START ONBOARDING ====================
 
+async def db_save_user_waf_categories(user_id, category_names):
+    """Save user WAF category subscriptions."""
+    cats_str = ",".join(category_names)
+    now = int(datetime.now(timezone.utc).timestamp())
+    async with client.db.acquire() as conn:
+        await conn.execute(
+            """INSERT INTO user_preferences (user_id, waf_categories, created_at, updated_at)
+               VALUES ($1, $2, $3, $3)
+               ON CONFLICT (user_id) DO UPDATE SET waf_categories=$2, updated_at=$3""",
+            str(user_id), cats_str, now
+        )
+    logger.info(f"[DB] WAF categories saved for {user_id}: {cats_str}")
+
+async def db_save_user_usmf_categories(user_id, category_names):
+    """Save user USMF category subscriptions."""
+    cats_str = ",".join(category_names)
+    now = int(datetime.now(timezone.utc).timestamp())
+    async with client.db.acquire() as conn:
+        await conn.execute(
+            """INSERT INTO user_preferences (user_id, usmf_categories, created_at, updated_at)
+               VALUES ($1, $2, $3, $3)
+               ON CONFLICT (user_id) DO UPDATE SET usmf_categories=$2, updated_at=$3""",
+            str(user_id), cats_str, now
+        )
+    logger.info(f"[DB] USMF categories saved for {user_id}: {cats_str}")
+
+
+
 BOT_RULES_TEXT = (
     "**1.** Be respectful — no harassment, hate speech or discrimination\n"
     "**2.** One account only — ban evasion results in a permanent ban\n"
@@ -4472,52 +4500,64 @@ async def start_step5_waf_categories(interaction, then_usmf=False):
     )
     embed.set_footer(text="Adrian — Step 5 of 8")
 
-    waf_selected = []
+    view = discord.ui.View(timeout=300)
+    view._selected = []
+    view._then_usmf = then_usmf
 
-    class WAFCategoryView(discord.ui.View):
-        def __init__(self):
-            super().__init__(timeout=300)
+    select_menu = discord.ui.Select(
+        placeholder="Select WAF categories...",
+        options=options,
+        min_values=1,
+        max_values=len(options)
+    )
 
-        @discord.ui.select(placeholder="Select WAF categories...", options=options, min_values=1, max_values=len(options))
-        async def select_cats(self2, interaction2, select):
-            nonlocal waf_selected
-            waf_selected = list(select.values)
-            await interaction2.response.defer(ephemeral=True)
+    async def on_select(interaction2: discord.Interaction):
+        view._selected = list(select_menu.values)
+        await interaction2.response.defer(ephemeral=True)
 
-        @discord.ui.button(label="✅ Save", style=discord.ButtonStyle.success, row=1)
-        async def save(self2, interaction2, button):
-            await interaction2.response.defer(ephemeral=True)
-            if not waf_selected:
-                await interaction2.followup.send("Please select at least one category first.", ephemeral=True)
-                return
-            await db_save_user_waf_categories(str(interaction2.user.id), waf_selected)
-            logger.info(f"[Start] {interaction2.user} subscribed to {len(waf_selected)} WAF categories")
-            if then_usmf:
-                await start_step6_usmf_categories(interaction2)
-            else:
-                await start_step7_dealer_follows(interaction2)
+    select_menu.callback = on_select
+    view.add_item(select_menu)
 
-        @discord.ui.button(label="⏭️ All Categories", style=discord.ButtonStyle.secondary, row=1)
-        async def all_cats(self2, interaction2, button):
-            await interaction2.response.defer(ephemeral=True)
-            all_names = [cat["name"] for cat in WAF_CATEGORIES if cat["name"] != "All WAF Updates"]
-            await db_save_user_waf_categories(str(interaction2.user.id), all_names)
-            logger.info(f"[Start] {interaction2.user} subscribed to ALL WAF categories")
-            if then_usmf:
-                await start_step6_usmf_categories(interaction2)
-            else:
-                await start_step7_dealer_follows(interaction2)
+    save_btn = discord.ui.Button(label="✅ Save", style=discord.ButtonStyle.success, row=1)
+    async def on_save(interaction2: discord.Interaction):
+        await interaction2.response.defer(ephemeral=True)
+        if not view._selected:
+            await interaction2.followup.send("Please select at least one category first.", ephemeral=True)
+            return
+        await db_save_user_waf_categories(str(interaction2.user.id), view._selected)
+        logger.info(f"[Start] {interaction2.user} subscribed to {len(view._selected)} WAF categories")
+        if view._then_usmf:
+            await start_step6_usmf_categories(interaction2)
+        else:
+            await start_step7_dealer_follows(interaction2)
+    save_btn.callback = on_save
+    view.add_item(save_btn)
 
-        @discord.ui.button(label="⏭️ Skip", style=discord.ButtonStyle.secondary, row=1)
-        async def skip(self2, interaction2, button):
-            await interaction2.response.defer(ephemeral=True)
-            logger.info(f"[Start] {interaction2.user} skipped WAF categories")
-            if then_usmf:
-                await start_step6_usmf_categories(interaction2)
-            else:
-                await start_step7_dealer_follows(interaction2)
+    all_btn = discord.ui.Button(label="⏭️ All Categories", style=discord.ButtonStyle.secondary, row=1)
+    async def on_all(interaction2: discord.Interaction):
+        await interaction2.response.defer(ephemeral=True)
+        all_names = [cat["name"] for cat in WAF_CATEGORIES if cat["name"] != "All WAF Updates"]
+        await db_save_user_waf_categories(str(interaction2.user.id), all_names)
+        logger.info(f"[Start] {interaction2.user} subscribed to ALL WAF categories")
+        if view._then_usmf:
+            await start_step6_usmf_categories(interaction2)
+        else:
+            await start_step7_dealer_follows(interaction2)
+    all_btn.callback = on_all
+    view.add_item(all_btn)
 
-    await interaction.edit_original_response(embed=embed, view=WAFCategoryView())
+    skip_btn = discord.ui.Button(label="⏭️ Skip", style=discord.ButtonStyle.secondary, row=1)
+    async def on_skip(interaction2: discord.Interaction):
+        await interaction2.response.defer(ephemeral=True)
+        logger.info(f"[Start] {interaction2.user} skipped WAF categories")
+        if view._then_usmf:
+            await start_step6_usmf_categories(interaction2)
+        else:
+            await start_step7_dealer_follows(interaction2)
+    skip_btn.callback = on_skip
+    view.add_item(skip_btn)
+
+    await interaction.edit_original_response(embed=embed, view=view)
 
 
 async def start_step6_usmf_categories(interaction):
@@ -4536,43 +4576,54 @@ async def start_step6_usmf_categories(interaction):
     )
     embed.set_footer(text="Adrian — Step 6 of 8")
 
-    usmf_selected = []
+    view = discord.ui.View(timeout=300)
+    view._selected = []
 
-    class USMFCategoryView(discord.ui.View):
-        def __init__(self):
-            super().__init__(timeout=300)
+    select_menu = discord.ui.Select(
+        placeholder="Select USMF categories...",
+        options=options,
+        min_values=1,
+        max_values=len(options)
+    )
 
-        @discord.ui.select(placeholder="Select USMF categories...", options=options, min_values=1, max_values=len(options))
-        async def select_cats(self2, interaction2, select):
-            nonlocal usmf_selected
-            usmf_selected = list(select.values)
-            await interaction2.response.defer(ephemeral=True)
+    async def on_select(interaction2: discord.Interaction):
+        view._selected = list(select_menu.values)
+        await interaction2.response.defer(ephemeral=True)
 
-        @discord.ui.button(label="✅ Save", style=discord.ButtonStyle.success, row=1)
-        async def save(self2, interaction2, button):
-            await interaction2.response.defer(ephemeral=True)
-            if not usmf_selected:
-                await interaction2.followup.send("Please select at least one category first.", ephemeral=True)
-                return
-            await db_save_user_usmf_categories(str(interaction2.user.id), usmf_selected)
-            logger.info(f"[Start] {interaction2.user} subscribed to {len(usmf_selected)} USMF categories")
-            await start_step7_dealer_follows(interaction2)
+    select_menu.callback = on_select
+    view.add_item(select_menu)
 
-        @discord.ui.button(label="⏭️ All Categories", style=discord.ButtonStyle.secondary, row=1)
-        async def all_cats(self2, interaction2, button):
-            await interaction2.response.defer(ephemeral=True)
-            all_names = [cat["name"] for cat in USMF_CATEGORIES]
-            await db_save_user_usmf_categories(str(interaction2.user.id), all_names)
-            logger.info(f"[Start] {interaction2.user} subscribed to ALL USMF categories")
-            await start_step7_dealer_follows(interaction2)
+    save_btn = discord.ui.Button(label="✅ Save", style=discord.ButtonStyle.success, row=1)
+    async def on_save(interaction2: discord.Interaction):
+        await interaction2.response.defer(ephemeral=True)
+        if not view._selected:
+            await interaction2.followup.send("Please select at least one category first.", ephemeral=True)
+            return
+        await db_save_user_usmf_categories(str(interaction2.user.id), view._selected)
+        logger.info(f"[Start] {interaction2.user} subscribed to {len(view._selected)} USMF categories")
+        await start_step7_dealer_follows(interaction2)
+    save_btn.callback = on_save
+    view.add_item(save_btn)
 
-        @discord.ui.button(label="⏭️ Skip", style=discord.ButtonStyle.secondary, row=1)
-        async def skip(self2, interaction2, button):
-            await interaction2.response.defer(ephemeral=True)
-            logger.info(f"[Start] {interaction2.user} skipped USMF categories")
-            await start_step7_dealer_follows(interaction2)
+    all_btn = discord.ui.Button(label="⏭️ All Categories", style=discord.ButtonStyle.secondary, row=1)
+    async def on_all(interaction2: discord.Interaction):
+        await interaction2.response.defer(ephemeral=True)
+        all_names = [cat["name"] for cat in USMF_CATEGORIES]
+        await db_save_user_usmf_categories(str(interaction2.user.id), all_names)
+        logger.info(f"[Start] {interaction2.user} subscribed to ALL USMF categories")
+        await start_step7_dealer_follows(interaction2)
+    all_btn.callback = on_all
+    view.add_item(all_btn)
 
-    await interaction.edit_original_response(embed=embed, view=USMFCategoryView())
+    skip_btn = discord.ui.Button(label="⏭️ Skip", style=discord.ButtonStyle.secondary, row=1)
+    async def on_skip(interaction2: discord.Interaction):
+        await interaction2.response.defer(ephemeral=True)
+        logger.info(f"[Start] {interaction2.user} skipped USMF categories")
+        await start_step7_dealer_follows(interaction2)
+    skip_btn.callback = on_skip
+    view.add_item(skip_btn)
+
+    await interaction.edit_original_response(embed=embed, view=view)
 
 
 async def start_step7_dealer_follows(interaction):
@@ -4627,6 +4678,37 @@ async def start_step8_premium(interaction):
         async def finish(self2, interaction2, button):
             await interaction2.response.defer(ephemeral=True)
             await start_final_screen(interaction2)
+
+        @discord.ui.button(label="Buy Premium", emoji="❤️", style=discord.ButtonStyle.danger)
+        async def buy_premium(self2, interaction2, button):
+            await interaction2.response.send_message(
+                "❤️ Adrian Premium is coming soon! We\'ll announce it in the server when it\'s available.",
+                ephemeral=True
+            )
+
+        @discord.ui.button(label="Beta Tester", emoji="🤖", style=discord.ButtonStyle.primary)
+        async def beta_tester(self2, interaction2: discord.Interaction, button):
+            await interaction2.response.defer(ephemeral=True)
+            if interaction2.user.id != BOT_OWNER_ID:
+                await interaction2.followup.send("⚠️ This button is for authorized beta testers only.", ephemeral=True)
+                return
+            try:
+                config = await db_get_server_config(str(interaction2.guild.id))
+                premium_role_id = get_config_value(config, "premium_role_id") if config else None
+                premium_role = interaction2.guild.get_role(int(premium_role_id)) if premium_role_id else discord.utils.get(interaction2.guild.roles, name="Adrian Premium")
+                if premium_role:
+                    member = interaction2.guild.get_member(interaction2.user.id)
+                    if member and premium_role not in member.roles:
+                        await member.add_roles(premium_role, reason="Beta tester — assigned via /start")
+                        await interaction2.followup.send("🤖 Beta tester status granted! You now have Adrian Premium.", ephemeral=True)
+                        logger.info(f"[Start] Beta tester premium assigned to {interaction2.user}")
+                    else:
+                        await interaction2.followup.send("You already have the Premium role!", ephemeral=True)
+                else:
+                    await interaction2.followup.send("⚠️ Could not find the Adrian Premium role.", ephemeral=True)
+            except Exception as e:
+                logger.error(f"[Start] Beta tester error: {e}")
+                await interaction2.followup.send("⚠️ Something went wrong.", ephemeral=True)
 
     await interaction.edit_original_response(embed=embed, view=PremiumView())
 
