@@ -4669,6 +4669,16 @@ async def _show_start_onboarding(interaction):
 
 
 
+@client.tree.command(name="start", description="Set up your Adrian profile and preferences")
+async def start_cmd(interaction: discord.Interaction):
+    on_cd, remaining = check_cooldown(str(interaction.user.id), "start")
+    if on_cd:
+        await interaction.response.send_message(f"⏳ Please wait {remaining}s before trying again.", ephemeral=True)
+        return
+    await interaction.response.send_message("👋 Loading...", ephemeral=True)
+    await _show_start_onboarding(interaction)
+
+
 @client.tree.command(name="settings", description="Update your notification preferences")
 async def settings_cmd(interaction: discord.Interaction):
     existing = await db_get_user_region(str(interaction.user.id))
@@ -5936,91 +5946,8 @@ class WelcomeView(discord.ui.View):
         if on_cd:
             await interaction.response.send_message(f"⏳ Please wait {remaining}s before trying again.", ephemeral=True)
             return
-
-        # Send ephemeral response first — never edit the public welcome message
         await interaction.response.send_message("👋 Loading...", ephemeral=True)
-
-        # Check if user has agreed to Estand rules
-        try:
-            async with client.db.acquire() as conn:
-                row = await conn.fetchrow(
-                    "SELECT estand_agreed FROM user_preferences WHERE user_id=$1",
-                    str(interaction.user.id)
-                )
-                estand_agreed = row["estand_agreed"] if row and row["estand_agreed"] else 0
-        except Exception:
-            estand_agreed = 0
-
-        if not estand_agreed:
-            # Show Estand rules first
-            rules_embed = discord.Embed(
-                title="📋 Estand Marketplace Rules",
-                description=(
-                    "Before creating your collector profile, please read and agree to the **Estand Marketplace Rules**:\n\n"
-                    "🤝 **Honest listings** — Accurately describe items including condition and provenance.\n\n"
-                    "🚫 **No prohibited items** — Illegal items or items banned by Discord\'s ToS are prohibited.\n\n"
-                    "💬 **Respectful communication** — Treat all buyers and sellers with respect.\n\n"
-                    "⭐ **Complete your transactions** — If you agree to a sale, follow through.\n\n"
-                    "🛡️ **No scamming** — Fraud or misrepresentation will result in a permanent ban.\n\n"
-                    "📊 **Honest reviews** — Only leave reviews for transactions you actually completed."
-                ),
-                color=discord.Color.dark_gold()
-            )
-            rules_embed.set_footer(text="Adrian — Estand Marketplace Rules")
-
-            class WelcomeRulesView(discord.ui.View):
-                def __init__(self):
-                    super().__init__(timeout=300)
-
-                @discord.ui.button(label="✅ I Agree", style=discord.ButtonStyle.success)
-                async def agree(self2, interaction2: discord.Interaction, button2: discord.ui.Button):
-                    await interaction2.response.defer(ephemeral=True)
-                    try:
-                        async with client.db.acquire() as conn2:
-                            now = int(datetime.now(timezone.utc).timestamp())
-                            await conn2.execute(
-                                "INSERT INTO user_preferences (user_id, estand_agreed, created_at, updated_at) VALUES ($1, 1, $2, $2) ON CONFLICT (user_id) DO UPDATE SET estand_agreed=1, updated_at=$2",
-                                str(interaction2.user.id), now
-                            )
-                        # Grant Estand Verified role — try by ID first, fall back to name
-                        if interaction2.guild:
-                            config = await db_get_server_config(str(interaction2.guild.id))
-                            estand_role_id = get_config_value(config, "estand_verified_role_id") if config else None
-                            estand_role = None
-                            if estand_role_id:
-                                estand_role = interaction2.guild.get_role(int(estand_role_id))
-                            if not estand_role:
-                                estand_role = discord.utils.get(interaction2.guild.roles, name="Estand Verified")
-                                if estand_role:
-                                    await db_save_server_config(str(interaction2.guild.id), estand_verified_role_id=str(estand_role.id))
-                            if estand_role:
-                                member = interaction2.guild.get_member(interaction2.user.id)
-                                if member and estand_role not in member.roles:
-                                    await member.add_roles(estand_role, reason="Agreed to Estand rules via Get Started")
-                                    logger.info(f"[Welcome] Granted Estand Verified to {interaction2.user} in {interaction2.guild.name}")
-                            else:
-                                logger.warning(f"[Welcome] Could not find Estand Verified role in {interaction2.guild.name}")
-                    except Exception as e:
-                        logger.error(f"[Welcome] Estand rules save error: {e}")
-                    # Now show onboarding
-                    await _show_start_onboarding(interaction2)
-
-                @discord.ui.button(label="❌ Decline", style=discord.ButtonStyle.danger)
-                async def decline(self2, interaction2: discord.Interaction, button2: discord.ui.Button):
-                    await interaction2.response.defer(ephemeral=True)
-                    await interaction2.edit_original_response(
-                        embed=discord.Embed(
-                            title="No problem!",
-                            description="You can click **Get Started** again whenever you\'re ready.",
-                            color=discord.Color.red()
-                        ),
-                        view=None
-                    )
-
-            await interaction.edit_original_response(embed=rules_embed, view=WelcomeRulesView())
-        else:
-            # Already agreed — go straight to onboarding
-            await _show_start_onboarding(interaction)
+        await _show_start_onboarding(interaction)
 
     @discord.ui.button(label="👤 View My Profile", style=discord.ButtonStyle.primary, custom_id="welcome_view_profile")
     async def view_profile(self, interaction: discord.Interaction, button: discord.ui.Button):
