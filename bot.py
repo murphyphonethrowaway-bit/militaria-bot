@@ -5512,7 +5512,7 @@ async def _run_auto_setup(interaction):
         estand_ch = discord.utils.get(guild.forums, name="estand") or discord.utils.get(guild.text_channels, name="estand")
         if not estand_ch:
             try:
-                estand_ch = await guild.create_forum_channel(
+                estand_ch = await guild.create_forum(
                     name="estand",
                     topic="Buy and sell militaria with trusted collectors.",
                     category=category,
