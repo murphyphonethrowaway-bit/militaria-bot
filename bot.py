@@ -5788,25 +5788,62 @@ async def watchlist_cmd(interaction: discord.Interaction):
 @app_commands.describe(user="Leave blank for your own profile, or mention a member for their public profile")
 async def profile_cmd(interaction: discord.Interaction, user: discord.Member = None):
     await interaction.response.defer(ephemeral=True)
-
-    # If no user specified — show private profile
     if user is None or user.id == interaction.user.id:
         await show_private_profile(interaction)
     else:
         await show_public_profile(interaction, user)
 
 
-@client.tree.command(name="lookup", description="🔒 Admin profile lookup — full details on any member")
-@app_commands.describe(user="The member to look up")
-async def lookup_cmd(interaction: discord.Interaction, user: discord.Member):
-    # Only mods, server owner or bot owner
+@client.tree.command(name="lookup", description="🔒 Admin — look up any Adrian profile by user ID or mention")
+@app_commands.describe(user_id="Discord user ID or mention (@user)")
+async def lookup_cmd(interaction: discord.Interaction, user_id: str):
     is_owner = interaction.user.id == BOT_OWNER_ID
     is_admin = interaction.user.guild_permissions.administrator if interaction.guild else False
     if not is_owner and not is_admin:
         await interaction.response.send_message("❓ Unknown command.", ephemeral=True)
         return
     await interaction.response.defer(ephemeral=True)
-    await show_admin_profile(interaction, user)
+
+    # Clean up the user_id — strip mention formatting
+    clean_id = user_id.strip().lstrip("<@!").rstrip(">")
+    try:
+        uid = int(clean_id)
+    except ValueError:
+        await interaction.followup.send("⚠️ Please provide a valid user ID or @mention.", ephemeral=True)
+        return
+
+    # Try to fetch the user
+    try:
+        user = await client.fetch_user(uid)
+    except discord.NotFound:
+        await interaction.followup.send(f"⚠️ Could not find Discord user with ID `{uid}`.", ephemeral=True)
+        return
+    except Exception as e:
+        await interaction.followup.send(f"⚠️ Error fetching user: {e}", ephemeral=True)
+        return
+
+    # Check they have an Adrian profile
+    async with client.db.acquire() as conn:
+        row = await conn.fetchrow("SELECT user_id FROM user_preferences WHERE user_id=$1", str(uid))
+    if not row:
+        await interaction.followup.send(
+            embed=discord.Embed(
+                title="👤 No Profile Found",
+                description=f"**{user.display_name}** (`{uid}`) has no Adrian profile in the database.",
+                color=discord.Color.orange()
+            ),
+            ephemeral=True
+        )
+        return
+
+    # Get member object if available (for role info)
+    member = None
+    for guild in client.guilds:
+        member = guild.get_member(uid)
+        if member:
+            break
+
+    await show_admin_profile(interaction, user, member)
 
 
 async def show_public_profile(interaction, user: discord.Member):
@@ -5998,7 +6035,7 @@ async def show_private_profile(interaction):
     await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
 
-async def show_admin_profile(interaction, user: discord.Member):
+async def show_admin_profile(interaction, user, member=None):
     """Admin profile — mods and bot owner only via /lookup."""
     uid = str(user.id)
 
@@ -6137,89 +6174,6 @@ async def alerts_cmd(interaction: discord.Interaction):
 
     # Clear alerts after showing them
     await db_clear_pending_alerts(user_id)
-    await interaction.followup.send(embed=embed, ephemeral=True)
-
-@client.tree.command(name="profile", description="View your Adrian notification profile")
-async def profile_cmd(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
-    user_id = str(interaction.user.id)
-
-    # Fetch all preferences
-    region = await db_get_user_region(user_id)
-    eras = await db_get_user_eras(user_id)
-    countries = await db_get_user_countries(user_id)
-    forums = await db_get_user_forums(user_id)
-    buyer_rating, buyer_count = await db_get_buyer_rating(user_id)
-    follows = await db_get_follows(user_id)
-    watchlist = await db_get_watchlist(user_id)
-
-    # Check profile completeness
-    complete = all([region, eras, countries, forums])
-    status = "✅ Complete" if complete else "⚠️ Incomplete — type `/start` to finish setup"
-
-    # Format region
-    region_display = {
-        "NA": "🇺🇸 North America",
-        "EU": "🇪🇺 Europe",
-        "both": "🌍 All Dealers"
-    }.get(region, "Not set")
-
-    # Format eras — emoji row only
-    if eras:
-        era_display = " ".join([ERA_EMOJIS.get(e, str(e)) for e in sorted(eras)])
-    else:
-        era_display = "Not set"
-
-    # Format countries — flag row only
-    if countries:
-        country_display = " ".join([COUNTRY_FLAGS.get(c, c) for c in countries])
-    else:
-        country_display = "Not set"
-
-    # Format forums
-    forum_display = {
-        "waf": "🟥 WAF",
-        "usmf": "🟩 USMF",
-        "both": "🟥 WAF + 🟩 USMF",
-        "none": "❌ None"
-    }.get(forums, "Not set")
-
-    # Format buyer rep
-    if buyer_rating:
-        stars = "⭐" * int(buyer_rating) + ("✨" if buyer_rating % 1 >= 0.5 else "")
-        rep_display = f"{stars} {buyer_rating}/5 · {buyer_count} sale(s)"
-    else:
-        rep_display = "No transactions yet"
-
-    # Build profile code
-    region_code = {"NA": "NA", "EU": "EU", "both": "ALL"}.get(region, "?")
-    era_code = "".join([str(e) for e in sorted(eras)]) if eras else "?"
-    country_code = "".join(sorted(countries)) if countries else "?"
-    forum_code = {"waf": "W", "usmf": "U", "both": "WU", "none": "N"}.get(forums, "?")
-    profile_code = f"`{region_code}-{era_code}-{country_code}-{forum_code}`"
-
-    embed = discord.Embed(
-        title=f"🎖️ {interaction.user.display_name}",
-        description=f"{status}\n\n**Profile Code:** {profile_code}",
-        color=discord.Color.green() if complete else discord.Color.orange(),
-        timestamp=datetime.now(timezone.utc)
-    )
-    embed.set_thumbnail(url=interaction.user.display_avatar.url)
-
-    # Notification preferences section
-    embed.add_field(name="📍 Region", value=region_display, inline=True)
-    embed.add_field(name="📬 Forums", value=forum_display, inline=True)
-    embed.add_field(name="​", value="​", inline=True)  # spacer
-    embed.add_field(name="🕰️ Eras", value=era_display, inline=False)
-    embed.add_field(name="🌐 Countries", value=country_display, inline=False)
-
-    # Activity section
-    embed.add_field(name="🔔 Following", value=f"{len(follows)} dealer(s)", inline=True)
-    embed.add_field(name="👁️ Watchlist", value=f"{len(watchlist)} item(s)", inline=True)
-    embed.add_field(name="🏅 Buyer Rep", value=rep_display, inline=True)
-
-    embed.set_footer(text="Use /settings to update • Adrian — Discord's #1 Militaria Bot")
-
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 @client.tree.command(name="reputation", description="Check a member's buyer reputation in the estate")
