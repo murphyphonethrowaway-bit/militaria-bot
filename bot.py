@@ -368,7 +368,16 @@ class MilitariaBot(discord.Client):
                 "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS estand_agreed INTEGER DEFAULT 0",
                 "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS created_at BIGINT DEFAULT 0",
                 "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS waf_categories TEXT DEFAULT ''",
-                "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS usmf_categories TEXT DEFAULT ''", 
+                "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS usmf_categories TEXT DEFAULT ''",
+                "ALTER TABLE server_config ADD COLUMN IF NOT EXISTS na_role_id TEXT",
+                "ALTER TABLE server_config ADD COLUMN IF NOT EXISTS eu_role_id TEXT",
+                "ALTER TABLE server_config ADD COLUMN IF NOT EXISTS waf_role_id TEXT",
+                "ALTER TABLE server_config ADD COLUMN IF NOT EXISTS usmf_role_id TEXT",
+                "ALTER TABLE server_config ADD COLUMN IF NOT EXISTS na_updates_channel_id TEXT",
+                "ALTER TABLE server_config ADD COLUMN IF NOT EXISTS eu_updates_channel_id TEXT",
+                "ALTER TABLE server_config ADD COLUMN IF NOT EXISTS waf_channel_id TEXT",
+                "ALTER TABLE server_config ADD COLUMN IF NOT EXISTS usmf_channel_id TEXT",
+                "ALTER TABLE server_config ADD COLUMN IF NOT EXISTS estand_channel_id TEXT", 
                 "ALTER TABLE server_config ADD COLUMN IF NOT EXISTS accept_cross_posts INTEGER DEFAULT 0",
                 "ALTER TABLE server_config ADD COLUMN IF NOT EXISTS estate_cross_posts_channel_id TEXT",
                 "ALTER TABLE server_config ADD COLUMN IF NOT EXISTS estate_sold_tag_id TEXT",
@@ -479,6 +488,15 @@ class MilitariaBot(discord.Client):
                     view_all_channels INTEGER DEFAULT 0,
                     welcome_message_id TEXT,
                     estand_verified_role_id TEXT,
+                    na_role_id TEXT,
+                    eu_role_id TEXT,
+                    waf_role_id TEXT,
+                    usmf_role_id TEXT,
+                    na_updates_channel_id TEXT,
+                    eu_updates_channel_id TEXT,
+                    waf_channel_id TEXT,
+                    usmf_channel_id TEXT,
+                    estand_channel_id TEXT,
                     image_cache_version INTEGER DEFAULT 0,
                     created_at BIGINT NOT NULL
                 )
@@ -5289,42 +5307,40 @@ async def setup_cmd(interaction: discord.Interaction):
         await interaction.response.send_message("🚫 Only server administrators can run `/setup`.", ephemeral=True)
         return
 
-    await interaction.response.defer(ephemeral=True)
-    logger.info(f"[Setup] /setup started by {interaction.user} in {interaction.guild.name} ({interaction.guild_id})")
+    await interaction.response.send_message("👋 Loading...", ephemeral=True)
+    logger.info(f"[Setup] /setup started by {interaction.user} in {interaction.guild.name}")
     await db_save_server_config(str(interaction.guild_id), guild_name=interaction.guild.name, owner_id=str(interaction.guild.owner_id))
+    await _show_setup_rules(interaction)
 
-    # Build rules step (Step 0 — shown first)
-    rules_embed = discord.Embed(
-        title="📋 Before We Begin — Server Owner Agreement",
+
+async def _show_setup_rules(interaction):
+    """Step 0 — Server owner agrees to Adrian rules."""
+    embed = discord.Embed(
+        title="📋 Server Owner Agreement",
         description=(
-            f"Welcome to **Adrian**! Before setting up, please read and agree to the following rules.\n\n"
-            "**As a server owner using Adrian\'s Estand Marketplace, you agree to:**\n\n"
-            "⚖️ **Moderate your Estand** — You are responsible for listings posted on your server. Remove fraudulent or rule-breaking listings promptly.\n\n"
-            "🚫 **No prohibited items** — Illegal items, stolen goods, or items prohibited by Discord\'s ToS are not allowed.\n\n"
-            "🛡️ **Protect your members** — Act on reports of scammers or bad actors promptly. Adrian provides tools — enforcement is your responsibility.\n\n"
-            "📊 **Reputation integrity** — Do not manipulate ratings or reviews. Abuse of the reputation system will result in removal from the Adrian network.\n\n"
-            "🌐 **Cross-posting responsibility** — If you accept cross-posts, you are responsible for those listings appearing on your server.\n\n"
-            "🔧 **Bot permissions** — Adrian requires certain permissions to function. Do not restrict the bot\'s access in ways that break its features.\n\n"
-            "By clicking **I Agree**, you confirm you have read and will abide by these rules."
+            "Before setting up Adrian, please read and agree to the following:\n\n"
+            "**1.** Moderate your server — remove fraudulent or rule-breaking listings promptly\n"
+            "**2.** No prohibited items — illegal items, stolen goods, or items prohibited by Discord\'s ToS are not allowed\n"
+            "**3.** Protect your members — act on reports of scammers or bad actors\n"
+            "**4.** Do not manipulate ratings or reviews\n"
+            "**5.** Do not restrict the bot\'s permissions in ways that break its features\n\n"
+            "By clicking **I Agree** you confirm you have read and will abide by these rules."
         ),
         color=discord.Color.dark_gold()
     )
-    if bot_state.get("setup_q1_img_url"):
-        rules_embed.set_thumbnail(url=bot_state["setup_q1_img_url"])
-    rules_embed.set_footer(text="Adrian — Server Owner Agreement")
+    embed.set_footer(text="Adrian — Server Setup")
 
     class SetupRulesView(discord.ui.View):
         def __init__(self):
             super().__init__(timeout=300)
 
-        @discord.ui.button(label="✅ I Agree — Let's Set Up", style=discord.ButtonStyle.success)
+        @discord.ui.button(label="✅ I Agree", style=discord.ButtonStyle.success)
         async def agree(self, interaction2: discord.Interaction, button: discord.ui.Button):
             await interaction2.response.defer(ephemeral=True)
             logger.info(f"[Setup] {interaction2.user} agreed to server owner rules in {interaction2.guild.name}")
-            # Proceed to step 1 — commands channel
-            await _show_setup_step1(interaction2)
+            await _run_auto_setup(interaction2)
 
-        @discord.ui.button(label="❌ Cancel Setup", style=discord.ButtonStyle.danger)
+        @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.danger)
         async def cancel(self, interaction2: discord.Interaction, button: discord.ui.Button):
             await interaction2.response.edit_message(
                 embed=discord.Embed(
@@ -5335,221 +5351,238 @@ async def setup_cmd(interaction: discord.Interaction):
                 view=None
             )
 
-    await interaction.edit_original_response(embed=rules_embed, view=SetupRulesView())
-    return
+    await interaction.edit_original_response(embed=embed, view=SetupRulesView())
 
-    # Build step 1 embed — also called from SetupRulesView after agreement
 
-async def _show_setup_step1(interaction):
-    single_embed = discord.Embed(
-        title="👋 Hey! I\'m Adrian — Discord\'s #1 Militaria Bot",
-        description=(
-            f"Thanks for adding me to **{interaction.guild.name}**!\n\n"
-            "Here\'s everything I\'m going to set up for you automatically:\n\n"
-            "📬 **#adrian** — where members type `/start` and interact with the bot\n"
-            "🔔 **#adrian-updates** — where new item alerts and marketplace updates are posted\n"
-            "🏪 **Estand Marketplace** — a trusted buy & sell system with seller profiles and scam protection\n"
-            "🎖️ **Adrian Verified Role** — gives members access to the full experience\n"
-            "🔒 **Channel Permissions** — locked down so only verified members see the right channels\n\n"
-            "Click **Let\'s Go** and I\'ll create everything automatically!"
-        ),
-        color=discord.Color.dark_gold()
-    )
-    if bot_state.get("setup_q1_img_url"):
-        single_embed.set_thumbnail(url=bot_state["setup_q1_img_url"])
-
-    class AutoCreateChannelsView(discord.ui.View):
-        def __init__(self):
-            super().__init__(timeout=300)
-
-        @discord.ui.button(label="🚀 Let\'s Go!", style=discord.ButtonStyle.success)
-        async def auto_create(self, interaction2: discord.Interaction, button: discord.ui.Button):
-            try:
-                await interaction2.response.defer(ephemeral=True)
-                guild = interaction2.guild
-                results = []
-
-                adrian_channel = discord.utils.get(guild.text_channels, name="adrian")
-                if not adrian_channel:
-                    adrian_channel = await guild.create_text_channel(
-                        name="adrian",
-                        topic="Welcome to Adrian — Discord\'s #1 Militaria Bot! Type /start to set up your profile.",
-                        reason="Created by Adrian setup"
-                    )
-                    results.append("✅ Created **#adrian**")
-                else:
-                    results.append("✅ Found existing **#adrian**")
-
-                updates_channel = discord.utils.get(guild.text_channels, name="adrian-updates")
-                if not updates_channel:
-                    updates_channel = await guild.create_text_channel(
-                        name="adrian-updates",
-                        topic="New item alerts and marketplace updates from Adrian.",
-                        reason="Created by Adrian setup"
-                    )
-                    results.append("✅ Created **#adrian-updates**")
-                else:
-                    results.append("✅ Found existing **#adrian-updates**")
-
-                await db_save_server_config(
-                    str(guild.id),
-                    channel_id=str(adrian_channel.id),
-                    updates_channel_id=str(updates_channel.id)
-                )
-
-                embed3 = discord.Embed(
-                    title="🏪 Estand Marketplace — Buy & Sell Militaria",
-                    description=(
-                        "\n".join(results) + "\n\n"
-                        "**Turn your server into a trusted militaria marketplace!** 🏪\n\n"
-                        "🔍 **Seller profiles** — buyers check seller ratings before purchasing\n"
-                        "⭐ **Reputation system** — every transaction builds a global trust score\n"
-                        "🌐 **Cross-server listings** — sellers reach buyers across ALL Adrian servers\n"
-                        "🛡️ **Scam protection** — warning flags follow bad actors everywhere\n"
-                        "📊 **Transaction history** — full record of every completed sale\n\n"
-                        "It\'s completely free and takes 30 seconds to set up."
-                    ),
-                    color=discord.Color.dark_gold()
-                )
-                if bot_state.get("setup_estand_img_url"):
-                    embed3.set_thumbnail(url=bot_state["setup_estand_img_url"])
-                await interaction2.edit_original_response(embed=embed3, view=SetupStep3EstateView())
-
-            except discord.Forbidden:
-                await interaction2.edit_original_response(embed=discord.Embed(
-                    title="⚠️ Missing Permissions",
-                    description="I don\'t have permission to create channels. Please give me **Manage Channels** permission and run `/setup` again.",
-                    color=discord.Color.red()
-                ))
-            except Exception as e:
-                logger.error(f"[Setup] Auto-create error: {e}\n{traceback.format_exc()}")
-
-    await interaction.edit_original_response(embed=single_embed, view=AutoCreateChannelsView())
-
-async def complete_setup(interaction):
-    """Handle setup completion — create roles, set permissions, post welcome image."""
+async def _run_auto_setup(interaction):
+    """Auto-create all channels, roles and permissions."""
     guild = interaction.guild
-    config = await db_get_server_config(str(guild.id))
     results = []
 
-    commands_channel_id = get_config_value(config, "channel_id") if config else None
-    updates_channel_id = get_config_value(config, "updates_channel_id") if config else None
-    commands_channel = guild.get_channel(commands_channel_id) if commands_channel_id else None
-    updates_channel = guild.get_channel(updates_channel_id) if updates_channel_id else None
+    await interaction.edit_original_response(
+        embed=discord.Embed(
+            title="⚙️ Setting up Adrian...",
+            description="Creating channels, roles and permissions. This will take a few seconds.",
+            color=discord.Color.dark_gold()
+        ),
+        view=None
+    )
 
-    # Create Adrian Verified role
-    verified_role = discord.utils.get(guild.roles, name="Adrian Verified")
-    if not verified_role:
-        try:
-            verified_role = await guild.create_role(
-                name="Adrian Verified",
-                color=discord.Color.blue(),
-                reason="Created by Adrian setup"
+    try:
+        # ── ROLES ──────────────────────────────────────────────
+        async def get_or_create_role(name, color, save_key=None):
+            role = discord.utils.get(guild.roles, name=name)
+            if not role:
+                role = await guild.create_role(name=name, color=color, reason="Adrian setup")
+                results.append(f"✅ Created **@{name}** role")
+            else:
+                results.append(f"✅ Found **@{name}** role")
+            if save_key and role:
+                await db_save_server_config(str(guild.id), **{save_key: str(role.id)})
+            return role
+
+        verified_role     = await get_or_create_role("Adrian Verified",  discord.Color.blue(),    "verified_role_id")
+        estand_role       = await get_or_create_role("Estand Verified",   discord.Color.green(),   "estand_verified_role_id")
+        na_role           = await get_or_create_role("NA",                discord.Color.from_rgb(0, 120, 215),  "na_role_id")
+        eu_role           = await get_or_create_role("EU",                discord.Color.from_rgb(0, 70, 160),   "eu_role_id")
+        waf_role          = await get_or_create_role("WAF",               discord.Color.from_rgb(180, 0, 0),    "waf_role_id")
+        usmf_role         = await get_or_create_role("USMF",              discord.Color.from_rgb(0, 100, 0),    "usmf_role_id")
+        premium_role      = await get_or_create_role("Adrian Premium",    discord.Color.gold(),    "premium_role_id")
+
+        # ── CHANNELS ───────────────────────────────────────────
+        everyone = guild.default_role
+        bot_member = guild.me
+
+        # Create or find Adrian category
+        category = discord.utils.get(guild.categories, name="Adrian")
+        if not category:
+            category = await guild.create_category(
+                name="Adrian",
+                overwrites={
+                    everyone:   discord.PermissionOverwrite(view_channel=False),
+                    bot_member: discord.PermissionOverwrite(view_channel=True),
+                },
+                reason="Adrian setup"
             )
-            results.append("✅ Created **Adrian Verified** role")
-        except Exception as e:
-            results.append(f"⚠️ Could not create Adrian Verified role: {e}")
-    else:
-        results.append("✅ **Adrian Verified** role already exists")
-    if verified_role:
-        await db_save_server_config(str(guild.id), verified_role_id=str(verified_role.id))
-        logger.info(f"[Setup] Adrian Verified role ID saved: {verified_role.id} for {guild.name}")
+            results.append("✅ Created **Adrian** category")
+        else:
+            results.append("✅ Found **Adrian** category")
 
-    # Create Estand Verified role
-    estand_verified_role = discord.utils.get(guild.roles, name="Estand Verified")
-    if not estand_verified_role:
-        try:
-            estand_verified_role = await guild.create_role(
-                name="Estand Verified",
-                color=discord.Color.green(),
-                reason="Created by Adrian setup — grants access to Estand marketplace"
-            )
-            results.append("✅ Created **Estand Verified** role")
-        except Exception as e:
-            results.append(f"⚠️ Could not create Estand Verified role: {e}")
-    else:
-        results.append("✅ **Estand Verified** role already exists")
-    if estand_verified_role:
-        await db_save_server_config(str(guild.id), estand_verified_role_id=str(estand_verified_role.id))
-        logger.info(f"[Setup] Estand Verified role ID saved: {estand_verified_role.id} for {guild.name}")
+        async def get_or_create_channel(name, topic, overwrites, save_key=None):
+            channel = discord.utils.get(guild.text_channels, name=name)
+            if not channel:
+                channel = await guild.create_text_channel(
+                    name=name,
+                    topic=topic,
+                    category=category,
+                    overwrites=overwrites,
+                    reason="Adrian setup"
+                )
+                results.append(f"✅ Created **#{name}**")
+            else:
+                # Move to Adrian category if not already there
+                if channel.category != category:
+                    await channel.edit(category=category)
+                # Update permissions
+                for target, perms in overwrites.items():
+                    await channel.set_permissions(target, overwrite=perms)
+                results.append(f"✅ Found **#{name}**")
+            if save_key and channel:
+                await db_save_server_config(str(guild.id), **{save_key: str(channel.id)})
+            return channel
 
-    # Create Guerrilla Warfare role
-    gw_role = discord.utils.get(guild.roles, name="Guerrilla Warfare")
-    if not gw_role:
-        try:
-            gw_role = await guild.create_role(
-                name="Guerrilla Warfare",
-                color=discord.Color.red(),
-                reason="Created by Adrian setup"
-            )
-            results.append("✅ Created **Guerrilla Warfare** role")
-            await db_save_server_config(str(guild.id), guerrilla_role_id=str(gw_role.id))
-        except Exception as e:
-            results.append(f"⚠️ Could not create Guerrilla Warfare role: {e}")
+        # #adrian — visible to everyone
+        adrian_ch = await get_or_create_channel(
+            name="adrian",
+            topic="Welcome to Adrian! Type /start to set up your profile.",
+            overwrites={
+                everyone:   discord.PermissionOverwrite(view_channel=True, send_messages=False),
+                bot_member: discord.PermissionOverwrite(view_channel=True, send_messages=True),
+                guild.owner: discord.PermissionOverwrite(view_channel=True, send_messages=True),
+            },
+            save_key="channel_id"
+        )
 
-    # Mark setup complete early so alerts start flowing even if permissions fail
-    await db_save_server_config(str(guild.id), setup_complete=1)
-    logger.info(f"[Setup] Marked setup_complete for {guild.name}")
+        # #dealer-updates — visible to Adrian Verified
+        dealer_ch = await get_or_create_channel(
+            name="dealer-updates",
+            topic="New item alerts from militaria dealers.",
+            overwrites={
+                everyone:      discord.PermissionOverwrite(view_channel=False),
+                verified_role: discord.PermissionOverwrite(view_channel=True, send_messages=False),
+                bot_member:    discord.PermissionOverwrite(view_channel=True, send_messages=True),
+                guild.owner:   discord.PermissionOverwrite(view_channel=True, send_messages=True),
+            },
+            save_key="updates_channel_id"
+        )
 
-    # Set permissions on commands channel
-    if commands_channel and verified_role:
-        try:
-            await commands_channel.set_permissions(guild.default_role, view_channel=True, send_messages=True)
-            await commands_channel.set_permissions(guild.me, view_channel=True, send_messages=True)
-            results.append(f"✅ Set permissions on {commands_channel.mention}")
-        except Exception as e:
-            results.append(f"⚠️ Could not set permissions on commands channel: {e}")
+        # #na-dealer-updates — visible to NA role
+        na_ch = await get_or_create_channel(
+            name="na-dealer-updates",
+            topic="New item alerts from North American militaria dealers.",
+            overwrites={
+                everyone:   discord.PermissionOverwrite(view_channel=False),
+                na_role:    discord.PermissionOverwrite(view_channel=True, send_messages=False),
+                bot_member: discord.PermissionOverwrite(view_channel=True, send_messages=True),
+                guild.owner: discord.PermissionOverwrite(view_channel=True, send_messages=True),
+            },
+            save_key="na_updates_channel_id"
+        )
 
-    # Set permissions on updates channel
-    if updates_channel and verified_role:
-        try:
-            await updates_channel.set_permissions(guild.default_role, view_channel=False)
-            await updates_channel.set_permissions(verified_role, view_channel=True, send_messages=False)
-            await updates_channel.set_permissions(guild.me, view_channel=True, send_messages=True)
-            # Server owner can always see it
-            owner = guild.owner
-            if owner:
-                await updates_channel.set_permissions(owner, view_channel=True, send_messages=True)
-            results.append(f"✅ Set permissions on {updates_channel.mention} — only **Adrian Verified** can see it")
-        except Exception as e:
-            results.append(f"⚠️ Could not set permissions on updates channel: {e}")
+        # #eu-dealer-updates — visible to EU role
+        eu_ch = await get_or_create_channel(
+            name="eu-dealer-updates",
+            topic="New item alerts from European militaria dealers.",
+            overwrites={
+                everyone:   discord.PermissionOverwrite(view_channel=False),
+                eu_role:    discord.PermissionOverwrite(view_channel=True, send_messages=False),
+                bot_member: discord.PermissionOverwrite(view_channel=True, send_messages=True),
+                guild.owner: discord.PermissionOverwrite(view_channel=True, send_messages=True),
+            },
+            save_key="eu_updates_channel_id"
+        )
 
-    # Post welcome image
-    if commands_channel:
+        # #waf-updates — visible to WAF role
+        waf_ch = await get_or_create_channel(
+            name="waf-updates",
+            topic="Wehrmacht Awards Forum new listing alerts.",
+            overwrites={
+                everyone:   discord.PermissionOverwrite(view_channel=False),
+                waf_role:   discord.PermissionOverwrite(view_channel=True, send_messages=False),
+                bot_member: discord.PermissionOverwrite(view_channel=True, send_messages=True),
+                guild.owner: discord.PermissionOverwrite(view_channel=True, send_messages=True),
+            },
+            save_key="waf_channel_id"
+        )
+
+        # #usmf-updates — visible to USMF role
+        usmf_ch = await get_or_create_channel(
+            name="usmf-updates",
+            topic="US Militaria Forum new listing alerts.",
+            overwrites={
+                everyone:   discord.PermissionOverwrite(view_channel=False),
+                usmf_role:  discord.PermissionOverwrite(view_channel=True, send_messages=False),
+                bot_member: discord.PermissionOverwrite(view_channel=True, send_messages=True),
+                guild.owner: discord.PermissionOverwrite(view_channel=True, send_messages=True),
+            },
+            save_key="usmf_channel_id"
+        )
+
+        # #estand — Estand forum channel
+        estand_ch = discord.utils.get(guild.forums, name="estand") or discord.utils.get(guild.text_channels, name="estand")
+        if not estand_ch:
+            try:
+                estand_ch = await guild.create_forum_channel(
+                    name="estand",
+                    topic="Buy and sell militaria with trusted collectors.",
+                    category=category,
+                    overwrites={
+                        everyone:      discord.PermissionOverwrite(view_channel=False),
+                        estand_role:   discord.PermissionOverwrite(view_channel=True, send_messages=True),
+                        bot_member:    discord.PermissionOverwrite(view_channel=True, send_messages=True),
+                        guild.owner:   discord.PermissionOverwrite(view_channel=True, send_messages=True),
+                    },
+                    reason="Adrian setup"
+                )
+                results.append("✅ Created **#estand** forum")
+            except Exception as e:
+                results.append(f"⚠️ Could not create Estand forum: {e}")
+        else:
+            results.append("✅ Found **#estand** forum")
+
+        if estand_ch:
+            await db_save_server_config(str(guild.id), estand_channel_id=str(estand_ch.id))
+
+        # ── MARK SETUP COMPLETE ────────────────────────────────
+        await db_save_server_config(str(guild.id), setup_complete=1)
+        logger.info(f"[Setup] Setup complete for {guild.name}")
+
+        # ── POST WELCOME MESSAGE ───────────────────────────────
         try:
             welcome_file = os.path.join(SCRIPT_DIR, "logos", "adrian", "Adrian_welcome.png")
             if os.path.exists(welcome_file):
-                welcome_msg = await commands_channel.send(
+                welcome_msg = await adrian_ch.send(
                     file=discord.File(welcome_file, filename="Adrian_welcome.png"),
                     view=WelcomeView()
                 )
-                # Save message ID so we can watch for reactions
                 await db_save_server_config(str(guild.id), welcome_message_id=str(welcome_msg.id))
-                results.append(f"✅ Posted welcome image to {commands_channel.mention}")
         except Exception as e:
-            results.append(f"⚠️ Could not post welcome image: {e}")
+            logger.error(f"[Setup] Could not post welcome: {e}")
 
-    results_text = "\n".join(results)
-    embed = discord.Embed(
-        title="🎖️ Adrian is Ready!",
-        description=(
-            f"Setup complete! Here's what I did automatically:\n\n"
-            f"{results_text}\n\n"
-            f"**Your members can now type `/start` in {commands_channel.mention if commands_channel else '#adrian'} to create their profile and start receiving alerts!**"
-        ),
-        color=discord.Color.green()
-    )
-    if bot_state.get("setup_end_img_url"):
-        embed.set_image(url=bot_state["setup_end_img_url"])
-    embed.set_footer(text="Adrian — Discord's #1 Militaria Bot")
-
-    # Since we deferred, edit_original_response replaces the "thinking" state
-    logger.info(f"[Setup] Sending completion screen to {interaction.user} in {interaction.guild.name}")
-    try:
+        # ── COMPLETION EMBED ───────────────────────────────────
+        results_text = "\n".join(results)
+        embed = discord.Embed(
+            title="🎖️ Adrian is Ready!",
+            description=(
+                f"Setup complete for **{guild.name}**! Here\'s what was created:\n\n"
+                f"{results_text}\n\n"
+                f"**Members can now type `/start` in {adrian_ch.mention} to get started!**"
+            ),
+            color=discord.Color.green()
+        )
+        embed.set_footer(text="Adrian — Discord's #1 Militaria Bot")
         await interaction.edit_original_response(embed=embed, view=None)
-        logger.info("[Setup] Completion screen sent successfully")
+
+    except discord.Forbidden:
+        await interaction.edit_original_response(
+            embed=discord.Embed(
+                title="⚠️ Missing Permissions",
+                description="I need **Manage Channels**, **Manage Roles**, and **Manage Permissions** to complete setup. Please grant these and run `/setup` again.",
+                color=discord.Color.red()
+            ),
+            view=None
+        )
     except Exception as e:
-        logger.error(f"[Setup] Could not send completion screen: {e}")
+        logger.error(f"[Setup] Auto-setup error: {e}\n{traceback.format_exc()}")
+        await interaction.edit_original_response(
+            embed=discord.Embed(
+                title="⚠️ Setup Error",
+                description=f"Something went wrong during setup. Please try again.\n\n`{e}`",
+                color=discord.Color.red()
+            ),
+            view=None
+        )
+
 
 # ==================== OWNER COMMANDS (Murphy only, test server only) ====================
 
