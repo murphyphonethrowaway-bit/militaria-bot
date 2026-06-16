@@ -5784,83 +5784,319 @@ async def watchlist_cmd(interaction: discord.Interaction):
 
     await interaction.followup.send(embed=embed, view=WatchlistView(), ephemeral=True)
 
-@client.tree.command(name="lookup", description="Look up another collector's public profile")
-@app_commands.describe(user="The Discord user to look up")
-async def lookup_cmd(interaction: discord.Interaction, user: discord.Member):
-    logger.info(f"[Command] /lookup: {interaction.user} looking up {user} ({user.id})")
+@client.tree.command(name="profile", description="View your profile or another member's public profile")
+@app_commands.describe(user="Leave blank for your own profile, or mention a member for their public profile")
+async def profile_cmd(interaction: discord.Interaction, user: discord.Member = None):
     await interaction.response.defer(ephemeral=True)
+
+    # If no user specified — show private profile
+    if user is None or user.id == interaction.user.id:
+        await show_private_profile(interaction)
+    else:
+        await show_public_profile(interaction, user)
+
+
+@client.tree.command(name="lookup", description="🔒 Admin profile lookup — full details on any member")
+@app_commands.describe(user="The member to look up")
+async def lookup_cmd(interaction: discord.Interaction, user: discord.Member):
+    # Only mods, server owner or bot owner
+    is_owner = interaction.user.id == BOT_OWNER_ID
+    is_admin = interaction.user.guild_permissions.administrator if interaction.guild else False
+    if not is_owner and not is_admin:
+        await interaction.response.send_message("❓ Unknown command.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    await show_admin_profile(interaction, user)
+
+
+async def show_public_profile(interaction, user: discord.Member):
+    """Public profile — visible to anyone via /profile @user."""
     uid = str(user.id)
 
-    # Check if user has a profile
     async with client.db.acquire() as conn:
         row = await conn.fetchrow("SELECT user_id FROM user_preferences WHERE user_id=$1", uid)
     if not row:
-        # Offer to invite them
-        embed = discord.Embed(
-            title="👤 Profile Not Found",
-            description=(
-                f"**{user.display_name}** doesn't have an Adrian profile yet.\n\n"
-                "Would you like me to send them an invite to create one?"
+        await interaction.followup.send(
+            embed=discord.Embed(
+                title="👤 Profile Not Found",
+                description=f"**{user.display_name}** hasn\'t set up their Adrian profile yet.",
+                color=discord.Color.orange()
             ),
-            color=discord.Color.orange()
+            ephemeral=True
         )
-
-        class InviteView(discord.ui.View):
-            def __init__(self):
-                super().__init__(timeout=60)
-
-            @discord.ui.button(label="📨 Send Invite", style=discord.ButtonStyle.success)
-            async def send_invite(self, interaction2: discord.Interaction, button: discord.ui.Button):
-                try:
-                    dm_embed = discord.Embed(
-                        title="👋 Hey! Someone wants to see your collector profile!",
-                        description=(
-                            f"**{interaction.user.display_name}** tried to look you up on Adrian but you don't have a profile yet.\n\n"
-                            "Adrian is Discord's #1 Militaria Bot — create your free collector profile to:\n"
-                            "📬 Get personalized dealer alerts\n"
-                            "🏪 Buy and sell in the Estand marketplace\n"
-                            "⭐ Build your collector reputation\n\n"
-                            f"Head over to **{interaction.guild.name}** and click **Get Started** in the #adrian channel!"
-                        ),
-                        color=discord.Color.dark_gold()
-                    )
-                    if bot_state.get("setup_q1_img_url"):
-                        dm_embed.set_thumbnail(url=bot_state["setup_q1_img_url"])
-                    await user.send(embed=dm_embed)
-                    await interaction2.response.send_message(f"✅ Invite sent to {user.display_name}!", ephemeral=True)
-                except discord.Forbidden:
-                    await interaction2.response.send_message(f"⚠️ Could not DM {user.display_name} — they may have DMs disabled.", ephemeral=True)
-
-        await interaction.followup.send(embed=embed, view=InviteView(), ephemeral=True)
         return
 
-    # Build public profile
     seller_avg, seller_count = await db_get_seller_rating(uid)
     buyer_avg, buyer_count = await db_get_buyer_rating(uid)
     seller_sales, buyer_purchases = await db_get_completed_transactions(uid)
     points = await db_get_user_points(uid)
     warnings = await db_get_user_warnings(uid)
-    rank = get_rank(points, warnings > 0)
-    top_percent = await db_get_top_percent(uid)
 
+    # Check badges
+    is_premium = await db_is_premium(uid)
+    is_beta = await db_is_beta_tester(uid)
 
-    title = f"🎖️ {user.display_name}'s Public Profile"
-    if top_percent:
-        title += f"  {top_percent}"
-    if warnings > 0:
-        title += "  ⚠️"
+    # Member since
+    member_since = f"<t:{int(user.created_at.timestamp())}:D>"
 
-    embed = discord.Embed(title=title, color=discord.Color.dark_gold(), timestamp=datetime.now(timezone.utc))
-    embed.set_thumbnail(url=user.display_avatar.url)
-    embed.add_field(name="🎗️ Rank", value=f"{rank}\n{points:,} pts", inline=True)
-    embed.add_field(name="\u200b", value="\u200b", inline=True)
-    embed.add_field(name="\u200b", value="\u200b", inline=True)
-    embed.add_field(name="🏪 Seller", value=f"{format_stars(seller_avg)}\n{seller_sales} sale(s)", inline=True)
+    # Build embed
+    name_line = user.display_name
+    badges = ""
+    if is_beta: badges += " 🤖"
+    if is_premium: badges += " ❤️"
+
+    embed = discord.Embed(
+        title=f"👤 {name_line}{badges}",
+        color=discord.Color.dark_gold(),
+        timestamp=datetime.now(timezone.utc)
+    )
+    embed.set_thumbnail(url=user.display_avatar.url if user.display_avatar else None)
+    embed.add_field(name="📅 Member Since", value=member_since, inline=True)
+    embed.add_field(name="⭐ Seller", value=f"{format_stars(seller_avg)}\n{seller_sales} sale(s)", inline=True)
     embed.add_field(name="🛒 Buyer", value=f"{format_stars(buyer_avg)}\n{buyer_purchases} purchase(s)", inline=True)
+
+    # Active listings
+    try:
+        async with client.db.acquire() as conn:
+            listings = await conn.fetch(
+                "SELECT title FROM estate_listings WHERE seller_id=$1 AND status='active' LIMIT 5",
+                uid
+            )
+        if listings:
+            listing_text = "\n".join([f"• {l['title']}" for l in listings])
+            embed.add_field(name="🏪 Active Listings", value=listing_text, inline=False)
+    except Exception:
+        pass
+
     if warnings > 0:
         embed.add_field(name="⚠️ Warnings", value=f"{warnings} active warning(s)", inline=False)
+
     embed.set_footer(text="Adrian — Collector Profile")
     await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+async def show_private_profile(interaction):
+    """Private profile — only the user sees this via /profile."""
+    uid = str(interaction.user.id)
+    user = interaction.user
+
+    async with client.db.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM user_preferences WHERE user_id=$1", uid
+        )
+
+    if not row:
+        await interaction.followup.send(
+            embed=discord.Embed(
+                title="👤 No Profile Yet",
+                description="You haven\'t set up your Adrian profile yet. Click **Get Started** in #adrian or run `/start`.",
+                color=discord.Color.orange()
+            ),
+            ephemeral=True
+        )
+        return
+
+    seller_avg, seller_count = await db_get_seller_rating(uid)
+    buyer_avg, buyer_count = await db_get_buyer_rating(uid)
+    seller_sales, buyer_purchases = await db_get_completed_transactions(uid)
+    points = await db_get_user_points(uid)
+    warnings = await db_get_user_warnings(uid)
+    follows = await db_get_follows(uid)
+    is_premium = await db_is_premium(uid)
+    is_beta = await db_is_beta_tester(uid)
+
+    badges = ""
+    if is_beta: badges += " 🤖"
+    if is_premium: badges += " ❤️"
+
+    member_since = f"<t:{int(user.created_at.timestamp())}:D>"
+
+    embed = discord.Embed(
+        title=f"👤 {user.display_name}{badges}",
+        description="Your private profile — only you can see this.",
+        color=discord.Color.dark_gold(),
+        timestamp=datetime.now(timezone.utc)
+    )
+    embed.set_thumbnail(url=user.display_avatar.url if user.display_avatar else None)
+    embed.add_field(name="📅 Member Since", value=member_since, inline=True)
+    embed.add_field(name="⭐ Seller", value=f"{format_stars(seller_avg)}\n{seller_sales} sale(s)", inline=True)
+    embed.add_field(name="🛒 Buyer", value=f"{format_stars(buyer_avg)}\n{buyer_purchases} purchase(s)", inline=True)
+
+    # Followed dealers dropdown
+    if follows:
+        dealer_options = [
+            discord.SelectOption(label=f["dealer_name"][:100], value=f["dealer_name"])
+            for f in follows[:25]
+        ]
+    else:
+        dealer_options = [discord.SelectOption(label="No dealers followed yet", value="none")]
+
+    # WAF/USMF subscriptions
+    waf_cats = row.get("waf_categories", "") or ""
+    usmf_cats = row.get("usmf_categories", "") or ""
+    waf_list = [c for c in waf_cats.split(",") if c] if waf_cats else []
+    usmf_list = [c for c in usmf_cats.split(",") if c] if usmf_cats else []
+
+    forum_text = ""
+    if waf_list:
+        forum_text += f"**WAF:** {', '.join(waf_list[:3])}{'...' if len(waf_list) > 3 else ''}\n"
+    if usmf_list:
+        forum_text += f"**USMF:** {', '.join(usmf_list[:3])}{'...' if len(usmf_list) > 3 else ''}"
+    if not forum_text:
+        forum_text = "No forum subscriptions"
+
+    embed.add_field(name="🔔 Following", value=f"{len(follows)} dealer(s)", inline=True)
+    embed.add_field(name="🎖️ Forum Subscriptions", value=forum_text, inline=False)
+
+    # Transaction history
+    try:
+        async with client.db.acquire() as conn:
+            txs = await conn.fetch(
+                """SELECT item_title, status, seller_id, buyer_id FROM estate_transactions
+                   WHERE seller_id=$1 OR buyer_id=$1
+                   ORDER BY created_at DESC LIMIT 5""",
+                uid
+            )
+        if txs:
+            tx_text = "\n".join([
+                f"{'sold' if t['seller_id'] == uid else 'bought'} — {t['item_title'][:40]}"
+                for t in txs
+            ])
+            embed.add_field(name="📋 Recent Transactions", value=tx_text, inline=False)
+    except Exception:
+        pass
+
+    if warnings > 0:
+        embed.add_field(name="⚠️ Warnings", value=f"{warnings} active warning(s)", inline=False)
+
+    embed.set_footer(text="Adrian — Your Private Profile | Run /start to update preferences")
+
+    # Build view with followed dealers dropdown
+    view = discord.ui.View(timeout=120)
+    if follows:
+        unfollow_select = discord.ui.Select(
+            placeholder="🔕 Unfollow a dealer...",
+            options=dealer_options,
+            min_values=1,
+            max_values=1
+        )
+        async def on_unfollow(interaction2: discord.Interaction):
+            dealer = unfollow_select.values[0]
+            if dealer == "none":
+                await interaction2.response.defer(ephemeral=True)
+                return
+            async with client.db.acquire() as conn:
+                await conn.execute(
+                    "DELETE FROM dealer_follows WHERE user_id=$1 AND dealer_name=$2",
+                    uid, dealer
+                )
+            await interaction2.response.send_message(f"🔕 Unfollowed **{dealer}**.", ephemeral=True)
+            logger.info(f"[Profile] {interaction2.user} unfollowed {dealer}")
+        unfollow_select.callback = on_unfollow
+        view.add_item(unfollow_select)
+
+    await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+
+
+async def show_admin_profile(interaction, user: discord.Member):
+    """Admin profile — mods and bot owner only via /lookup."""
+    uid = str(user.id)
+
+    seller_avg, seller_count = await db_get_seller_rating(uid)
+    buyer_avg, buyer_count = await db_get_buyer_rating(uid)
+    seller_sales, buyer_purchases = await db_get_completed_transactions(uid)
+    points = await db_get_user_points(uid)
+    warnings = await db_get_user_warnings(uid)
+    is_premium = await db_is_premium(uid)
+    is_beta = await db_is_beta_tester(uid)
+
+    badges = ""
+    if is_beta: badges += " 🤖"
+    if is_premium: badges += " ❤️"
+
+    # Ban status
+    try:
+        async with client.db.acquire() as conn:
+            ban_row = await conn.fetchrow(
+                "SELECT reason FROM user_bans WHERE user_id=$1", uid
+            )
+        ban_status = f"🚫 Banned: {ban_row['reason']}" if ban_row else "✅ Not banned"
+    except Exception:
+        ban_status = "Unknown"
+
+    # Warning history
+    try:
+        async with client.db.acquire() as conn:
+            warn_rows = await conn.fetch(
+                "SELECT reason, issued_at FROM user_warnings WHERE user_id=$1 ORDER BY issued_at DESC LIMIT 5",
+                uid
+            )
+        warn_text = "\n".join([
+            f"• {w['reason'][:60]} — <t:{w['issued_at']}:D>"
+            for w in warn_rows
+        ]) if warn_rows else "No warnings"
+    except Exception:
+        warn_text = "Could not load"
+
+    # Report history
+    try:
+        async with client.db.acquire() as conn:
+            report_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM estate_reports WHERE seller_id=$1", uid
+            ) or 0
+        report_text = f"{report_count} report(s)"
+    except Exception:
+        report_text = "Unknown"
+
+    # All transactions
+    try:
+        async with client.db.acquire() as conn:
+            txs = await conn.fetch(
+                """SELECT item_title, status, seller_id, buyer_id, guild_id FROM estate_transactions
+                   WHERE seller_id=$1 OR buyer_id=$1
+                   ORDER BY created_at DESC LIMIT 10""",
+                uid
+            )
+        tx_text = "\n".join([
+            f"{'sold' if t['seller_id'] == uid else 'bought'} — {t['item_title'][:40]}"
+            for t in txs
+        ]) if txs else "No transactions"
+    except Exception:
+        tx_text = "Could not load"
+
+    embed = discord.Embed(
+        title=f"🔒 Admin Lookup — {user.display_name}{badges}",
+        color=discord.Color.red(),
+        timestamp=datetime.now(timezone.utc)
+    )
+    embed.set_thumbnail(url=user.display_avatar.url if user.display_avatar else None)
+    embed.add_field(name="User ID", value=uid, inline=True)
+    embed.add_field(name="Account Created", value=f"<t:{int(user.created_at.timestamp())}:D>", inline=True)
+    embed.add_field(name="Ban Status", value=ban_status, inline=False)
+    embed.add_field(name="⭐ Seller", value=f"{format_stars(seller_avg)} · {seller_sales} sale(s)", inline=True)
+    embed.add_field(name="🛒 Buyer", value=f"{format_stars(buyer_avg)} · {buyer_purchases} purchase(s)", inline=True)
+    embed.add_field(name="⚠️ Active Warnings", value=str(warnings), inline=True)
+    embed.add_field(name="📋 Warning History", value=warn_text, inline=False)
+    embed.add_field(name="🚨 Reports Against", value=report_text, inline=True)
+    embed.add_field(name="🏪 Transactions", value=tx_text, inline=False)
+    embed.set_footer(text="Adrian — Admin Profile | 🔒 Confidential")
+
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+async def db_is_beta_tester(user_id):
+    """Check if user has Adrian Premium role on any connected guild."""
+    try:
+        for guild in client.guilds:
+            member = guild.get_member(int(user_id))
+            if member:
+                premium_role = discord.utils.get(guild.roles, name="Adrian Premium")
+                if premium_role and premium_role in member.roles:
+                    return True
+    except Exception:
+        pass
+    return False
+
 
 @client.tree.command(name="alerts", description="See your pending dealer and forum alerts")
 async def alerts_cmd(interaction: discord.Interaction):
