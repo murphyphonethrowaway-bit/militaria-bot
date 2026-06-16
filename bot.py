@@ -28,7 +28,8 @@ from datetime import datetime, timezone, timedelta
 
 # ==================== CONFIGURATION ====================
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-BOT_OWNER_ID = 161988117862023169  # Murphy's Discord user ID
+BOT_OWNER_ID = 161988117862023169
+NEW_PROFILE_CHANNEL_ID = 1515727882394144908  # Bot owner profile notification channel  # Murphy's Discord user ID
 GUILD_ID = 1357352905857826887  # Main server
 TEST_GUILD_ID = 1513233559878369422  # Test server
 OWNER_GUILD_ID = 1357352905857826887  # Owner commands go here (main server)
@@ -2452,11 +2453,6 @@ async def check_all_dealers():
             await asyncio.sleep(60)
 
 async def _check_all_dealers_inner():
-    channel = client.get_channel(CHANNEL_ID)
-    if not channel:
-        logger.warning(f"[DealerChecker] Could not find channel {CHANNEL_ID} — waiting 60s before retry...")
-        await asyncio.sleep(60)
-        return
     logger.info(f"Bot ready! Monitoring {len(DEALERS)} web dealers + {len(EMAIL_DEALERS)} email dealers.")
     while not client.is_closed():
         if bot_state["paused"] and not bot_state["force_rescan"]:
@@ -3000,11 +2996,7 @@ async def check_email_dealers():
             await asyncio.sleep(60)
 
 async def _check_email_dealers_inner():
-    channel = client.get_channel(CHANNEL_ID)
-    if not channel:
-        logger.warning(f"[EmailChecker] Could not find channel {CHANNEL_ID} — waiting 60s before retry...")
-        await asyncio.sleep(60)
-        return
+    # Email checker runs regardless of channel availability
     logger.info(f"Email checker ready! Checking every {EMAIL_CHECK_INTERVAL} seconds.")
     while not client.is_closed():
         if bot_state["paused"]:
@@ -4521,11 +4513,13 @@ async def start_step5_waf_categories(interaction, then_usmf=False):
     save_btn = discord.ui.Button(label="✅ Save", style=discord.ButtonStyle.success, row=1)
     async def on_save(interaction2: discord.Interaction):
         await interaction2.response.defer(ephemeral=True)
-        if not view._selected:
+        # Read values directly from select at save time as fallback
+        selected = view._selected or list(select_menu.values) if select_menu.values else view._selected
+        if not selected:
             await interaction2.followup.send("Please select at least one category first.", ephemeral=True)
             return
-        await db_save_user_waf_categories(str(interaction2.user.id), view._selected)
-        logger.info(f"[Start] {interaction2.user} subscribed to {len(view._selected)} WAF categories")
+        await db_save_user_waf_categories(str(interaction2.user.id), selected)
+        logger.info(f"[Start] {interaction2.user} subscribed to {len(selected)} WAF categories")
         if view._then_usmf:
             await start_step6_usmf_categories(interaction2)
         else:
@@ -4693,22 +4687,28 @@ async def start_step8_premium(interaction):
                 await interaction2.followup.send("⚠️ This button is for authorized beta testers only.", ephemeral=True)
                 return
             try:
-                config = await db_get_server_config(str(interaction2.guild.id))
-                premium_role_id = get_config_value(config, "premium_role_id") if config else None
-                premium_role = interaction2.guild.get_role(int(premium_role_id)) if premium_role_id else discord.utils.get(interaction2.guild.roles, name="Adrian Premium")
+                premium_role = discord.utils.get(interaction2.guild.roles, name="Adrian Premium")
+                if not premium_role:
+                    config = await db_get_server_config(str(interaction2.guild.id))
+                    premium_role_id = get_config_value(config, "premium_role_id") if config else None
+                    if premium_role_id:
+                        premium_role = interaction2.guild.get_role(int(premium_role_id))
                 if premium_role:
                     member = interaction2.guild.get_member(interaction2.user.id)
-                    if member and premium_role not in member.roles:
-                        await member.add_roles(premium_role, reason="Beta tester — assigned via /start")
-                        await interaction2.followup.send("🤖 Beta tester status granted! You now have Adrian Premium.", ephemeral=True)
-                        logger.info(f"[Start] Beta tester premium assigned to {interaction2.user}")
+                    if member:
+                        if premium_role not in member.roles:
+                            await member.add_roles(premium_role, reason="Beta tester — assigned via /start")
+                            await interaction2.followup.send("🤖 Beta tester status granted! You now have Adrian Premium.", ephemeral=True)
+                            logger.info(f"[Start] Beta tester premium assigned to {interaction2.user} in {interaction2.guild.name}")
+                        else:
+                            await interaction2.followup.send("🤖 You already have the Premium role!", ephemeral=True)
                     else:
-                        await interaction2.followup.send("You already have the Premium role!", ephemeral=True)
+                        await interaction2.followup.send("⚠️ Could not find your membership in this server.", ephemeral=True)
                 else:
-                    await interaction2.followup.send("⚠️ Could not find the Adrian Premium role.", ephemeral=True)
+                    await interaction2.followup.send("⚠️ Could not find the Adrian Premium role. Make sure `/setup` has been run on this server.", ephemeral=True)
             except Exception as e:
-                logger.error(f"[Start] Beta tester error: {e}")
-                await interaction2.followup.send("⚠️ Something went wrong.", ephemeral=True)
+                logger.error(f"[Start] Beta tester error: {e}\n{traceback.format_exc()}")
+                await interaction2.followup.send(f"⚠️ Something went wrong: {e}", ephemeral=True)
 
     await interaction.edit_original_response(embed=embed, view=PremiumView())
 
@@ -4796,7 +4796,7 @@ async def settings_cmd(interaction: discord.Interaction):
     )
     text_embed.set_footer(text="Adrian — Discord's #1 Militaria Bot")
     embeds.append(text_embed)
-    await interaction.response.send_message(embeds=embeds, view=RegionSelectView(), ephemeral=True)
+    await interaction.response.send_message("Use `/start` to update your preferences.", ephemeral=True)
 
 @client.tree.command(name="help", description="Shows all available bot commands")
 async def help_cmd(interaction: discord.Interaction):
@@ -6578,7 +6578,7 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
             if img_url:
                 embed.set_image(url=img_url)
             dm = await member.create_dm()
-            await dm.send(embed=embed, view=RegionSelectView())
+            await dm.send(embed=embed)
             logger.info(f"[Welcome] Sent /start onboarding to {member} via DM")
         except discord.Forbidden:
             logger.warning(f"[Welcome] Could not DM {member} — DMs disabled")
@@ -7188,7 +7188,6 @@ async def on_ready():
     client.add_view(WatchItemView("placeholder", "placeholder", ""))
     client.add_view(FollowDealerView("placeholder"))
     client.add_view(MilitariaAlertAdView())
-    client.add_view(RegionSelectView())
     client.add_view(EraSelectView())
     client.add_view(CountrySelectView())
     client.add_view(ForumSelectView())
@@ -7203,57 +7202,54 @@ async def on_ready():
     client.add_view(WelcomeView())
     logger.info("Persistent views registered.")
 
-    # Post welcome image to all configured #adrian channels on startup
+    # Post welcome image to all #adrian channels on startup
     try:
         welcome_file = os.path.join(SCRIPT_DIR, "logos", "adrian", "Adrian_welcome.png")
         if not os.path.exists(welcome_file):
             logger.warning("[Startup] Adrian_welcome.png not found — skipping welcome post")
         else:
-            # Build list of all channels to refresh — deduplicated by channel ID
             channels_to_refresh = {}
 
-            # Always include hardcoded main server channel
-            main_channel = client.get_channel(CHANNEL_ID)
-            if main_channel:
-                channels_to_refresh[CHANNEL_ID] = (main_channel, str(main_channel.guild.id))
-
-            # Add all configured servers
-            try:
-                all_servers = await db_get_all_servers()
-                for server in all_servers:
-                    srv_channel_id = get_config_value(server, "channel_id")
-                    guild_id = get_config_value(server, "guild_id")
-                    if not srv_channel_id:
-                        continue
-                    srv_channel_id = int(srv_channel_id)
-                    srv_channel = client.get_channel(srv_channel_id)
-                    if srv_channel:
-                        channels_to_refresh[srv_channel_id] = (srv_channel, str(guild_id))
-            except Exception as e:
-                logger.warning(f"[Startup] Could not load server list: {e}")
-
-            # Refresh each channel
-            for channel_id, (channel, guild_id) in channels_to_refresh.items():
+            # Find #adrian channel in every connected guild
+            for guild in client.guilds:
+                # Try DB first
                 try:
-                    # Bulk delete up to 100 messages (must be under 14 days old)
+                    config = await db_get_server_config(str(guild.id))
+                    channel_id_str = get_config_value(config, "channel_id") if config else None
+                    if channel_id_str:
+                        ch = guild.get_channel(int(channel_id_str))
+                        if ch:
+                            channels_to_refresh[ch.id] = (ch, str(guild.id))
+                            continue
+                except Exception:
+                    pass
+                # Fall back to searching by name
+                ch = discord.utils.get(guild.text_channels, name="adrian")
+                if ch:
+                    channels_to_refresh[ch.id] = (ch, str(guild.id))
+                    logger.info(f"[Startup] Found #adrian by name in {guild.name}")
+
+            logger.info(f"[Startup] Refreshing welcome in {len(channels_to_refresh)} server(s)")
+
+            for ch_id, (channel, guild_id) in channels_to_refresh.items():
+                try:
+                    # Clear old messages
                     try:
                         deleted = await channel.purge(limit=100, reason="Adrian startup cleanup")
                         logger.info(f"[Startup] Cleared {len(deleted)} messages from #{channel.name} in {channel.guild.name}")
                     except discord.Forbidden:
                         logger.warning(f"[Startup] No permission to purge #{channel.name} in {channel.guild.name}")
                     except Exception as pe:
-                        logger.warning(f"[Startup] Purge failed for #{channel.name}: {pe}")
+                        logger.warning(f"[Startup] Purge failed: {pe}")
 
-                    # Post fresh welcome message
+                    # Post fresh welcome
                     welcome_msg = await channel.send(
                         file=discord.File(welcome_file, filename="Adrian_welcome.png"),
                         view=WelcomeView()
                     )
-                    await db_save_server_config(guild_id, welcome_message_id=str(welcome_msg.id))
+                    await db_save_server_config(guild_id, welcome_message_id=str(welcome_msg.id), channel_id=str(channel.id))
                     logger.info(f"[Startup] Welcome posted to #{channel.name} in {channel.guild.name}")
-
-                    await asyncio.sleep(0.5)  # Small delay between servers
-
+                    await asyncio.sleep(0.5)
                 except Exception as se:
                     logger.warning(f"[Startup] Could not refresh #{channel.name}: {se}")
 
