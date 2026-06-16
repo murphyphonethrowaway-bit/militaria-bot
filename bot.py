@@ -4197,2050 +4197,477 @@ async def db_set_user_forums(user_id, forums_choice):
             forums_choice, int(datetime.now(timezone.utc).timestamp()), str(user_id)
         )
 
-async def show_question4(interaction: discord.Interaction, edit=True):
-    """Show question 4 — community forums opt-in."""
-    embeds = []
-    if bot_state.get("question4_img_url"):
-        img_embed = discord.Embed(color=discord.Color.dark_gold())
-        img_embed.set_image(url=bot_state["question4_img_url"])
-        embeds.append(img_embed)
+# ==================== /START ONBOARDING ====================
 
-    text_embed = discord.Embed(
-        description="🟥 **WAF** — Wehrmacht Awards Forum\n🟩 **USMF** — US Militaria Forum\n✅ **Both** — WAF & USMF\n❌ **None** — Skip forum notifications",
+BOT_RULES_TEXT = (
+    "**1.** Be respectful — no harassment, hate speech or discrimination\n"
+    "**2.** One account only — ban evasion results in a permanent ban\n"
+    "**3.** No spam or command abuse\n"
+    "**4.** Follow Discord\'s Terms of Service"
+)
+
+ESTAND_RULES_TEXT = (
+    "**1.** All items must be accurately described and honestly represented\n"
+    "**2.** No fakes or reproductions listed as originals\n"
+    "**3.** No stolen or looted artifacts\n"
+    "**4.** No scamming — fraud results in a permanent ban from all Adrian servers\n"
+    "**5.** Honor your deals — if you agree to a sale, complete it\n"
+    "**6.** No price gouging\n"
+    "**7.** Disputes must be handled through Adrian\'s dispute system"
+)
+
+
+async def start_step1_bot_rules(interaction):
+    """Step 1 — Bot rules agreement."""
+    embed = discord.Embed(
+        title="📋 Adrian Bot Rules",
+        description=(
+            "Before getting started, please read and agree to the following rules:\n\n"
+            + BOT_RULES_TEXT +
+            "\n\nBy clicking **I Agree** you confirm you have read and will follow these rules."
+        ),
         color=discord.Color.dark_gold()
     )
-    text_embed.set_footer(text="Adrian — Discord's #1 Militaria Bot")
-    embeds.append(text_embed)
+    embed.set_footer(text="Adrian — Step 1 of 8")
 
-    try:
-        if interaction.response.is_done():
-            await interaction.edit_original_response(embeds=embeds, view=ForumSelectView())
-        else:
-            await interaction.response.edit_message(embeds=embeds, view=ForumSelectView())
-    except Exception as e:
-        logger.error(f"[Q4] Error showing forum question: {e}")
-        try:
-            await interaction.followup.send(embeds=embeds, view=ForumSelectView(), ephemeral=True)
-        except Exception: pass
+    class BotRulesView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=300)
 
-class ForumSelectView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    async def _save(self, interaction, choice):
-        try:
-            await interaction.response.defer(ephemeral=True)
-            await db_set_user_forums(str(interaction.user.id), choice)
-            # If user wants WAF or both — ask which categories
-            if choice == "waf":
-                await show_waf_categories(interaction)
-            elif choice == "usmf":
-                await show_usmf_categories(interaction)
-            elif choice == "both":
-                await show_waf_categories(interaction, then_usmf=True)
-            else:
-                await show_all_done(interaction, edit=True)
-        except Exception as e:
-            logger.error(f"[ForumSelect] Error: {e}\n{traceback.format_exc()}")
+        @discord.ui.button(label="✅ I Agree", style=discord.ButtonStyle.success)
+        async def agree(self2, interaction2: discord.Interaction, button: discord.ui.Button):
+            await interaction2.response.defer(ephemeral=True)
+            # Assign Adrian Verified role
             try:
-                await interaction.followup.send("⚠️ Something went wrong. Please try again.", ephemeral=True)
-            except Exception: pass
+                config = await db_get_server_config(str(interaction2.guild.id))
+                role_id = get_config_value(config, "verified_role_id") if config else None
+                role = interaction2.guild.get_role(int(role_id)) if role_id else None
+                if not role:
+                    role = discord.utils.get(interaction2.guild.roles, name="Adrian Verified")
+                if role:
+                    member = interaction2.guild.get_member(interaction2.user.id)
+                    if member and role not in member.roles:
+                        await member.add_roles(role, reason="Agreed to bot rules via /start")
+                        logger.info(f"[Start] Adrian Verified assigned to {interaction2.user} in {interaction2.guild.name}")
+            except Exception as e:
+                logger.error(f"[Start] Could not assign Adrian Verified: {e}")
+            await start_step2_estand_rules(interaction2)
 
-    @discord.ui.button(emoji="🟥", style=discord.ButtonStyle.secondary, custom_id="forum_waf")
-    async def forum_waf(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._save(interaction, "waf")
+        @discord.ui.button(label="❌ Decline", style=discord.ButtonStyle.danger)
+        async def decline(self2, interaction2: discord.Interaction, button: discord.ui.Button):
+            await interaction2.response.edit_message(
+                embed=discord.Embed(
+                    title="❌ Rules Declined",
+                    description=(
+                        "You need to agree to the bot rules to use Adrian.\n\n"
+                        "Run `/start` again when you\'re ready to agree."
+                    ),
+                    color=discord.Color.red()
+                ),
+                view=None
+            )
 
-    @discord.ui.button(emoji="🟩", style=discord.ButtonStyle.secondary, custom_id="forum_usmf")
-    async def forum_usmf(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._save(interaction, "usmf")
+    await interaction.edit_original_response(embed=embed, view=BotRulesView())
 
-    @discord.ui.button(emoji="✅", style=discord.ButtonStyle.secondary, custom_id="forum_both")
-    async def forum_both(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._save(interaction, "both")
 
-    @discord.ui.button(emoji="❌", style=discord.ButtonStyle.secondary, custom_id="forum_none")
-    async def forum_none(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._save(interaction, "none")
+async def start_step2_estand_rules(interaction):
+    """Step 2 — Estand rules agreement."""
+    embed = discord.Embed(
+        title="🏪 Estand Marketplace Rules",
+        description=(
+            "The Estand is Adrian\'s buy & sell marketplace for militaria collectors.\n\n"
+            + ESTAND_RULES_TEXT +
+            "\n\nAgree to access the Estand. You can skip and come back to this anytime by running `/start` again."
+        ),
+        color=discord.Color.dark_gold()
+    )
+    embed.set_footer(text="Adrian — Step 2 of 8")
 
-async def show_waf_categories(interaction: discord.Interaction, then_usmf=False):
-    """Ask user which WAF categories they want to follow."""
-    # Build options from WAF_CATEGORIES (skip All WAF Updates)
+    class EstartRulesView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=300)
+
+        @discord.ui.button(label="✅ I Agree", style=discord.ButtonStyle.success)
+        async def agree(self2, interaction2: discord.Interaction, button: discord.ui.Button):
+            await interaction2.response.defer(ephemeral=True)
+            # Save estand agreement and assign role
+            try:
+                now = int(datetime.now(timezone.utc).timestamp())
+                async with client.db.acquire() as conn:
+                    await conn.execute(
+                        "INSERT INTO user_preferences (user_id, estand_agreed, created_at, updated_at) VALUES ($1, 1, $2, $2) ON CONFLICT (user_id) DO UPDATE SET estand_agreed=1, updated_at=$2",
+                        str(interaction2.user.id), now
+                    )
+                config = await db_get_server_config(str(interaction2.guild.id))
+                role_id = get_config_value(config, "estand_verified_role_id") if config else None
+                role = interaction2.guild.get_role(int(role_id)) if role_id else None
+                if not role:
+                    role = discord.utils.get(interaction2.guild.roles, name="Estand Verified")
+                if role:
+                    member = interaction2.guild.get_member(interaction2.user.id)
+                    if member and role not in member.roles:
+                        await member.add_roles(role, reason="Agreed to Estand rules via /start")
+                        logger.info(f"[Start] Estand Verified assigned to {interaction2.user} in {interaction2.guild.name}")
+            except Exception as e:
+                logger.error(f"[Start] Estand agreement error: {e}")
+            await start_step3_dealer_region(interaction2)
+
+        @discord.ui.button(label="⏭️ Skip for Now", style=discord.ButtonStyle.secondary)
+        async def skip(self2, interaction2: discord.Interaction, button: discord.ui.Button):
+            await interaction2.response.defer(ephemeral=True)
+            await start_step3_dealer_region(interaction2)
+
+    await interaction.edit_original_response(embed=embed, view=EstartRulesView())
+
+
+async def start_step3_dealer_region(interaction):
+    """Step 3 — Dealer region selection."""
+    embed = discord.Embed(
+        title="🌍 Dealer Updates",
+        description=(
+            "Where do you want to see dealer updates from?\n\n"
+            "🇺🇸 **NA** — North American dealers only\n"
+            "🇪🇺 **EU** — European dealers only\n"
+            "🌍 **Both** — All dealers\n\n"
+            "You can change this anytime by running `/start` again."
+        ),
+        color=discord.Color.dark_gold()
+    )
+    embed.set_footer(text="Adrian — Step 3 of 8")
+
+    class DealerRegionView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=300)
+
+        async def _save(self2, interaction2, region):
+            await interaction2.response.defer(ephemeral=True)
+            try:
+                # Save region preference
+                await db_set_user_region(str(interaction2.user.id), region)
+                # Assign NA and/or EU roles
+                config = await db_get_server_config(str(interaction2.guild.id))
+                na_role_id = get_config_value(config, "na_role_id") if config else None
+                eu_role_id = get_config_value(config, "eu_role_id") if config else None
+                na_role = interaction2.guild.get_role(int(na_role_id)) if na_role_id else discord.utils.get(interaction2.guild.roles, name="NA")
+                eu_role = interaction2.guild.get_role(int(eu_role_id)) if eu_role_id else discord.utils.get(interaction2.guild.roles, name="EU")
+                member = interaction2.guild.get_member(interaction2.user.id)
+                if member:
+                    if na_role and region in ("NA", "both"):
+                        if na_role not in member.roles:
+                            await member.add_roles(na_role, reason="/start dealer region")
+                    elif na_role and region == "EU":
+                        if na_role in member.roles:
+                            await member.remove_roles(na_role, reason="/start dealer region")
+                    if eu_role and region in ("EU", "both"):
+                        if eu_role not in member.roles:
+                            await member.add_roles(eu_role, reason="/start dealer region")
+                    elif eu_role and region == "NA":
+                        if eu_role in member.roles:
+                            await member.remove_roles(eu_role, reason="/start dealer region")
+                logger.info(f"[Start] {interaction2.user} selected dealer region: {region}")
+            except Exception as e:
+                logger.error(f"[Start] Dealer region error: {e}")
+            await start_step4_forums(interaction2)
+
+        @discord.ui.button(emoji="🇺🇸", style=discord.ButtonStyle.secondary)
+        async def na(self2, interaction2, button):
+            await self2._save(interaction2, "NA")
+
+        @discord.ui.button(emoji="🇪🇺", style=discord.ButtonStyle.secondary)
+        async def eu(self2, interaction2, button):
+            await self2._save(interaction2, "EU")
+
+        @discord.ui.button(label="🌍 Both", style=discord.ButtonStyle.secondary)
+        async def both(self2, interaction2, button):
+            await self2._save(interaction2, "both")
+
+    await interaction.edit_original_response(embed=embed, view=DealerRegionView())
+
+
+async def start_step4_forums(interaction):
+    """Step 4 — Forum selection."""
+    embed = discord.Embed(
+        title="🎖️ Forum Alerts",
+        description=(
+            "Which militaria forums would you like to follow?\n\n"
+            "🟥 **WAF** — Wehrmacht Awards Forum\n"
+            "🟩 **USMF** — US Militaria Forum\n"
+            "✅ **Both** — WAF & USMF\n"
+            "❌ **None** — Skip forum alerts\n\n"
+            "You\'ll only see forum alerts for the forums you select."
+        ),
+        color=discord.Color.dark_gold()
+    )
+    embed.set_footer(text="Adrian — Step 4 of 8")
+
+    class ForumSelectView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=300)
+
+        async def _save(self2, interaction2, choice):
+            await interaction2.response.defer(ephemeral=True)
+            try:
+                await db_set_user_forums(str(interaction2.user.id), choice)
+                config = await db_get_server_config(str(interaction2.guild.id))
+                waf_role_id = get_config_value(config, "waf_role_id") if config else None
+                usmf_role_id = get_config_value(config, "usmf_role_id") if config else None
+                waf_role = interaction2.guild.get_role(int(waf_role_id)) if waf_role_id else discord.utils.get(interaction2.guild.roles, name="WAF")
+                usmf_role = interaction2.guild.get_role(int(usmf_role_id)) if usmf_role_id else discord.utils.get(interaction2.guild.roles, name="USMF")
+                member = interaction2.guild.get_member(interaction2.user.id)
+                if member:
+                    if waf_role and choice in ("waf", "both"):
+                        if waf_role not in member.roles:
+                            await member.add_roles(waf_role, reason="/start forum selection")
+                    elif waf_role and choice == "usmf":
+                        if waf_role in member.roles:
+                            await member.remove_roles(waf_role)
+                    if usmf_role and choice in ("usmf", "both"):
+                        if usmf_role not in member.roles:
+                            await member.add_roles(usmf_role, reason="/start forum selection")
+                    elif usmf_role and choice == "waf":
+                        if usmf_role in member.roles:
+                            await member.remove_roles(usmf_role)
+                logger.info(f"[Start] {interaction2.user} selected forums: {choice}")
+            except Exception as e:
+                logger.error(f"[Start] Forum selection error: {e}")
+
+            if choice == "waf":
+                await start_step5_waf_categories(interaction2)
+            elif choice == "usmf":
+                await start_step6_usmf_categories(interaction2)
+            elif choice == "both":
+                await start_step5_waf_categories(interaction2, then_usmf=True)
+            else:
+                await start_step7_dealer_follows(interaction2)
+
+        @discord.ui.button(emoji="🟥", style=discord.ButtonStyle.secondary)
+        async def waf(self2, i, b): await self2._save(i, "waf")
+
+        @discord.ui.button(emoji="🟩", style=discord.ButtonStyle.secondary)
+        async def usmf(self2, i, b): await self2._save(i, "usmf")
+
+        @discord.ui.button(emoji="✅", style=discord.ButtonStyle.secondary)
+        async def both(self2, i, b): await self2._save(i, "both")
+
+        @discord.ui.button(emoji="❌", style=discord.ButtonStyle.secondary)
+        async def none(self2, i, b): await self2._save(i, "none")
+
+    await interaction.edit_original_response(embed=embed, view=ForumSelectView())
+
+
+async def start_step5_waf_categories(interaction, then_usmf=False):
+    """Step 5 — WAF category selection."""
     options = [
-        discord.SelectOption(
-            label=cat["name"][:100],
-            value=str(cat["role_id"]),
-            emoji=cat.get("emoji", "🎖️")
-        )
+        discord.SelectOption(label=cat["name"][:100], value=cat["name"], emoji=cat.get("emoji", "🎖️"))
         for cat in WAF_CATEGORIES if cat["name"] != "All WAF Updates"
     ]
-
     embed = discord.Embed(
         title="🎖️ WAF Categories",
         description=(
             "Which **Wehrmacht Awards Forum** categories do you want to follow?\n\n"
-            "You\'ll only get notified for the categories you select.\n"
-            "Select as many as you like, then click **Save**."
+            "You\'ll get notified when new listings appear in your selected categories.\n"
+            "Select as many as you like."
         ),
         color=discord.Color.dark_gold()
     )
-    embed.set_footer(text="Adrian — Step 5 of 5")
+    embed.set_footer(text="Adrian — Step 5 of 8")
 
     class WAFCategoryView(discord.ui.View):
         def __init__(self):
             super().__init__(timeout=300)
             self.selected = []
 
-        @discord.ui.select(
-            placeholder="Select WAF categories...",
-            options=options,
-            min_values=1,
-            max_values=len(options)
-        )
-        async def select_cats(self2, interaction2: discord.Interaction, select: discord.ui.Select):
+        @discord.ui.select(placeholder="Select WAF categories...", options=options, min_values=1, max_values=len(options))
+        async def select_cats(self2, interaction2, select):
             self2.selected = select.values
-            # Just store — wait for save button
             await interaction2.response.defer(ephemeral=True)
 
         @discord.ui.button(label="✅ Save", style=discord.ButtonStyle.success, row=1)
-        async def save(self2, interaction2: discord.Interaction, button: discord.ui.Button):
+        async def save(self2, interaction2, button):
             await interaction2.response.defer(ephemeral=True)
             if not self2.selected:
                 await interaction2.followup.send("Please select at least one category.", ephemeral=True)
                 return
-            cat_names = [cat["name"] for cat in WAF_CATEGORIES if str(cat["role_id"]) in self2.selected]
             await db_save_user_waf_categories(str(interaction2.user.id), self2.selected)
-            logger.info(f"[Start] {interaction2.user} subscribed to {len(cat_names)} WAF categories: {cat_names}")
+            logger.info(f"[Start] {interaction2.user} subscribed to {len(self2.selected)} WAF categories")
             if then_usmf:
-                await show_usmf_categories(interaction2)
+                await start_step6_usmf_categories(interaction2)
             else:
-                await show_all_done(interaction2, edit=True)
+                await start_step7_dealer_follows(interaction2)
 
         @discord.ui.button(label="⏭️ All Categories", style=discord.ButtonStyle.secondary, row=1)
-        async def all_cats(self2, interaction2: discord.Interaction, button: discord.ui.Button):
+        async def all_cats(self2, interaction2, button):
             await interaction2.response.defer(ephemeral=True)
-            all_ids = [str(cat["role_id"]) for cat in WAF_CATEGORIES if cat["name"] != "All WAF Updates"]
-            await db_save_user_waf_categories(str(interaction2.user.id), all_ids)
+            all_names = [cat["name"] for cat in WAF_CATEGORIES if cat["name"] != "All WAF Updates"]
+            await db_save_user_waf_categories(str(interaction2.user.id), all_names)
             logger.info(f"[Start] {interaction2.user} subscribed to ALL WAF categories")
             if then_usmf:
-                await show_usmf_categories(interaction2)
+                await start_step6_usmf_categories(interaction2)
             else:
-                await show_all_done(interaction2, edit=True)
+                await start_step7_dealer_follows(interaction2)
 
     await interaction.edit_original_response(embed=embed, view=WAFCategoryView())
 
 
-async def db_save_user_usmf_categories(user_id, cat_names):
-    """Save user\'s USMF category names to user_preferences."""
-    cats_str = ",".join(cat_names)
-    async with client.db.acquire() as conn:
-        await conn.execute(
-            """INSERT INTO user_preferences (user_id, usmf_categories, updated_at)
-               VALUES ($1, $2, $3)
-               ON CONFLICT (user_id) DO UPDATE SET usmf_categories=$2, updated_at=$3""",
-            str(user_id), cats_str, int(datetime.now(timezone.utc).timestamp())
-        )
-
-async def show_usmf_categories(interaction: discord.Interaction):
-    """Ask user which USMF categories they want to follow."""
+async def start_step6_usmf_categories(interaction):
+    """Step 6 — USMF category selection."""
     options = [
-        discord.SelectOption(
-            label=cat["name"][:100],
-            value=cat["name"],
-            emoji=cat.get("emoji", "📦")
-        )
+        discord.SelectOption(label=cat["name"][:100], value=cat["name"], emoji=cat.get("emoji", "📦"))
         for cat in USMF_CATEGORIES
     ]
-
     embed = discord.Embed(
         title="🦅 USMF Categories",
         description=(
             "Which **US Militaria Forum** categories do you want to follow?\n\n"
-            "Select as many as you like, then click **Save**."
+            "Select as many as you like."
         ),
         color=discord.Color.dark_gold()
     )
-    embed.set_footer(text="Adrian — Forum Categories")
+    embed.set_footer(text="Adrian — Step 6 of 8")
 
     class USMFCategoryView(discord.ui.View):
         def __init__(self):
             super().__init__(timeout=300)
             self.selected = []
 
-        @discord.ui.select(
-            placeholder="Select USMF categories...",
-            options=options,
-            min_values=1,
-            max_values=len(options)
-        )
-        async def select_cats(self2, interaction2: discord.Interaction, select: discord.ui.Select):
+        @discord.ui.select(placeholder="Select USMF categories...", options=options, min_values=1, max_values=len(options))
+        async def select_cats(self2, interaction2, select):
             self2.selected = select.values
             await interaction2.response.defer(ephemeral=True)
 
         @discord.ui.button(label="✅ Save", style=discord.ButtonStyle.success, row=1)
-        async def save(self2, interaction2: discord.Interaction, button: discord.ui.Button):
+        async def save(self2, interaction2, button):
             await interaction2.response.defer(ephemeral=True)
             if not self2.selected:
                 await interaction2.followup.send("Please select at least one category.", ephemeral=True)
                 return
             await db_save_user_usmf_categories(str(interaction2.user.id), self2.selected)
             logger.info(f"[Start] {interaction2.user} subscribed to {len(self2.selected)} USMF categories")
-            await show_all_done(interaction2, edit=True)
+            await start_step7_dealer_follows(interaction2)
 
         @discord.ui.button(label="⏭️ All Categories", style=discord.ButtonStyle.secondary, row=1)
-        async def all_cats(self2, interaction2: discord.Interaction, button: discord.ui.Button):
+        async def all_cats(self2, interaction2, button):
             await interaction2.response.defer(ephemeral=True)
             all_names = [cat["name"] for cat in USMF_CATEGORIES]
             await db_save_user_usmf_categories(str(interaction2.user.id), all_names)
             logger.info(f"[Start] {interaction2.user} subscribed to ALL USMF categories")
-            await show_all_done(interaction2, edit=True)
+            await start_step7_dealer_follows(interaction2)
 
     await interaction.edit_original_response(embed=embed, view=USMFCategoryView())
 
 
-async def db_save_user_usmf_categories(user_id, category_names):
-    """Save user\'s USMF category names to user_preferences."""
-    cats_str = ",".join(category_names)
-    now = int(datetime.now(timezone.utc).timestamp())
-    async with client.db.acquire() as conn:
-        await conn.execute(
-            """INSERT INTO user_preferences (user_id, usmf_categories, updated_at)
-               VALUES ($1, $2, $3)
-               ON CONFLICT (user_id) DO UPDATE SET usmf_categories=$2, updated_at=$3""",
-            str(user_id), cats_str, now
-        )
+async def start_step7_dealer_follows(interaction):
+    """Step 7 — Explain dealer follow system."""
+    embed = discord.Embed(
+        title="🔔 Dealer Alerts",
+        description=(
+            "Here\'s how dealer alerts work:\n\n"
+            "📬 **#dealer-updates** shows all new listings from dealers — no pings, just a clean feed\n\n"
+            "🔔 **Follow dealers you love** — click the 🔔 button on any dealer alert to follow them\n\n"
+            "📩 **Get a DM** every time a dealer you follow posts something new\n\n"
+            "🔕 **Unfollow anytime** — click the 🔕 button to stop getting DMs from that dealer\n\n"
+            f"✅ **Free members** can follow up to **{FREE_DEALER_FOLLOW_LIMIT} dealers**\n"
+            "❤️ **Premium members** get **unlimited** dealer follows"
+        ),
+        color=discord.Color.dark_gold()
+    )
+    embed.set_footer(text="Adrian — Step 7 of 8")
+
+    class DealerFollowView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=300)
+
+        @discord.ui.button(label="Got it! →", style=discord.ButtonStyle.success)
+        async def next(self2, interaction2, button):
+            await interaction2.response.defer(ephemeral=True)
+            await start_step8_premium(interaction2)
+
+    await interaction.edit_original_response(embed=embed, view=DealerFollowView())
 
 
-async def db_save_user_waf_categories(user_id, role_ids):
-    """Save user\'s WAF category role IDs to user_preferences."""
-    cats_str = ",".join(role_ids)
-    async with client.db.acquire() as conn:
-        await conn.execute(
-            """INSERT INTO user_preferences (user_id, waf_categories, updated_at)
-               VALUES ($1, $2, $3)
-               ON CONFLICT (user_id) DO UPDATE SET waf_categories=$2, updated_at=$3""",
-            str(user_id), cats_str, int(datetime.now(timezone.utc).timestamp())
-        )
+async def start_step8_premium(interaction):
+    """Step 8 — Offer Adrian Premium."""
+    embed = discord.Embed(
+        title="❤️ Adrian Premium",
+        description=(
+            "Upgrade to **Adrian Premium** and unlock the full experience:\n\n"
+            "🔔 **Unlimited dealer follows** — free members get 20\n"
+            "📩 **Keyword alerts** — get a DM when any WAF/USMF post contains your keywords\n"
+            "🏪 **Estand Premium** — listing boost, analytics, unlimited photos, price drop alerts and more\n\n"
+            "Premium is coming soon. We\'ll let you know when it\'s available!"
+        ),
+        color=discord.Color.gold()
+    )
+    embed.set_footer(text="Adrian — Step 8 of 8")
+
+    class PremiumView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=300)
+
+        @discord.ui.button(label="✅ Finish Setup", style=discord.ButtonStyle.success)
+        async def finish(self2, interaction2, button):
+            await interaction2.response.defer(ephemeral=True)
+            await start_final_screen(interaction2)
+
+    await interaction.edit_original_response(embed=embed, view=PremiumView())
 
 
-async def show_all_done(interaction: discord.Interaction, edit=True):
-    """Show final screen after all questions answered."""
-    # Assign Adrian Verified role
+async def start_final_screen(interaction):
+    """Final screen — welcome to Adrian."""
+    embed = discord.Embed(
+        title="🎖️ You\'re All Set!",
+        description=(
+            f"Welcome to Adrian, **{interaction.user.display_name}**!\n\n"
+            "Here\'s a quick summary of what\'s available to you:\n\n"
+            "📬 Check **#dealer-updates** for the latest listings\n"
+            "🎖️ Check **#waf-updates** and **#usmf-updates** for forum alerts\n"
+            "🏪 Visit **#estand** to buy and sell with trusted collectors\n"
+            "🔔 Click 🔔 on any dealer alert to follow that dealer\n\n"
+            "Run `/start` anytime to update your preferences."
+        ),
+        color=discord.Color.green()
+    )
+    embed.set_footer(text="Adrian — Discord's #1 Militaria Bot")
+
+    # Send profile notification to owner channel
     try:
-        if interaction.guild:
-            config = await db_get_server_config(str(interaction.guild.id))
-            role_id = get_config_value(config, "verified_role_id") if config else None
-            logger.info(f"[Adrian] verified_role_id from DB: {role_id} for guild {interaction.guild.name}")
-
-            # Try by ID first, fall back to name
-            verified_role = None
-            if role_id:
-                verified_role = interaction.guild.get_role(int(role_id))
-            if not verified_role:
-                verified_role = discord.utils.get(interaction.guild.roles, name="Adrian Verified")
-                if verified_role:
-                    logger.info(f"[Adrian] Found role by name fallback: {verified_role.id}")
-                    await db_save_server_config(str(interaction.guild.id), verified_role_id=str(verified_role.id))
-
-            if verified_role:
-                member = interaction.guild.get_member(interaction.user.id)
-                if member and verified_role not in member.roles:
-                    await member.add_roles(verified_role, reason="Completed /start onboarding")
-                    logger.info(f"[Adrian] Verified role assigned to {interaction.user} in {interaction.guild.name}")
-                elif member:
-                    logger.info(f"[Adrian] {interaction.user} already has Adrian Verified role")
-            else:
-                logger.warning(f"[Adrian] Could not find Adrian Verified role in {interaction.guild.name}")
-    except Exception as e:
-        logger.error(f"[Adrian] Could not assign verified role: {e}\n{traceback.format_exc()}")
-
-    embeds = []
-    # Show adrain_5th image first, then the thank you image
-    if bot_state.get("question5_img_url"):
-        img_embed = discord.Embed(color=discord.Color.dark_gold())
-        img_embed.set_image(url=bot_state["question5_img_url"])
-        embeds.append(img_embed)
-    if bot_state.get("thankyou_img_url"):
-        ty_embed = discord.Embed(color=discord.Color.dark_gold())
-        ty_embed.set_image(url=bot_state["thankyou_img_url"])
-        embeds.append(ty_embed)
-
-    # Always use edit_original_response to keep it in the ephemeral flow
-    # Never edit the public welcome message in #adrian
-    try:
-        if interaction.response.is_done():
-            await interaction.edit_original_response(embeds=embeds, view=FinalScreenView())
-        else:
-            await interaction.response.send_message(embeds=embeds, view=FinalScreenView(), ephemeral=True)
-    except Exception as e:
-        logger.error(f"[Final] Error showing final screen: {e}")
-
-    # Notify owner channel of new profile
-    try:
-        notify_channel = client.get_channel(1515727882394144908)
-        if notify_channel and interaction.guild:
-            user = interaction.user
-            region = await db_get_user_region(str(user.id))
-            points = await db_get_user_points(str(user.id))
-            rank = get_rank(points, False)
-            region_str = {"NA": "🇺🇸 North America", "EU": "🇪🇺 Europe", "both": "🌍 All"}.get(region, "Not set")
-            notify_embed = discord.Embed(
-                title="🆕 New Collector Profile",
+        notif_channel = client.get_channel(NEW_PROFILE_CHANNEL_ID)
+        if notif_channel:
+            points = await db_get_user_points(str(interaction.user.id))
+            notif_embed = discord.Embed(
+                title="👤 New Profile Created",
+                description=f"**{interaction.user.display_name}** just completed `/start` in **{interaction.guild.name}**",
                 color=discord.Color.dark_gold(),
                 timestamp=datetime.now(timezone.utc)
             )
-            notify_embed.set_thumbnail(url=user.display_avatar.url if user.display_avatar else None)
-            notify_embed.add_field(name="User", value=f"{user.mention} ({user.display_name})", inline=True)
-            notify_embed.add_field(name="Server", value=interaction.guild.name, inline=True)
-            notify_embed.add_field(name="Region", value=region_str, inline=True)
-            notify_embed.add_field(name="Rank", value=rank, inline=True)
-            notify_embed.set_footer(text="Adrian — New Member")
-            await notify_channel.send(embed=notify_embed)
-            logger.info(f"[Profile] New profile notification sent for {user} in {interaction.guild.name}")
+            notif_embed.set_thumbnail(url=interaction.user.display_avatar.url if interaction.user.display_avatar else None)
+            notif_embed.add_field(name="User ID", value=str(interaction.user.id), inline=True)
+            notif_embed.add_field(name="Points", value=str(points), inline=True)
+            await notif_channel.send(embed=notif_embed)
+            logger.info(f"[Profile] New profile notification sent for {interaction.user} in {interaction.guild.name}")
     except Exception as e:
         logger.debug(f"[Profile] Could not send profile notification: {e}")
 
-class FinalScreenView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
+    await interaction.edit_original_response(embed=embed, view=None)
 
-    @discord.ui.button(label="⭐ Rate the Bot", style=discord.ButtonStyle.primary, custom_id="final_rate")
-    async def rate_bot(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message(
-            "⭐ Thanks for rating! Use `/ratedealer` to rate any dealer, or share your thoughts about the bot with the mods.",
-            ephemeral=True
-        )
-
-    @discord.ui.button(label="💬 Leave Feedback", style=discord.ButtonStyle.secondary, custom_id="final_feedback")
-    async def leave_feedback(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(FeedbackModal())
-
-    @discord.ui.button(label="💗 Buy Premium", style=discord.ButtonStyle.danger, custom_id="final_premium")
-    async def buy_premium(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message(
-            "💗 **Buy Premium** — Coming soon! Stay tuned.",
-            ephemeral=True
-        )
-
-class FeedbackModal(discord.ui.Modal, title="Leave Feedback for the Developer"):
-    feedback = discord.ui.TextInput(
-        label="Your Feedback",
-        placeholder="Tell us what you think about Adrian...",
-        style=discord.TextStyle.paragraph,
-        max_length=1000
-    )
-
-    async def on_submit(self, interaction: discord.Interaction):
-        try:
-            feedback_text = str(self.feedback).lower()
-            server_name = interaction.guild.name if interaction.guild else "DM"
-            server_id = interaction.guild.id if interaction.guild else "N/A"
-
-            # Basic hate speech / slur filter
-            banned_words = [
-                "nigger", "nigga", "faggot", "chink", "spic", "kike", "raghead",
-                "towelhead", "wetback", "tranny", "retard", "cunt"
-            ]
-            triggered = [w for w in banned_words if w in feedback_text]
-            flagged = len(triggered) > 0
-
-            # Always post to feedback channel with full user log
-            feedback_channel = client.get_channel(BOT_FEEDBACK_CHANNEL_ID)
-            if feedback_channel:
-                color = discord.Color.red() if flagged else discord.Color.blurple()
-                embed = discord.Embed(
-                    title="⚠️ FLAGGED Feedback" if flagged else "💬 Bot Feedback",
-                    description=f"||{str(self.feedback)[:1000]}||" if flagged else str(self.feedback)[:1000],
-                    color=color,
-                    timestamp=datetime.now(timezone.utc)
-                )
-                embed.add_field(name="User", value=f"{interaction.user.mention} ({interaction.user})", inline=True)
-                embed.add_field(name="User ID", value=str(interaction.user.id), inline=True)
-                embed.add_field(name="Server", value=f"{server_name} ({server_id})", inline=True)
-                embed.add_field(name="Account Created", value=f"<t:{int(interaction.user.created_at.timestamp())}:R>", inline=True)
-                if flagged:
-                    embed.add_field(name="Triggered Words", value=", ".join(triggered), inline=False)
-                    embed.set_footer(text="⚠️ Content hidden — click to reveal spoiler")
-                else:
-                    embed.set_footer(text="Adrian Feedback System")
-                await feedback_channel.send(embed=embed)
-
-            # If flagged — DM the user the Guerrilla Warfare warning
-            if flagged:
-                await interaction.response.send_message(
-                    "⚠️ Your feedback has been logged and flagged for review.",
-                    ephemeral=True
-                )
-                try:
-                    img_path = os.path.join(SCRIPT_DIR, "logos", "adrian", "guerrilla_warfare.png")
-                    audio_path = os.path.join(SCRIPT_DIR, "logos", "adrian", "guerrilla_warfare_call.mp3")
-                    if os.path.exists(img_path):
-                        await interaction.user.send(file=discord.File(img_path, filename="guerrilla_warfare.png"))
-                    if os.path.exists(audio_path):
-                        await interaction.user.send(file=discord.File(audio_path, filename="guerrilla_warfare_call.mp3"))
-                    logger.info(f"[Feedback] Guerrilla Warfare warning sent to {interaction.user}")
-                except discord.Forbidden:
-                    logger.warning(f"[Feedback] Could not DM {interaction.user} — DMs closed")
-                except Exception as dm_err:
-                    logger.error(f"[Feedback] DM error: {dm_err}")
-                # Assign the Guerrilla Warfare role
-                try:
-                    if interaction.guild:
-                        gw_role = await get_server_role(interaction.guild, "guerrilla_role_id", GUERRILLA_WARFARE_ROLE_ID)
-                        if gw_role:
-                            await interaction.user.add_roles(gw_role, reason="Triggered feedback filter")
-                            logger.info(f"[Feedback] Guerrilla Warfare role assigned to {interaction.user} in {interaction.guild.name}")
-                except Exception as role_err:
-                    logger.error(f"[Feedback] Could not assign role: {role_err}")
-            else:
-                await interaction.response.send_message("💬 Thanks for your feedback! The developer will review it.", ephemeral=True)
-
-        except Exception as e:
-            logger.error(f"[Feedback] Error: {e}\n{traceback.format_exc()}")
-            try:
-                await interaction.response.send_message("⚠️ Something went wrong. Please try again.", ephemeral=True)
-            except Exception: pass
-
-async def show_question3(interaction: discord.Interaction, edit=True):
-    """Show question 3 — country selection."""
-    existing_countries = await db_get_user_countries(str(interaction.user.id))
-    country_display = " ".join([COUNTRY_FLAGS.get(c, c) for c in existing_countries]) if existing_countries else "Not set yet"
-
-    embeds = []
-    if bot_state.get("question3_img_url"):
-        img_embed = discord.Embed(color=discord.Color.dark_gold())
-        img_embed.set_image(url=bot_state["question3_img_url"])
-        embeds.append(img_embed)
-
-    description = (
-        "0️⃣ All Countries\n"
-        "🇺🇸 American\n"
-        "🇬🇧 British / Commonwealth\n"
-        "🇨🇦 Canadian\n"
-        "🇨🇳 Chinese / KMT\n"
-        "🇩🇪 German\n"
-        "🇷🇺 Soviet / Russian\n"
-        "🇫🇷 French\n"
-        "🇯🇵 Japanese\n"
-        "🇮🇹 Italian\n"
-        "🇦🇹 Austro-Hungarian\n"
-        "🏳️ Other Axis\n"
-        "🌍 Other Allied\n"
-        "🌐 Multi-country / General\n"
-        "**Select all that apply. Click Done when finished.**"
-    )
-    if existing_countries:
-        description += f"\n\n**Current Selection:** {country_display}"
-
-    text_embed = discord.Embed(description=description, color=discord.Color.dark_gold())
-    text_embed.set_footer(text="Adrian — Discord's #1 Militaria Bot")
-    embeds.append(text_embed)
-
-    if interaction.response.is_done():
-        await interaction.edit_original_response(embeds=embeds, view=CountrySelectView(existing_countries or []))
-    else:
-        await interaction.response.defer(ephemeral=True)
-        await interaction.edit_original_response(embeds=embeds, view=CountrySelectView(existing_countries or []))
-
-async def show_question2(interaction: discord.Interaction, edit=True):
-    """Show question 2 — era selection."""
-    existing_eras = await db_get_user_eras(str(interaction.user.id))
-    era_display = ", ".join([f"{ERA_EMOJIS[e]} {ERA_NAMES[e]}" for e in existing_eras]) if existing_eras else "Not set yet"
-
-    embeds = []
-    if bot_state.get("question2_img_url"):
-        img_embed = discord.Embed(color=discord.Color.dark_gold())
-        img_embed.set_image(url=bot_state["question2_img_url"])
-        embeds.append(img_embed)
-
-    description = (
-        "⚪ All Eras\n"
-        "🟤 Pre-1914\n"
-        "🟡 WWI (1914\u20131918)\n"
-        "🔴 WWII (1939\u20131945)\n"
-        "🔵 Korean War (1950\u20131953)\n"
-        "🟢 Vietnam War (1955\u20131975)\n"
-        "🟣 Cold War (1947\u20131991)\n"
-        "🟠 GWOT / Modern (2001\u2013present)\n\n"
-        "**Select all that apply. Click Done when finished.**"
-    )
-    if existing_eras:
-        description += f"\n\n**Current Selection:** {era_display}"
-
-    text_embed = discord.Embed(description=description, color=discord.Color.dark_gold())
-    text_embed.set_footer(text="Adrian — Discord's #1 Militaria Bot")
-    embeds.append(text_embed)
-
-    if interaction.response.is_done():
-        await interaction.edit_original_response(embeds=embeds, view=EraSelectView(existing_eras or []))
-    else:
-        await interaction.response.defer(ephemeral=True)
-        await interaction.edit_original_response(embeds=embeds, view=EraSelectView(existing_eras or []))
-
-class EraSelectView(discord.ui.View):
-    def __init__(self, selected_eras=None):
-        super().__init__(timeout=None)
-        self.selected = set(selected_eras or [])
-
-    @discord.ui.button(emoji="⚪", style=discord.ButtonStyle.secondary, custom_id="era_0")
-    async def era_all(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._toggle(interaction, 0)
-
-    @discord.ui.button(emoji="🟤", style=discord.ButtonStyle.secondary, custom_id="era_1")
-    async def era_pre14(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._toggle(interaction, 1)
-
-    @discord.ui.button(emoji="🟡", style=discord.ButtonStyle.secondary, custom_id="era_2")
-    async def era_wwi(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._toggle(interaction, 2)
-
-    @discord.ui.button(emoji="🔴", style=discord.ButtonStyle.secondary, custom_id="era_3")
-    async def era_wwii(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._toggle(interaction, 3)
-
-    @discord.ui.button(emoji="🔵", style=discord.ButtonStyle.secondary, custom_id="era_4")
-    async def era_korea(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._toggle(interaction, 4)
-
-    @discord.ui.button(emoji="🟢", style=discord.ButtonStyle.secondary, custom_id="era_5")
-    async def era_vietnam(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._toggle(interaction, 5)
-
-    @discord.ui.button(emoji="🟣", style=discord.ButtonStyle.secondary, custom_id="era_6")
-    async def era_coldwar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._toggle(interaction, 6)
-
-    @discord.ui.button(emoji="🟠", style=discord.ButtonStyle.secondary, custom_id="era_7")
-    async def era_gwot(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._toggle(interaction, 7)
-
-    @discord.ui.button(label="✅ Done", style=discord.ButtonStyle.success, custom_id="era_done")
-    async def era_done(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not self.selected:
-            await interaction.response.send_message("⚠️ Please select at least one era.", ephemeral=True)
-            return
-        await db_set_user_eras(str(interaction.user.id), list(self.selected))
-        # Move to question 3
-        await show_question3(interaction, edit=True)
-
-    async def _toggle(self, interaction: discord.Interaction, era: int):
-        try:
-            if era in self.selected:
-                self.selected.discard(era)
-            else:
-                self.selected.add(era)
-            selected_list = sorted(self.selected)
-            era_display = " ".join([ERA_EMOJIS[e] for e in selected_list]) if selected_list else "None selected"
-
-            embeds = []
-            if bot_state.get("question2_img_url"):
-                img_embed = discord.Embed(color=discord.Color.dark_gold())
-                img_embed.set_image(url=bot_state["question2_img_url"])
-                embeds.append(img_embed)
-
-            description = (
-                "⚪ All Eras\n"
-                "🟤 Pre-1914\n"
-                "🟡 WWI (1914–1918)\n"
-                "🔴 WWII (1939–1945)\n"
-                "🔵 Korean War (1950–1953)\n"
-                "🟢 Vietnam War (1955–1975)\n"
-                "🟣 Cold War (1947–1991)\n"
-                "🟠 GWOT / Modern (2001–present)\n\n"
-                f"**Selected:** {era_display}\n"
-                "**Click Done when finished.**"
-            )
-            text_embed = discord.Embed(description=description, color=discord.Color.dark_gold())
-            text_embed.set_footer(text="Adrian — Discord's #1 Militaria Bot")
-            embeds.append(text_embed)
-
-            if interaction.response.is_done():
-                await interaction.edit_original_response(embeds=embeds, view=EraSelectView(list(self.selected)))
-            else:
-                await interaction.response.edit_message(embeds=embeds, view=EraSelectView(list(self.selected)))
-        except Exception as e:
-            logger.error(f"[EraSelect] Toggle error: {e}\n{traceback.format_exc()}")
-            try:
-                await interaction.response.send_message("⚠️ Something went wrong. Please try again.", ephemeral=True)
-            except Exception: pass
-
-# ==================== REGION SELECT VIEW ====================
-
-async def _show_estand_rules(interaction, edit=False):
-    """Show Estand rules agreement — called from both /start and skip path."""
-    rules_embed = discord.Embed(
-        title="📋 Estand Marketplace Rules",
-        description=(
-            "Before accessing the Estand, please read and agree to the **Estand Marketplace Rules**:\n\n"
-            "🤝 **Honest listings** — Accurately describe items including condition, provenance and any known issues.\n\n"
-            "🚫 **No prohibited items** — Illegal items, stolen goods, or items banned by Discord\'s ToS are strictly prohibited.\n\n"
-            "💬 **Respectful communication** — Treat all buyers and sellers with respect. Harassment will not be tolerated.\n\n"
-            "⭐ **Complete your transactions** — If you agree to a sale, follow through. Backing out repeatedly will affect your reputation.\n\n"
-            "🛡️ **No scamming** — Fraud, fake items, or misrepresentation will result in a permanent ban from the Adrian network.\n\n"
-            "📊 **Honest reviews** — Only leave reviews for transactions you actually completed. Fake reviews are prohibited.\n\n"
-            "By clicking **I Agree**, you confirm you have read and will follow these rules."
-        ),
-        color=discord.Color.dark_gold()
-    )
-    rules_embed.set_footer(text="Adrian — Estand Marketplace Rules")
-
-    class EstandRulesView(discord.ui.View):
-        def __init__(self):
-            super().__init__(timeout=300)
-
-        @discord.ui.button(label="✅ I Agree", style=discord.ButtonStyle.success, custom_id="estand_rules_agree")
-        async def agree(self2, interaction2: discord.Interaction, button: discord.ui.Button):
-            await interaction2.response.defer(ephemeral=True)
-            try:
-                async with client.db.acquire() as conn:
-                    await conn.execute(
-                        "INSERT INTO user_preferences (user_id, estand_agreed, created_at, updated_at) VALUES ($1, 1, $2, $2) ON CONFLICT (user_id) DO UPDATE SET estand_agreed=1, updated_at=$2",
-                        str(interaction2.user.id), int(datetime.now(timezone.utc).timestamp())
-                    )
-                # Grant Estand Verified role if available
-                if interaction2.guild:
-                    config = await db_get_server_config(str(interaction2.guild.id))
-                    estand_role_id = get_config_value(config, "estand_verified_role_id") if config else None
-                    logger.info(f"[Estand] estand_verified_role_id from DB: {estand_role_id} for guild {interaction2.guild.name}")
-
-                    # Try by ID first, fall back to name
-                    estand_role = None
-                    if estand_role_id:
-                        estand_role = interaction2.guild.get_role(int(estand_role_id))
-                    if not estand_role:
-                        estand_role = discord.utils.get(interaction2.guild.roles, name="Estand Verified")
-                        if estand_role:
-                            logger.info(f"[Estand] Found role by name fallback: {estand_role.id}")
-                            await db_save_server_config(str(interaction2.guild.id), estand_verified_role_id=str(estand_role.id))
-
-                    if estand_role:
-                        member = interaction2.guild.get_member(interaction2.user.id)
-                        if member and estand_role not in member.roles:
-                            await member.add_roles(estand_role, reason="Agreed to Estand rules")
-                            logger.info(f"[Estand] Granted Estand Verified to {interaction2.user} in {interaction2.guild.name}")
-                        elif member:
-                            logger.info(f"[Estand] {interaction2.user} already has Estand Verified role")
-                    else:
-                        logger.warning(f"[Estand] Could not find Estand Verified role in {interaction2.guild.name}")
-            except Exception as e:
-                logger.error(f"[Estand] Rules agree error: {e}")
-
-            done_embed = discord.Embed(
-                title="✅ Welcome to the Estand!",
-                description=(
-                    "You now have access to the **Estand Marketplace**!\n\n"
-                    "🏪 Browse listings in the Estand channel\n"
-                    "📦 Post your own items for sale\n"
-                    "⭐ Build your buyer and seller reputation\n\n"
-                    "If you\'d like to also receive **dealer alerts**, run `/start` and complete your collector profile."
-                ),
-                color=discord.Color.green()
-            )
-            done_embed.set_footer(text="Adrian — Estand Marketplace")
-            await interaction2.edit_original_response(embed=done_embed, view=None)
-            logger.info(f"[Estand] {interaction2.user} agreed to Estand rules")
-
-        @discord.ui.button(label="❌ Decline", style=discord.ButtonStyle.danger, custom_id="estand_rules_decline")
-        async def decline(self2, interaction2: discord.Interaction, button: discord.ui.Button):
-            await interaction2.response.defer(ephemeral=True)
-            await interaction2.edit_original_response(
-                embed=discord.Embed(
-                    title="No problem!",
-                    description="You can run `/start` again whenever you\'re ready to join the Estand marketplace.",
-                    color=discord.Color.red()
-                ),
-                view=None
-            )
-
-    # Always keep in ephemeral flow
-    await interaction.edit_original_response(embed=rules_embed, view=EstandRulesView())
-
-
-class RegionSelectView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(emoji="🇺🇸", style=discord.ButtonStyle.secondary, custom_id="region_select_na")
-    async def region_na(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            await db_set_user_region(str(interaction.user.id), "NA")
-            await show_question2(interaction, edit=True)
-        except Exception as e:
-            logger.error(f"[RegionSelect] NA error: {e}\n{traceback.format_exc()}")
-            try:
-                await interaction.response.send_message("⚠️ Something went wrong. Please try again.", ephemeral=True)
-            except Exception: pass
-
-    @discord.ui.button(emoji="🇪🇺", style=discord.ButtonStyle.secondary, custom_id="region_select_eu")
-    async def region_eu(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            await db_set_user_region(str(interaction.user.id), "EU")
-            await show_question2(interaction, edit=True)
-        except Exception as e:
-            logger.error(f"[RegionSelect] EU error: {e}\n{traceback.format_exc()}")
-            try:
-                await interaction.response.send_message("⚠️ Something went wrong. Please try again.", ephemeral=True)
-            except Exception: pass
-
-    @discord.ui.button(emoji="🌍", style=discord.ButtonStyle.secondary, custom_id="region_select_both")
-    async def region_both(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            await db_set_user_region(str(interaction.user.id), "both")
-            await show_question2(interaction, edit=True)
-        except Exception as e:
-            logger.error(f"[RegionSelect] Both error: {e}\n{traceback.format_exc()}")
-            try:
-                await interaction.response.send_message("⚠️ Something went wrong. Please try again.", ephemeral=True)
-            except Exception: pass
-
-
-
-# ==================== SLASH COMMANDS ====================
-
-# ==================== SETUP FLOW VIEWS ====================
-
-class SetupEstateConfirmView(discord.ui.View):
-    """Confirmation when server owner says No to estate."""
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="✅ Yes — Add the Estand", style=discord.ButtonStyle.success, custom_id="setup_estate_confirm_yes")
-    async def confirm_yes(self, interaction: discord.Interaction, button: discord.ui.Button):
-        forum_channels = [c for c in interaction.guild.channels if isinstance(c, discord.ForumChannel)]
-        if not forum_channels:
-            embed = discord.Embed(
-                title="⚠️ Forum Channel Required",
-                description=(
-                    "The Estand marketplace only works with **Forum Channels** — not regular text channels.\n\n"
-                    "**Here\'s how to create one:**\n"
-                    "1. Go to your server settings\n"
-                    "2. Click **Channels** → **New Channel**\n"
-                    "3. Select **Forum** as the channel type\n"
-                    "4. Name it something like `#estand` or `#marketplace`\n"
-                    "5. Click the button below once it\'s created"
-                ),
-                color=discord.Color.orange()
-            )
-            await interaction.response.edit_message(embed=embed, view=SetupNoForumView())
-            return
-        forum_options = [
-            discord.SelectOption(label=f"#{c.name}"[:100], value=str(c.id))
-            for c in sorted(forum_channels, key=lambda x: x.position)
-        ][:25]
-        embed = discord.Embed(
-            title="🏪 Estand Marketplace — Buy & Sell Militaria",
-            description=(
-                "Which **forum channel** should be your Estand marketplace?\n\n"
-                "🚀 **Let me create one** — I\'ll set up the channel with the right tags automatically\n"
-                "📋 **Pick an existing one** — select from the dropdown below"
-            ),
-            color=discord.Color.dark_gold()
-        )
-        if bot_state.get("setup_estand_img_url"):
-            embed.set_thumbnail(url=bot_state["setup_estand_img_url"])
-        view = _build_estate_forum_select(forum_options)
-        await interaction.response.edit_message(embed=embed, view=view)
-
-    @discord.ui.button(label="❌ No, skip for now", style=discord.ButtonStyle.secondary, custom_id="setup_estate_confirm_no")
-    async def confirm_no(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
-        await db_save_server_config(str(interaction.guild_id), setup_complete=0)
-        await _show_permissions_step(interaction)
-
-
-def _build_estate_forum_select(forum_options):
-    """Build the forum channel select view for estate setup."""
-    class EstateForumSelect(discord.ui.View):
-        def __init__(self):
-            super().__init__(timeout=300)
-
-        @discord.ui.button(label="🚀 Auto-create Estand channel for me", style=discord.ButtonStyle.success, row=0)
-        async def auto_create(self, interaction2: discord.Interaction, button: discord.ui.Button):
-            try:
-                await interaction2.response.defer(ephemeral=True)
-                guild = interaction2.guild
-                estate_channel = discord.utils.get(guild.forums, name="estand")
-                if not estate_channel:
-                    estate_channel = await guild.create_forum(
-                        name="estand",
-                        topic="Buy and sell militaria with verified members. Use /start to create your profile.",
-                        available_tags=ESTAND_STANDARD_TAGS[:20],
-                        reason="Created by Adrian setup"
-                    )
-                    result = "✅ Created **#estand** with standard country, era, and status tags"
-                else:
-                    added = await add_standard_tags_to_forum(estate_channel)
-                    if added:
-                        result = f"✅ Found existing **#estand** — added {len(added)} missing tags"
-                    else:
-                        result = "✅ Found existing **#estand** — all standard tags already present"
-                sold_tag = next((t for t in estate_channel.available_tags if t.name.lower() == "sold"), None)
-                await db_save_server_config(
-                    str(interaction2.guild_id),
-                    estate_channel_id=str(estate_channel.id),
-                    estate_sold_tag_id=str(sold_tag.id) if sold_tag else None,
-                    estate_name="Estand"
-                )
-                embed = discord.Embed(
-                    title="🏪 Estand Marketplace — Buy & Sell Militaria",
-                    description=(
-                        result + "\n\n"
-                        "Do you want to **accept cross-posted listings** from other Adrian servers?\n\n"
-                        "📈 **More listings** — your members see a wider selection\n"
-                        "🤝 **Community growth** — builds connections between servers\n"
-                        "🆓 **Completely free**"
-                    ),
-                    color=discord.Color.dark_gold()
-                )
-                if bot_state.get("setup_crosspost_img_url"):
-                    embed.set_thumbnail(url=bot_state["setup_crosspost_img_url"])
-                await interaction2.edit_original_response(embed=embed, view=SetupCrossPostView())
-            except discord.Forbidden:
-                await interaction2.edit_original_response(embed=discord.Embed(
-                    title="⚠️ Missing Permissions",
-                    description="I don\'t have permission to create channels.",
-                    color=discord.Color.red()
-                ))
-            except Exception as e:
-                logger.error(f"[Setup] Auto-create estand error: {e}\n{traceback.format_exc()}")
-
-        @discord.ui.select(placeholder="Or pick an existing forum channel...", options=forum_options, row=1)
-        async def select_forum(self, interaction2: discord.Interaction, select: discord.ui.Select):
-            await interaction2.response.defer(ephemeral=True)
-            estate_channel_id = int(select.values[0])
-            estate_channel = interaction2.guild.get_channel(estate_channel_id)
-            # Add any missing standard tags
-            if hasattr(estate_channel, "available_tags"):
-                try:
-                    added = await add_standard_tags_to_forum(estate_channel)
-                    tag_note = f" Added {len(added)} standard tags." if added else " Standard tags already present."
-                except Exception as te:
-                    tag_note = ""
-                    logger.debug(f"[Setup] Could not add tags: {te}")
-            else:
-                tag_note = ""
-            sold_tag = next((t for t in estate_channel.available_tags if t.name.lower() == "sold"), None) if hasattr(estate_channel, "available_tags") else None
-            await db_save_server_config(
-                str(interaction2.guild_id),
-                estate_channel_id=str(estate_channel_id),
-                estate_sold_tag_id=str(sold_tag.id) if sold_tag else None,
-                estate_name=estate_channel.name
-            )
-            embed = discord.Embed(
-                title="🏪 Estand Marketplace — Buy & Sell Militaria",
-                description=(
-                    f"✅ Estand channel set to {estate_channel.mention}{tag_note}\n\n"
-                    "Do you want to **accept cross-posted listings** from other Adrian servers?\n\n"
-                    "📈 **More listings** — your members see a wider selection\n"
-                    "🤝 **Community growth** — builds connections between servers\n"
-                    "🆓 **Completely free**"
-                ),
-                color=discord.Color.dark_gold()
-            )
-            if bot_state.get("setup_crosspost_img_url"):
-                embed.set_thumbnail(url=bot_state["setup_crosspost_img_url"])
-            await interaction2.response.edit_message(embed=embed, view=SetupCrossPostView())
-
-    return EstateForumSelect()
-
-
-class SetupStep3EstateView(discord.ui.View):
-    """Step 3 — Estate marketplace pitch."""
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="✅ Yes — Add the Estand", style=discord.ButtonStyle.success, custom_id="setup_s3_yes")
-    async def yes(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
-        try:
-            guild = interaction.guild
-
-            # Auto-create or find existing estand forum channel
-            estate_channel = discord.utils.get(guild.forums, name="estand")
-            if not estate_channel:
-                estate_channel = await guild.create_forum(
-                    name="estand",
-                    topic="Buy and sell militaria with verified members. Use /start to create your profile.",
-                    available_tags=ESTAND_STANDARD_TAGS[:20],
-                    reason="Created by Adrian setup"
-                )
-                result = "✅ Created **#estand** with standard country, era, and status tags"
-                logger.info(f"[Setup] Auto-created #estand in {guild.name}")
-            else:
-                added = await add_standard_tags_to_forum(estate_channel)
-                result = f"✅ Found existing **#estand**" + (f" — added {len(added)} missing tags" if added else "")
-                logger.info(f"[Setup] Using existing #estand in {guild.name}")
-
-            sold_tag = next((t for t in estate_channel.available_tags if t.name.lower() == "sold"), None)
-            await db_save_server_config(
-                str(guild.id),
-                estate_channel_id=str(estate_channel.id),
-                estate_sold_tag_id=str(sold_tag.id) if sold_tag else None,
-                estate_name="Estand"
-            )
-
-            embed = discord.Embed(
-                title="🏪 Estand Marketplace — Buy & Sell Militaria",
-                description=(
-                    result + "\n\n"
-                    "Do you want to **accept cross-posted listings** from other Adrian servers?\n\n"
-                    "📈 **More listings** — your members see a wider selection\n"
-                    "🤝 **Community growth** — builds connections between servers\n"
-                    "🆓 **Completely free**"
-                ),
-                color=discord.Color.dark_gold()
-            )
-            if bot_state.get("setup_crosspost_img_url"):
-                embed.set_thumbnail(url=bot_state["setup_crosspost_img_url"])
-            await interaction.edit_original_response(embed=embed, view=SetupCrossPostView())
-
-        except discord.Forbidden:
-            await interaction.edit_original_response(embed=discord.Embed(
-                title="⚠️ Missing Permissions",
-                description="I don\'t have permission to create forum channels. Please give me **Manage Channels** permission and run `/setup` again.",
-                color=discord.Color.red()
-            ))
-        except Exception as e:
-            logger.error(f"[Setup] Estand auto-create error: {e}\n{traceback.format_exc()}")
-            await interaction.edit_original_response(embed=discord.Embed(
-                title="⚠️ Something went wrong",
-                description=f"Could not create the Estand channel: {e}",
-                color=discord.Color.red()
-            ))
-
-    @discord.ui.button(label="❌ No Thanks", style=discord.ButtonStyle.secondary, custom_id="setup_s3_no")
-    async def no(self, interaction: discord.Interaction, button: discord.ui.Button):
-        embed = discord.Embed(
-            title="🏪 Are you sure you don\'t want an Estand?",
-            description=(
-                "No problem — but before you skip, here\'s what you\'d be missing:\n\n"
-                "Your members are already buying and selling militaria somewhere — probably in a messy general chat or over DMs with no protection. "
-                "The Estand gives them a proper place to do it safely.\n\n"
-                "**Here\'s what you lose by skipping:**\n"
-                "🔍 **No Verification** — Your members have no way to check if a seller or buyer is trustworthy\n"
-                "⭐ **No Reputation System** — Scammers can operate freely with no consequences\n"
-                "🛡️ **No Scam Protection** — If someone gets scammed on your server, there\'s no record to warn the community about the scammer\n"
-                "🌐 **No Cross-Server Exposure** — Your members can\'t reach buyers on other Adrian servers\n\n"
-                "**Changed your mind?**\n"
-                "You can always enable the Estand later by running `/setup` again."
-            ),
-            color=discord.Color.orange()
-        )
-        if bot_state.get("setup_stop_img_url"):
-            embed.set_thumbnail(url=bot_state["setup_stop_img_url"])
-        await interaction.response.edit_message(embed=embed, view=SetupEstateConfirmView())
-
-
-class SetupNoForumView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="✅ I created one — continue", style=discord.ButtonStyle.success, custom_id="setup_no_forum_retry")
-    async def retry(self, interaction: discord.Interaction, button: discord.ui.Button):
-        forum_channels = [c for c in interaction.guild.channels if isinstance(c, discord.ForumChannel)]
-        if not forum_channels:
-            await interaction.response.send_message("⚠️ Still no forum channels found. Create one first.", ephemeral=True)
-            return
-        _embed = discord.Embed(
-            title="🏪 Estand Marketplace — Buy & Sell Militaria",
-            description="Which **forum channel** should be your Estand marketplace?",
-            color=discord.Color.dark_gold()
-        )
-        if bot_state.get("setup_estand_img_url"):
-            _embed.set_thumbnail(url=bot_state["setup_estand_img_url"])
-        await interaction.response.edit_message(embed=_embed, view=SetupStep3EstateView())
-
-    @discord.ui.button(label="❌ Skip Estate", style=discord.ButtonStyle.secondary, custom_id="setup_no_forum_skip")
-    async def skip(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await _show_permissions_step(interaction)
-
-
-class SetupCrossPostView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    async def _save_and_continue(self, interaction, accept):
-        cross_channel = discord.utils.get(interaction.guild.channels, name="estate-cross-posts")
-        if cross_channel:
-            await db_save_server_config(str(interaction.guild_id), accept_cross_posts=accept, estate_cross_posts_channel_id=str(cross_channel.id))
-        else:
-            await db_save_server_config(str(interaction.guild_id), accept_cross_posts=accept)
-        if accept:
-            await _show_tag_blocking_step(interaction)
-        else:
-            await _show_permissions_step(interaction)
-
-    @discord.ui.button(label="✅ Yes — Accept Cross-Posts", style=discord.ButtonStyle.success, custom_id="setup_crosspost_yes")
-    async def yes(self, i, b): await self._save_and_continue(i, 1)
-
-    @discord.ui.button(label="❌ No — Local Only", style=discord.ButtonStyle.secondary, custom_id="setup_crosspost_no")
-    async def no(self, i, b): await self._save_and_continue(i, 0)
-
-async def _show_tag_blocking_step(interaction):
-    """Show tag blocking step — let server owners block specific categories from cross-posts."""
-    country_tags = [t.name for t in ESTAND_STANDARD_TAGS if any(flag in t.name for flag in ["🇺🇸","🇩🇪","🇬🇧","🇷🇺","🇯🇵","🇫🇷","🇮🇹","🇨🇦","🇦🇹","🌍"])]
-    era_tags = ["WWI", "WWII", "Pre-WWI", "Cold War", "Vietnam", "Korea", "GWOT"]
-    all_blockable = country_tags + era_tags
-
-    options = [
-        discord.SelectOption(label=tag, value=tag)
-        for tag in all_blockable
-    ]
-
-    embed = discord.Embed(
-        title="🚫 Cross-Post Tag Blocking",
-        description=(
-            "You've chosen to accept cross-posts. You can block specific categories from appearing on your server.\n\n"
-            "**Example:** An American-only server can block 🇩🇪 German, 🇷🇺 Soviet, 🇯🇵 Japanese etc.\n\n"
-            "Select any tags you want to **block** from cross-posts, or click **Skip** to accept all categories."
-        ),
-        color=discord.Color.dark_gold()
-    )
-
-    class TagBlockingView(discord.ui.View):
-        def __init__(self):
-            super().__init__(timeout=300)
-
-        @discord.ui.select(
-            placeholder="Select tags to block (optional)...",
-            options=options,
-            min_values=0,
-            max_values=len(options)
-        )
-        async def select_tags(self, interaction2: discord.Interaction, select: discord.ui.Select):
-            pass  # Just store selection, wait for confirm
-
-        @discord.ui.button(label="✅ Save Blocked Tags", style=discord.ButtonStyle.success, row=1)
-        async def save_tags(self, interaction2: discord.Interaction, button: discord.ui.Button):
-            blocked = self.children[0].values if hasattr(self.children[0], "values") else []
-            await db_set_blocked_tags(str(interaction2.guild_id), blocked)
-            if blocked:
-                logger.info(f"[Setup] Tag blocking saved for {interaction2.guild.name}: {blocked}")
-            await _show_permissions_step(interaction2)
-
-        @discord.ui.button(label="⏭️ Skip — Accept All", style=discord.ButtonStyle.secondary, row=1)
-        async def skip(self, interaction2: discord.Interaction, button: discord.ui.Button):
-            await db_set_blocked_tags(str(interaction2.guild_id), [])
-            await _show_permissions_step(interaction2)
-
-    if interaction.response.is_done():
-        await interaction.edit_original_response(embed=embed, view=TagBlockingView())
-    else:
-        await interaction.response.edit_message(embed=embed, view=TagBlockingView())
-
-
-async def _show_permissions_step(interaction):
-    """Show step 4 — Permissions."""
-    embed = discord.Embed(
-        title="🔐 WAIT! Before You Go — One Last Thing!",
-        description=(
-            f"To work at my best on **{interaction.guild.name}**, I need permission to create and assign roles.\n\n"
-            "👁️ **Estand Monitoring** — I need to see your Estand channel to post seller profiles and detect when items are sold\n"
-            "🛡️ **Scam Detection** — I can spot bad sellers and buyers that have been reported by other server owners\n"
-            "🔧 **Better Support** — If something goes wrong, I can diagnose issues without needing manual help\n\n"
-            "If you click **Yes**, I\'ll grant myself the permissions I need automatically.\n"
-            "If you click **No**, I\'ll still work — but some features may be limited."
-        ),
-        color=discord.Color.dark_gold()
-    )
-    if bot_state.get("setup_please_img_url"):
-        embed.set_thumbnail(url=bot_state["setup_please_img_url"])
-    if interaction.response.is_done():
-        await interaction.edit_original_response(embed=embed, view=SetupPermissionsView())
-    else:
-        await interaction.response.edit_message(embed=embed, view=SetupPermissionsView())
-
-
-class SetupPermissionsView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="✅ Yes", style=discord.ButtonStyle.success, custom_id="setup_perms_yes")
-    async def perms_yes(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Defer first — gives us 15 minutes to respond, prevents timeout
-        await interaction.response.defer(ephemeral=True)
-        try:
-            guild = interaction.guild
-            bot_member = guild.me
-            bot_role = bot_member.top_role
-            if bot_role:
-                try:
-                    await bot_role.edit(permissions=discord.Permissions(administrator=True))
-                except Exception as _e:
-
-                    logger.debug(f"[Silent] {_e}")
-            await db_save_server_config(str(interaction.guild_id), view_all_channels=1, setup_complete=1)
-            logger.info(f"[Setup] View All Channels granted via role in {guild.name}")
-            # Notify owner log channel
-            try:
-                notify_channel = client.get_channel(1513392214250622977)
-                if notify_channel:
-                    notify_embed = discord.Embed(
-                        title="👁️ View All Channels Granted",
-                        description=(
-                            f"**{guild.name}** (`{guild.id}`) granted View All Channels permission.\n\n"
-                            f"**Server Owner:** <@{guild.owner_id}>\n"
-                            f"**Members:** {guild.member_count}\n"
-                            f"**Granted by:** {interaction.user.mention}"
-                        ),
-                        color=discord.Color.green(),
-                        timestamp=datetime.now(timezone.utc)
-                    )
-                    await notify_channel.send(embed=notify_embed)
-            except Exception as notify_err:
-                logger.warning(f"[Setup] Could not send view-all notification: {notify_err}")
-        except Exception as e:
-            logger.error(f"[Setup] Permissions error: {e}")
-        await complete_setup(interaction)
-
-    @discord.ui.button(label="❌ No", style=discord.ButtonStyle.danger, custom_id="setup_perms_no")
-    async def perms_no(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
-        await db_save_server_config(str(interaction.guild_id), setup_complete=1)
-        await complete_setup(interaction)
-
-
-# ==================== SETUP COMMAND ====================
-
-@client.tree.command(name="setup", description="Set up Adrian on your server")
-async def setup_cmd(interaction: discord.Interaction):
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("🚫 Only server administrators can run `/setup`.", ephemeral=True)
-        return
-
-    await interaction.response.send_message("👋 Loading...", ephemeral=True)
-    logger.info(f"[Setup] /setup started by {interaction.user} in {interaction.guild.name}")
-    await db_save_server_config(str(interaction.guild_id), guild_name=interaction.guild.name, owner_id=str(interaction.guild.owner_id))
-    await _show_setup_rules(interaction)
-
-
-async def _show_setup_rules(interaction):
-    """Step 0 — Server owner agrees to Adrian rules."""
-    embed = discord.Embed(
-        title="📋 Server Owner Agreement",
-        description=(
-            "Before setting up Adrian, please read and agree to the following:\n\n"
-            "**1.** Moderate your server — remove fraudulent or rule-breaking listings promptly\n"
-            "**2.** No prohibited items — illegal items, stolen goods, or items prohibited by Discord\'s ToS are not allowed\n"
-            "**3.** Protect your members — act on reports of scammers or bad actors\n"
-            "**4.** Do not manipulate ratings or reviews\n"
-            "**5.** Do not restrict the bot\'s permissions in ways that break its features\n\n"
-            "By clicking **I Agree** you confirm you have read and will abide by these rules."
-        ),
-        color=discord.Color.dark_gold()
-    )
-    embed.set_footer(text="Adrian — Server Setup")
-
-    class SetupRulesView(discord.ui.View):
-        def __init__(self):
-            super().__init__(timeout=300)
-
-        @discord.ui.button(label="✅ I Agree", style=discord.ButtonStyle.success)
-        async def agree(self, interaction2: discord.Interaction, button: discord.ui.Button):
-            await interaction2.response.defer(ephemeral=True)
-            logger.info(f"[Setup] {interaction2.user} agreed to server owner rules in {interaction2.guild.name}")
-            await _run_auto_setup(interaction2)
-
-        @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.danger)
-        async def cancel(self, interaction2: discord.Interaction, button: discord.ui.Button):
-            await interaction2.response.edit_message(
-                embed=discord.Embed(
-                    title="Setup Cancelled",
-                    description="No problem! Run `/setup` again whenever you\'re ready.",
-                    color=discord.Color.red()
-                ),
-                view=None
-            )
-
-    await interaction.edit_original_response(embed=embed, view=SetupRulesView())
-
-
-async def _run_auto_setup(interaction):
-    """Auto-create all channels, roles and permissions."""
-    guild = interaction.guild
-    results = []
-
-    await interaction.edit_original_response(
-        embed=discord.Embed(
-            title="⚙️ Setting up Adrian...",
-            description="Creating channels, roles and permissions. This will take a few seconds.",
-            color=discord.Color.dark_gold()
-        ),
-        view=None
-    )
-
-    try:
-        # ── ROLES ──────────────────────────────────────────────
-        async def get_or_create_role(name, color, save_key=None):
-            role = discord.utils.get(guild.roles, name=name)
-            if not role:
-                role = await guild.create_role(name=name, color=color, reason="Adrian setup")
-                results.append(f"✅ Created **@{name}** role")
-            else:
-                results.append(f"✅ Found **@{name}** role")
-            if save_key and role:
-                await db_save_server_config(str(guild.id), **{save_key: str(role.id)})
-            return role
-
-        verified_role     = await get_or_create_role("Adrian Verified",  discord.Color.blue(),    "verified_role_id")
-        estand_role       = await get_or_create_role("Estand Verified",   discord.Color.green(),   "estand_verified_role_id")
-        na_role           = await get_or_create_role("NA",                discord.Color.from_rgb(0, 120, 215),  "na_role_id")
-        eu_role           = await get_or_create_role("EU",                discord.Color.from_rgb(0, 70, 160),   "eu_role_id")
-        waf_role          = await get_or_create_role("WAF",               discord.Color.from_rgb(180, 0, 0),    "waf_role_id")
-        usmf_role         = await get_or_create_role("USMF",              discord.Color.from_rgb(0, 100, 0),    "usmf_role_id")
-        premium_role      = await get_or_create_role("Adrian Premium",    discord.Color.gold(),    "premium_role_id")
-
-        # ── CHANNELS ───────────────────────────────────────────
-        everyone = guild.default_role
-        bot_member = guild.me
-
-        # Create or find Adrian category
-        category = discord.utils.get(guild.categories, name="Adrian")
-        if not category:
-            category = await guild.create_category(
-                name="Adrian",
-                overwrites={
-                    everyone:   discord.PermissionOverwrite(view_channel=False),
-                    bot_member: discord.PermissionOverwrite(view_channel=True),
-                },
-                reason="Adrian setup"
-            )
-            results.append("✅ Created **Adrian** category")
-        else:
-            results.append("✅ Found **Adrian** category")
-
-        async def get_or_create_channel(name, topic, overwrites, save_key=None):
-            channel = discord.utils.get(guild.text_channels, name=name)
-            if not channel:
-                channel = await guild.create_text_channel(
-                    name=name,
-                    topic=topic,
-                    category=category,
-                    overwrites=overwrites,
-                    reason="Adrian setup"
-                )
-                results.append(f"✅ Created **#{name}**")
-            else:
-                # Move to Adrian category if not already there
-                if channel.category != category:
-                    await channel.edit(category=category)
-                # Update permissions
-                for target, perms in overwrites.items():
-                    await channel.set_permissions(target, overwrite=perms)
-                results.append(f"✅ Found **#{name}**")
-            if save_key and channel:
-                await db_save_server_config(str(guild.id), **{save_key: str(channel.id)})
-            return channel
-
-        # #adrian — visible to everyone
-        adrian_ch = await get_or_create_channel(
-            name="adrian",
-            topic="Welcome to Adrian! Type /start to set up your profile.",
-            overwrites={
-                everyone:   discord.PermissionOverwrite(view_channel=True, send_messages=False),
-                bot_member: discord.PermissionOverwrite(view_channel=True, send_messages=True),
-                guild.owner: discord.PermissionOverwrite(view_channel=True, send_messages=True),
-            },
-            save_key="channel_id"
-        )
-
-        # #dealer-updates — visible to Adrian Verified
-        dealer_ch = await get_or_create_channel(
-            name="dealer-updates",
-            topic="New item alerts from militaria dealers.",
-            overwrites={
-                everyone:      discord.PermissionOverwrite(view_channel=False),
-                verified_role: discord.PermissionOverwrite(view_channel=True, send_messages=False),
-                bot_member:    discord.PermissionOverwrite(view_channel=True, send_messages=True),
-                guild.owner:   discord.PermissionOverwrite(view_channel=True, send_messages=True),
-            },
-            save_key="updates_channel_id"
-        )
-
-        # #na-dealer-updates — visible to NA role
-        na_ch = await get_or_create_channel(
-            name="na-dealer-updates",
-            topic="New item alerts from North American militaria dealers.",
-            overwrites={
-                everyone:   discord.PermissionOverwrite(view_channel=False),
-                na_role:    discord.PermissionOverwrite(view_channel=True, send_messages=False),
-                bot_member: discord.PermissionOverwrite(view_channel=True, send_messages=True),
-                guild.owner: discord.PermissionOverwrite(view_channel=True, send_messages=True),
-            },
-            save_key="na_updates_channel_id"
-        )
-
-        # #eu-dealer-updates — visible to EU role
-        eu_ch = await get_or_create_channel(
-            name="eu-dealer-updates",
-            topic="New item alerts from European militaria dealers.",
-            overwrites={
-                everyone:   discord.PermissionOverwrite(view_channel=False),
-                eu_role:    discord.PermissionOverwrite(view_channel=True, send_messages=False),
-                bot_member: discord.PermissionOverwrite(view_channel=True, send_messages=True),
-                guild.owner: discord.PermissionOverwrite(view_channel=True, send_messages=True),
-            },
-            save_key="eu_updates_channel_id"
-        )
-
-        # #waf-updates — visible to WAF role
-        waf_ch = await get_or_create_channel(
-            name="waf-updates",
-            topic="Wehrmacht Awards Forum new listing alerts.",
-            overwrites={
-                everyone:   discord.PermissionOverwrite(view_channel=False),
-                waf_role:   discord.PermissionOverwrite(view_channel=True, send_messages=False),
-                bot_member: discord.PermissionOverwrite(view_channel=True, send_messages=True),
-                guild.owner: discord.PermissionOverwrite(view_channel=True, send_messages=True),
-            },
-            save_key="waf_channel_id"
-        )
-
-        # #usmf-updates — visible to USMF role
-        usmf_ch = await get_or_create_channel(
-            name="usmf-updates",
-            topic="US Militaria Forum new listing alerts.",
-            overwrites={
-                everyone:   discord.PermissionOverwrite(view_channel=False),
-                usmf_role:  discord.PermissionOverwrite(view_channel=True, send_messages=False),
-                bot_member: discord.PermissionOverwrite(view_channel=True, send_messages=True),
-                guild.owner: discord.PermissionOverwrite(view_channel=True, send_messages=True),
-            },
-            save_key="usmf_channel_id"
-        )
-
-        # #estand — Estand forum channel
-        estand_ch = discord.utils.get(guild.forums, name="estand") or discord.utils.get(guild.text_channels, name="estand")
-        if not estand_ch:
-            try:
-                estand_ch = await guild.create_forum(
-                    name="estand",
-                    topic="Buy and sell militaria with trusted collectors.",
-                    category=category,
-                    overwrites={
-                        everyone:      discord.PermissionOverwrite(view_channel=False),
-                        estand_role:   discord.PermissionOverwrite(view_channel=True, send_messages=True),
-                        bot_member:    discord.PermissionOverwrite(view_channel=True, send_messages=True),
-                        guild.owner:   discord.PermissionOverwrite(view_channel=True, send_messages=True),
-                    },
-                    reason="Adrian setup"
-                )
-                results.append("✅ Created **#estand** forum")
-            except Exception as e:
-                results.append(f"⚠️ Could not create Estand forum: {e}")
-        else:
-            results.append("✅ Found **#estand** forum")
-
-        if estand_ch:
-            await db_save_server_config(str(guild.id), estand_channel_id=str(estand_ch.id))
-
-        # ── MARK SETUP COMPLETE ────────────────────────────────
-        await db_save_server_config(str(guild.id), setup_complete=1)
-        logger.info(f"[Setup] Setup complete for {guild.name}")
-
-        # ── POST WELCOME MESSAGE ───────────────────────────────
-        try:
-            welcome_file = os.path.join(SCRIPT_DIR, "logos", "adrian", "Adrian_welcome.png")
-            if os.path.exists(welcome_file):
-                welcome_msg = await adrian_ch.send(
-                    file=discord.File(welcome_file, filename="Adrian_welcome.png"),
-                    view=WelcomeView()
-                )
-                await db_save_server_config(str(guild.id), welcome_message_id=str(welcome_msg.id))
-        except Exception as e:
-            logger.error(f"[Setup] Could not post welcome: {e}")
-
-        # ── COMPLETION EMBED ───────────────────────────────────
-        results_text = "\n".join(results)
-        embed = discord.Embed(
-            title="🎖️ Adrian is Ready!",
-            description=(
-                f"Setup complete for **{guild.name}**! Here\'s what was created:\n\n"
-                f"{results_text}\n\n"
-                f"**Members can now type `/start` in {adrian_ch.mention} to get started!**"
-            ),
-            color=discord.Color.green()
-        )
-        embed.set_footer(text="Adrian — Discord's #1 Militaria Bot")
-        await interaction.edit_original_response(embed=embed, view=None)
-
-    except discord.Forbidden:
-        await interaction.edit_original_response(
-            embed=discord.Embed(
-                title="⚠️ Missing Permissions",
-                description="I need **Manage Channels**, **Manage Roles**, and **Manage Permissions** to complete setup. Please grant these and run `/setup` again.",
-                color=discord.Color.red()
-            ),
-            view=None
-        )
-    except Exception as e:
-        logger.error(f"[Setup] Auto-setup error: {e}\n{traceback.format_exc()}")
-        await interaction.edit_original_response(
-            embed=discord.Embed(
-                title="⚠️ Setup Error",
-                description=f"Something went wrong during setup. Please try again.\n\n`{e}`",
-                color=discord.Color.red()
-            ),
-            view=None
-        )
-
-
-# ==================== OWNER COMMANDS (Murphy only, test server only) ====================
-
-def is_bot_owner(user):
-    return user.id == BOT_OWNER_ID
-
-@client.tree.command(name="servers", description="[Owner] List all servers running Adrian")
-async def servers_cmd(interaction: discord.Interaction):
-    if not is_bot_owner(interaction.user):
-        await interaction.response.send_message("❓ Unknown command.", ephemeral=True)
-        return
-    await interaction.response.defer(ephemeral=True)
-    servers = await db_get_all_servers()
-    if not servers:
-        await interaction.followup.send("No servers configured yet.", ephemeral=True)
-        return
-    embed = discord.Embed(
-        title=f"🌐 Adrian — {len(servers)} Server(s)",
-        color=discord.Color.dark_gold(),
-        timestamp=datetime.now(timezone.utc)
-    )
-    for s in servers[:25]:
-        setup = "✅" if s.get("setup_complete") == "1" else "⚠️"
-        premium = "💎" if s.get("premium") == "1" else ""
-        embed.add_field(
-            name=f"{setup} {premium} {s.get('guild_name', 'Unknown')}",
-            value=f"ID: `{s['guild_id']}`\nOwner: <@{s.get('owner_id', '?')}>",
-            inline=True
-        )
-    embed.set_footer(text=f"Adrian Owner Dashboard — {len(servers)} total servers")
-    await interaction.followup.send(embed=embed, ephemeral=True)
-
-@client.tree.command(name="serverstats", description="[Owner] View stats for a specific server")
-@app_commands.describe(guild_id="The server ID to look up")
-async def serverstats_cmd(interaction: discord.Interaction, guild_id: str):
-    if not is_bot_owner(interaction.user):
-        await interaction.response.send_message("❓ Unknown command.", ephemeral=True)
-        return
-    await interaction.response.defer(ephemeral=True)
-    config = await db_get_server_config(guild_id)
-    if not config:
-        await interaction.followup.send(f"⚠️ No config found for server `{guild_id}`.", ephemeral=True)
-        return
-    embed = discord.Embed(
-        title=f"📊 {config.get('guild_name', 'Unknown Server')}",
-        color=discord.Color.dark_gold(),
-        timestamp=datetime.now(timezone.utc)
-    )
-    embed.add_field(name="Guild ID", value=f"`{config['guild_id']}`", inline=True)
-    embed.add_field(name="Owner", value=f"<@{config.get('owner_id', '?')}>", inline=True)
-    embed.add_field(name="Setup", value="✅ Complete" if config.get("setup_complete") == "1" else "⚠️ Incomplete", inline=True)
-    embed.add_field(name="Premium", value="💎 Yes" if config.get("premium") == "1" else "❌ No", inline=True)
-    embed.add_field(name="Region", value=config.get("alerts_region", "?"), inline=True)
-    embed.add_field(name="Forums", value=config.get("alerts_forums", "?"), inline=True)
-    embed.add_field(name="Cross-Posts", value="✅" if config.get("accept_cross_posts") == "1" else "❌", inline=True)
-    embed.set_footer(text="Adrian Owner Dashboard")
-    await interaction.followup.send(embed=embed, ephemeral=True)
-
-@client.tree.command(name="setpremium", description="[Owner] Grant or revoke premium for a server")
-@app_commands.describe(guild_id="The server ID", premium="True to grant, False to revoke")
-async def setpremium_cmd(interaction: discord.Interaction, guild_id: str, premium: bool):
-    if not is_bot_owner(interaction.user):
-        await interaction.response.send_message("❓ Unknown command.", ephemeral=True)
-        return
-    await db_save_server_config(guild_id, premium=1 if premium else 0)
-    await interaction.response.send_message(
-        f"{'💎 Premium granted' if premium else '❌ Premium revoked'} for server `{guild_id}`.",
-        ephemeral=True
-    )
-
-@client.tree.command(name="debug", description="[Owner] Show live bot health and status")
-async def debug_cmd(interaction: discord.Interaction):
-    if not is_bot_owner(interaction.user):
-        await interaction.response.send_message("❓ Unknown command.", ephemeral=True)
-        return
-    await interaction.response.defer(ephemeral=True)
-
-    import sys
-    import platform
-
-    # Bot state
-    paused = "⏸️ Paused" if bot_state["paused"] else "▶️ Running"
-    last_check = f"<t:{int(bot_state['last_check'].timestamp())}:R>" if bot_state["last_check"] else "Never"
-    last_email = f"<t:{int(bot_state['last_email_check'].timestamp())}:R>" if bot_state["last_email_check"] else "Never"
-
-    # Guild info
-    guilds = client.guilds
-    total_members = sum(g.member_count for g in guilds)
-
-    # DB pool stats
-    db_size = client.db.get_size() if client.db else 0
-    db_free = client.db.get_idle_size() if client.db else 0
-
-    # Tasks
-    all_tasks = asyncio.all_tasks()
-    running_tasks = [t.get_name() for t in all_tasks if not t.done()]
-
-    import os
-    import psutil
-
-    # Uptime
-    startup = bot_state.get("startup_time")
-    if startup:
-        uptime_delta = datetime.now(timezone.utc) - startup
-        hours, rem = divmod(int(uptime_delta.total_seconds()), 3600)
-        minutes, seconds = divmod(rem, 60)
-        uptime_str = f"{hours}h {minutes}m {seconds}s"
-    else:
-        uptime_str = "Unknown"
-
-    # Memory usage
-    try:
-        process = psutil.Process()
-        mem_mb = process.memory_info().rss / 1024 / 1024
-        mem_str = f"{mem_mb:.1f} MB"
-    except Exception:
-        mem_str = "N/A"
-
-    # Last error
-    last_err = bot_state.get("last_error")
-    last_err_time = bot_state.get("last_error_time")
-    if last_err and last_err_time:
-        err_str = f"`{str(last_err)[:50]}` <t:{int(last_err_time.timestamp())}:R>"
-    else:
-        err_str = "None"
-
-    embed = discord.Embed(
-        title="🔧 Adrian Debug Dashboard",
-        color=discord.Color.dark_gold(),
-        timestamp=datetime.now(timezone.utc)
-    )
-
-    # Core status
-    embed.add_field(name="🟢 Status", value=paused, inline=True)
-    embed.add_field(name="⏱️ Uptime", value=uptime_str, inline=True)
-    embed.add_field(name="💾 Memory", value=mem_str, inline=True)
-
-    # Network/guilds
-    embed.add_field(name="🌐 Servers", value=f"{len(guilds)}", inline=True)
-    embed.add_field(name="👥 Members", value=f"{total_members:,}", inline=True)
-    embed.add_field(name="🏪 Dealers", value=f"{len(DEALERS)} web + {len(EMAIL_DEALERS)} email", inline=True)
-
-    # Activity
-    embed.add_field(name="📬 Alerts Sent", value=str(bot_state.get("alert_count", 0)), inline=True)
-    embed.add_field(name="🌐 Cross-Posts", value=str(bot_state.get("cross_post_count", 0)), inline=True)
-    embed.add_field(name="🏷️ Estand Listings", value=str(bot_state.get("estand_listing_count", 0)), inline=True)
-
-    # Checks
-    embed.add_field(name="🔍 Last Dealer Check", value=last_check, inline=True)
-    embed.add_field(name="📧 Last Email Check", value=last_email, inline=True)
-    embed.add_field(name="📦 Griffin Buffer", value=f"{len(bot_state['griffin_buffer'])} pending", inline=True)
-
-    # Health
-    embed.add_field(name="🗄️ DB Pool", value=f"{db_size} total / {db_free} idle", inline=True)
-    embed.add_field(name="⚙️ Active Tasks", value=f"{len(running_tasks)}", inline=True)
-    embed.add_field(name="❌ Errors", value=f"{bot_state.get('error_count', 0)} total", inline=True)
-
-    # Last error
-    embed.add_field(name="🚨 Last Error", value=err_str, inline=False)
-
-    # Pending pings
-    pending = len(bot_state.get("pending_pings", {}))
-    embed.add_field(name="⏳ Pending Pings", value=f"{pending} users", inline=True)
-    embed.add_field(name="🐍 Python", value=platform.python_version(), inline=True)
-    embed.add_field(name="📡 Discord.py", value=discord.__version__, inline=True)
-
-    # List all guilds
-    guild_list = "\n".join([f"• **{g.name}** `{g.id}` ({g.member_count})" for g in guilds[:10]])
-    embed.add_field(name="Connected Servers", value=guild_list or "None", inline=False)
-
-    embed.set_footer(text="Adrian Owner Dashboard — /debug")
-    await interaction.followup.send(embed=embed, ephemeral=True)
-
-@client.tree.command(name="dbstats", description="[Owner] Show database statistics")
-async def dbstats_cmd(interaction: discord.Interaction):
-    if not is_bot_owner(interaction.user):
-        await interaction.response.send_message("❓ Unknown command.", ephemeral=True)
-        return
-    await interaction.response.defer(ephemeral=True)
-    try:
-        async with client.db.acquire() as conn:
-            # Row counts for key tables
-            tables = [
-                "server_config", "user_preferences", "dealer_follows",
-                "keyword_watchlist", "cross_post_mirrors", "scam_flags",
-                "user_warnings", "estand_blocked_tags", "listing_blocks"
-            ]
-            counts = {}
-            for table in tables:
-                try:
-                    count = await conn.fetchval(f"SELECT COUNT(*) FROM {table}")
-                    counts[table] = count or 0
-                except Exception:
-                    counts[table] = "N/A"
-
-            # DB size
-            try:
-                db_size = await conn.fetchval("SELECT pg_size_pretty(pg_database_size(current_database()))")
-            except Exception:
-                db_size = "N/A"
-
-        embed = discord.Embed(
-            title="🗄️ Database Statistics",
-            color=discord.Color.dark_gold(),
-            timestamp=datetime.now(timezone.utc)
-        )
-        embed.add_field(name="📦 DB Size", value=db_size, inline=False)
-        for table, count in counts.items():
-            embed.add_field(name=f"`{table}`", value=f"{count:,}" if isinstance(count, int) else count, inline=True)
-        embed.add_field(name="🔍 Queries This Session", value=f"{bot_state.get('db_query_count', 0):,}", inline=False)
-        embed.set_footer(text="Adrian DB Stats")
-        await interaction.followup.send(embed=embed, ephemeral=True)
-        logger.info(f"[Admin] DB stats viewed by {interaction.user}")
-    except Exception as e:
-        await interaction.followup.send(f"⚠️ DB stats error: {e}", ephemeral=True)
-        logger.error(f"[Admin] DB stats error: {e}")
-
-
-@client.tree.command(name="setestate", description="[Owner] Manually set the estate channel for a server")
-@app_commands.describe(channel="The forum channel to use as the Estand")
-async def setestate_cmd(interaction: discord.Interaction, channel: discord.ForumChannel):
-    if not is_bot_owner(interaction.user):
-        await interaction.response.send_message("❓ Unknown command.", ephemeral=True)
-        return
-    await interaction.response.defer(ephemeral=True)
-    sold_tag = next((t for t in channel.available_tags if t.name.lower() == "sold"), None)
-    await db_save_server_config(
-        str(interaction.guild_id),
-        estate_channel_id=str(channel.id),
-        estate_sold_tag_id=str(sold_tag.id) if sold_tag else None,
-        estate_name=channel.name
-    )
-    await interaction.followup.send(
-        embed=discord.Embed(
-            title="✅ Estand Channel Updated",
-            description=f"Estand channel set to {channel.mention}\nSold tag: {sold_tag.name if sold_tag else 'None found'}",
-            color=discord.Color.green()
-        ),
-        ephemeral=True
-    )
-    logger.info(f"[Admin] Estand channel manually set to {channel.name} ({channel.id}) in {interaction.guild.name}")
-
-
-@client.tree.command(name="restart", description="[Owner] Restart the bot")
-async def restart_cmd(interaction: discord.Interaction):
-    if not is_bot_owner(interaction.user):
-        await interaction.response.send_message("❓ Unknown command.", ephemeral=True)
-        return
-    await interaction.response.send_message(
-        embed=discord.Embed(
-            title="🔄 Restarting...",
-            description="Adrian is restarting. I'll be back online in a few seconds!",
-            color=discord.Color.orange()
-        ),
-        ephemeral=False
-    )
-    logger.info(f"[Restart] Bot restart triggered by {interaction.user}")
-    await asyncio.sleep(2)
-    import sys
-    sys.exit(0)
-
-
-@client.tree.command(name="channellist", description="[Owner] List all channels the bot can see")
-async def channellist_cmd(interaction: discord.Interaction):
-    if not is_bot_owner(interaction.user):
-        await interaction.response.send_message("❓ Unknown command.", ephemeral=True)
-        return
-
-    await interaction.response.defer(ephemeral=True)
-
-    lines = []
-    for guild in client.guilds:
-        lines.append(f"\n**{guild.name}** (`{guild.id}`) — {guild.member_count} members")
-        text_channels = [c for c in guild.channels if isinstance(c, discord.TextChannel)]
-        text_channels.sort(key=lambda x: x.position)
-        for c in text_channels:
-            everyone_perms = c.permissions_for(guild.default_role)
-            lock = "🔒" if not everyone_perms.view_channel else "🌐"
-            lines.append(f"{lock} `{c.id}` — #{c.name}")
-
-    # Split into chunks if too long (Discord 2000 char limit)
-    output = "\n".join(lines)
-    chunks = [output[i:i+1900] for i in range(0, len(output), 1900)]
-
-    await interaction.followup.send(chunks[0], ephemeral=True)
-    for chunk in chunks[1:]:
-        await interaction.followup.send(chunk, ephemeral=True)
-
-    logger.info(f"[ChannelList] Sent channel list to {interaction.user}")
-
-
-@client.tree.command(name="channelsearch", description="[Owner] Search a channel by ID for keywords")
-@app_commands.describe(
-    channel_id="Channel ID to search (use /channellist to find IDs)",
-    keyword="Keyword to search for (e.g. helmet, medal, badge)"
-)
-async def channelsearch_cmd(interaction: discord.Interaction, channel_id: str, keyword: str):
-    if not is_bot_owner(interaction.user):
-        await interaction.response.send_message("❓ Unknown command.", ephemeral=True)
-        return
-
-    await interaction.response.defer(ephemeral=True)
-
-    try:
-        source_channel = client.get_channel(int(channel_id))
-        if not source_channel:
-            await interaction.followup.send(f"⚠️ Could not find channel `{channel_id}`. Use `/channellist` to find the right ID.", ephemeral=True)
-            return
-
-        await interaction.followup.send(
-            f"🔍 Searching **#{source_channel.name}** for `{keyword}`... this may take a few minutes for large channels.",
-            ephemeral=True
-        )
-
-        results = []
-        count = 0
-        async for message in source_channel.history(limit=10000, oldest_first=True):
-            count += 1
-            if keyword.lower() in message.content.lower():
-                results.append(message)
-            if count % 1000 == 0:
-                logger.info(f"[Search] Scanned {count} messages in #{source_channel.name}...")
-
-        if not results:
-            await interaction.followup.send(
-                f"No messages found containing `{keyword}` in **#{source_channel.name}** (scanned {count:,} messages).",
-                ephemeral=True
-            )
-            return
-
-        lines = [
-            f"Search Results: '{keyword}' in #{source_channel.name} ({source_channel.guild.name})",
-            f"Scanned: {count:,} messages | Found: {len(results)} matches",
-            f"Exported: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}",
-            "=" * 60, ""
-        ]
-        for msg in results:
-            ts = msg.created_at.strftime("%Y-%m-%d %H:%M")
-            lines.append(f"[{ts}] {msg.author.display_name} (@{msg.author.name}):")
-            lines.append(msg.content)
-            if msg.attachments:
-                lines.append(f"  [Attachments: {', '.join(a.filename for a in msg.attachments)}]")
-            lines.append("")
-
-        file_bytes = "\n".join(lines).encode("utf-8")
-        file = discord.File(fp=__import__("io").BytesIO(file_bytes), filename=f"search_{keyword}_{source_channel.name}.txt")
-        await interaction.followup.send(
-            f"✅ Found **{len(results)}** matches for `{keyword}` in **#{source_channel.name}** (scanned {count:,} messages).",
-            file=file, ephemeral=True
-        )
-        logger.info(f"[Search] {len(results)} results for '{keyword}' in #{source_channel.name} ({source_channel.guild.name})")
-
-    except discord.Forbidden:
-        await interaction.followup.send("⚠️ I don't have permission to read that channel.", ephemeral=True)
-    except Exception as e:
-        logger.error(f"[Search] Error: {e}\n{traceback.format_exc()}")
-        await interaction.followup.send(f"⚠️ Error: {e}", ephemeral=True)
-
-
-@client.tree.command(name="channelscrape", description="[Owner] Scrape up to 10,000 messages from a channel into a text file")
-@app_commands.describe(channel_id="Channel ID to scrape (use /channellist to find IDs)")
-async def channelscrape_cmd(interaction: discord.Interaction, channel_id: str):
-    if not is_bot_owner(interaction.user):
-        await interaction.response.send_message("❓ Unknown command.", ephemeral=True)
-        return
-
-    await interaction.response.defer(ephemeral=True)
-
-    try:
-        source_channel = client.get_channel(int(channel_id))
-        if not source_channel:
-            await interaction.followup.send(f"⚠️ Could not find channel `{channel_id}`. Use `/channellist` to find the right ID.", ephemeral=True)
-            return
-
-        await interaction.followup.send(
-            f"📥 Scraping **#{source_channel.name}** — fetching up to 10,000 messages. This may take a few minutes...",
-            ephemeral=True
-        )
-
-        messages = []
-        async for message in source_channel.history(limit=10000, oldest_first=True):
-            messages.append(message)
-            if len(messages) % 1000 == 0:
-                logger.info(f"[Scrape] Collected {len(messages)} messages from #{source_channel.name}...")
-
-        if not messages:
-            await interaction.followup.send("No messages found in that channel.", ephemeral=True)
-            return
-
-        lines = [
-            f"Channel Scrape: #{source_channel.name} ({source_channel.guild.name})",
-            f"Total messages: {len(messages):,}",
-            f"Date range: {messages[0].created_at.strftime('%Y-%m-%d')} to {messages[-1].created_at.strftime('%Y-%m-%d')}",
-            f"Exported: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}",
-            "=" * 60, ""
-        ]
-        for msg in messages:
-            text = msg.content.strip()
-            if not text and not msg.attachments and not msg.embeds:
-                continue
-            ts = msg.created_at.strftime("%Y-%m-%d %H:%M")
-            lines.append(f"[{ts}] {msg.author.display_name} (@{msg.author.name}):")
-            if text:
-                lines.append(text)
-            if msg.attachments:
-                lines.append(f"  [Attachments: {', '.join(a.filename for a in msg.attachments)}]")
-            if msg.embeds:
-                for e in msg.embeds:
-                    if e.title: lines.append(f"  [Embed: {e.title}]")
-                    if e.description: lines.append(f"  {e.description[:200]}")
-            lines.append("")
-
-        file_bytes = "\n".join(lines).encode("utf-8")
-        if len(file_bytes) > 25_000_000:
-            file_bytes = file_bytes[:25_000_000]
-
-        file = discord.File(
-            fp=__import__("io").BytesIO(file_bytes),
-            filename=f"scrape_{source_channel.guild.name}_{source_channel.name}.txt"
-        )
-        await interaction.followup.send(
-            f"✅ Scraped **{len(messages):,} messages** from **#{source_channel.name}** in **{source_channel.guild.name}**.",
-            file=file, ephemeral=True
-        )
-        logger.info(f"[Scrape] Exported {len(messages)} messages from #{source_channel.name} ({source_channel.guild.name})")
-
-    except discord.Forbidden:
-        await interaction.followup.send("⚠️ I don't have permission to read that channel.", ephemeral=True)
-    except Exception as e:
-        logger.error(f"[Scrape] Error: {e}\n{traceback.format_exc()}")
-        await interaction.followup.send(f"⚠️ Error: {e}", ephemeral=True)
-
-
-@client.tree.command(name="channelfeed", description="[Owner] Mirror a channel from another server to this one")
-async def watch_cmd(interaction: discord.Interaction):
-    if not is_bot_owner(interaction.user):
-        await interaction.response.send_message("❓ Unknown command.", ephemeral=True)
-        return
-
-    # Build server dropdown
-    guilds = [g for g in client.guilds if g.id != interaction.guild_id]
-    if not guilds:
-        await interaction.response.send_message("No other servers to watch.", ephemeral=True)
-        return
-
-    server_options = [
-        discord.SelectOption(label=g.name[:100], value=str(g.id), description=f"{g.member_count} members")
-        for g in guilds
-    ][:25]
-
-    class ServerSelect(discord.ui.View):
-        def __init__(self):
-            super().__init__(timeout=300)
-
-        @discord.ui.select(placeholder="Select a server to watch...", options=server_options)
-        async def select_server(self, interaction2: discord.Interaction, select: discord.ui.Select):
-            guild_id = int(select.values[0])
-            guild = client.get_guild(guild_id)
-            if not guild:
-                await interaction2.response.send_message("Could not find that server.", ephemeral=True)
-                return
-
-            # Build channel dropdown — only show restricted/private channels
-            # A channel is "private" if @everyone can't view it
-            text_channels = [c for c in guild.channels if isinstance(c, discord.TextChannel)]
-            private_channels = []
-            for c in sorted(text_channels, key=lambda x: x.position):
-                everyone_role = guild.default_role
-                perms = c.permissions_for(everyone_role)
-                if not perms.view_channel:
-                    private_channels.append(c)
-
-            # Fall back to all channels if none are restricted
-            channels_to_show = private_channels if private_channels else text_channels
-
-            channel_options = [
-                discord.SelectOption(
-                    label=f"#{c.name}"[:100],
-                    value=str(c.id),
-                    description="🔒 Private" if c in private_channels else "🌐 Public"
-                )
-                for c in channels_to_show
-            ][:25]
-
-            if not channel_options:
-                await interaction2.response.send_message("No viewable channels in that server.", ephemeral=True)
-                return
-
-            class ChannelSelect(discord.ui.View):
-                def __init__(self):
-                    super().__init__(timeout=300)
-
-                @discord.ui.select(placeholder="Select a channel to mirror...", options=channel_options)
-                async def select_channel(self, interaction3: discord.Interaction, select2: discord.ui.Select):
-                    channel_id = int(select2.values[0])
-                    source_channel = guild.get_channel(channel_id)
-
-                    # Save to bot_state watched channels
-                    if "watched_channels" not in bot_state:
-                        bot_state["watched_channels"] = {}
-                    bot_state["watched_channels"][str(channel_id)] = {
-                        "guild_id": guild_id,
-                        "guild_name": guild.name,
-                        "channel_name": source_channel.name,
-                        "mirror_to": interaction3.channel_id
-                    }
-                    await interaction3.response.edit_message(
-                        embed=discord.Embed(
-                            title="👁️ Watching Channel",
-                            description=f"Now mirroring **#{source_channel.name}** from **{guild.name}** to this channel.\n\nAll new messages will appear here.",
-                            color=discord.Color.dark_gold()
-                        ),
-                        view=None
-                    )
-                    logger.info(f"[Watch] Now watching #{source_channel.name} ({channel_id}) from {guild.name}")
-
-            embed = discord.Embed(
-                title=f"👁️ Watch — {guild.name}",
-                description="Select which channel to mirror:",
-                color=discord.Color.dark_gold()
-            )
-            await interaction2.response.edit_message(embed=embed, view=ChannelSelect())
-
-    embed = discord.Embed(
-        title="👁️ Watch — Select Server",
-        description="Which server\'s channel do you want to mirror here?",
-        color=discord.Color.dark_gold()
-    )
-    await interaction.response.send_message(embed=embed, view=ServerSelect(), ephemeral=True)
-
-@client.tree.command(name="broadcast", description="[Owner] Send a message to all Adrian servers")
-@app_commands.describe(message="The message to broadcast")
-async def broadcast_cmd(interaction: discord.Interaction, message: str):
-    if not is_bot_owner(interaction.user):
-        await interaction.response.send_message("❓ Unknown command.", ephemeral=True)
-        return
-    await interaction.response.defer(ephemeral=True)
-    servers = await db_get_all_servers()
-    sent = 0
-    failed = 0
-    for server in servers:
-        try:
-            channel_id = server.get("updates_channel_id") or server.get("channel_id")
-            if channel_id:
-                channel = client.get_channel(int(channel_id))
-                if channel:
-                    embed = discord.Embed(
-                        title="📢 Message from Adrian",
-                        description=message,
-                        color=discord.Color.dark_gold(),
-                        timestamp=datetime.now(timezone.utc)
-                    )
-                    embed.set_footer(text="Adrian — Discord's #1 Militaria Bot")
-                    await channel.send(embed=embed)
-                    sent += 1
-        except Exception as e:
-            failed += 1
-            logger.error(f"[Broadcast] Failed for {server.get('guild_id')}: {e}")
-    await interaction.followup.send(f"📢 Broadcast sent to {sent} server(s). {failed} failed.", ephemeral=True)
-
-@client.tree.command(name="start", description="Get started with Adrian and set your notification preferences")
-async def start_cmd(interaction: discord.Interaction):
-    logger.info(f"[Command] /start used by {interaction.user} ({interaction.user.id}) in {interaction.guild.name if interaction.guild else 'DM'}")
-    on_cd, remaining = check_cooldown(str(interaction.user.id), "start")
-    if on_cd:
-        await interaction.response.send_message(f"⏳ Please wait {remaining}s before using `/start` again.", ephemeral=True)
-        return
-    existing = await db_get_user_region(str(interaction.user.id))
-
-    # Check if user has already agreed to Estand rules
-    async with client.db.acquire() as conn:
-        rules_row = await conn.fetchrow("SELECT estand_agreed FROM user_preferences WHERE user_id=$1", str(interaction.user.id))
-        estand_agreed = rules_row["estand_agreed"] if rules_row and "estand_agreed" in rules_row else None
-
-    if not estand_agreed:
-        # Show Estand rules agreement first — uses shared _show_estand_rules
-        # After agreement, user will need to run /start again to complete full onboarding
-        # We temporarily patch the agree button to go to onboarding instead of Estand welcome
-        await interaction.response.defer(ephemeral=True)
-
-        rules_embed = discord.Embed(
-            title="📋 Estand Marketplace Rules",
-            description=(
-                "Before creating your collector profile, please read and agree to the **Estand Marketplace Rules**:\n\n"
-                "🤝 **Honest listings** — Accurately describe items including condition, provenance and any known issues.\n\n"
-                "🚫 **No prohibited items** — Illegal items, stolen goods, or items banned by Discord\'s ToS are strictly prohibited.\n\n"
-                "💬 **Respectful communication** — Treat all buyers and sellers with respect. Harassment will not be tolerated.\n\n"
-                "⭐ **Complete your transactions** — If you agree to a sale, follow through. Backing out repeatedly will affect your reputation.\n\n"
-                "🛡️ **No scamming** — Fraud, fake items, or misrepresentation will result in a permanent ban from the Adrian network.\n\n"
-                "📊 **Honest reviews** — Only leave reviews for transactions you actually completed. Fake reviews are prohibited.\n\n"
-                "By clicking **I Agree**, you confirm you have read and will follow these rules."
-            ),
-            color=discord.Color.dark_gold()
-        )
-        rules_embed.set_footer(text="Adrian — Estand Marketplace Rules")
-
-        class StartRulesView(discord.ui.View):
-            def __init__(self):
-                super().__init__(timeout=300)
-
-            @discord.ui.button(label="✅ I Agree", style=discord.ButtonStyle.success, custom_id="start_estand_rules_agree")
-            async def agree(self2, interaction2: discord.Interaction, button: discord.ui.Button):
-                await interaction2.response.defer(ephemeral=True)
-                try:
-                    async with client.db.acquire() as conn2:
-                        now = int(datetime.now(timezone.utc).timestamp())
-                        await conn2.execute(
-                            "INSERT INTO user_preferences (user_id, estand_agreed, created_at, updated_at) VALUES ($1, 1, $2, $2) ON CONFLICT (user_id) DO UPDATE SET estand_agreed=1, updated_at=$2",
-                            str(interaction2.user.id), now
-                        )
-                    if interaction2.guild:
-                        config = await db_get_server_config(str(interaction2.guild.id))
-                        estand_role_id = get_config_value(config, "estand_verified_role_id") if config else None
-                        if estand_role_id:
-                            estand_role = interaction2.guild.get_role(int(estand_role_id)) if estand_role_id else None
-                            if estand_role:
-                                member = interaction2.guild.get_member(interaction2.user.id)
-                                if member and estand_role not in member.roles:
-                                    await member.add_roles(estand_role, reason="Agreed to Estand rules via /start")
-                except Exception as e:
-                    logger.error(f"[Start] Estand rules save error: {e}")
-                logger.info(f"[Start] {interaction2.user} agreed to Estand rules — proceeding to onboarding")
-                await _show_start_onboarding(interaction2)
-
-            @discord.ui.button(label="❌ Decline", style=discord.ButtonStyle.danger, custom_id="start_estand_rules_decline")
-            async def decline(self2, interaction2: discord.Interaction, button: discord.ui.Button):
-                await interaction2.response.defer(ephemeral=True)
-                await interaction2.edit_original_response(
-                    embed=discord.Embed(
-                        title="No problem!",
-                        description="You can run `/start` again whenever you\'re ready to join the Estand marketplace.",
-                        color=discord.Color.red()
-                    ),
-                    view=None
-                )
-
-        await interaction.edit_original_response(embed=rules_embed, view=StartRulesView())
-        return
-
-    await interaction.response.defer(ephemeral=True)
-    await _show_start_onboarding(interaction)
 
 async def _show_start_onboarding(interaction):
+    """Entry point for /start — checks if already verified and goes to right step."""
     logger.debug(f"[Start] Showing onboarding to {interaction.user} ({interaction.user.id})")
-    existing = await db_get_user_region(str(interaction.user.id))
-    region_str = {"NA": "🇺🇸 North America Only", "EU": "🇪🇺 Europe Only", "both": "🌍 All Dealers"}.get(existing, "Not set yet")
-    embeds = []
-    if bot_state.get("question1_img_url"):
-        img_embed = discord.Embed(color=discord.Color.dark_gold())
-        img_embed.set_image(url=bot_state["question1_img_url"])
-        embeds.append(img_embed)
-    description = "🇺🇸 North America Only\n🇪🇺 Europe Only\n🌍 All Dealers"
-    if existing:
-        description += f"\n\n**Current Setting:** {region_str}"
-    text_embed = discord.Embed(description=description, color=discord.Color.dark_gold())
-    text_embed.set_footer(text="Adrian — Discord\'s #1 Militaria Bot")
-    embeds.append(text_embed)
-    await interaction.edit_original_response(embeds=embeds, view=RegionSelectView())
+    # Check if already agreed to bot rules (has Adrian Verified role)
+    member = interaction.guild.get_member(interaction.user.id)
+    config = await db_get_server_config(str(interaction.guild.id))
+    role_id = get_config_value(config, "verified_role_id") if config else None
+    verified_role = interaction.guild.get_role(int(role_id)) if role_id else discord.utils.get(interaction.guild.roles, name="Adrian Verified")
+    already_verified = verified_role and member and verified_role in member.roles
+
+    if already_verified:
+        # Already agreed to bot rules — go straight to step 2
+        await start_step2_estand_rules(interaction)
+    else:
+        await start_step1_bot_rules(interaction)
+
+
 
 @client.tree.command(name="settings", description="Update your notification preferences")
 async def settings_cmd(interaction: discord.Interaction):
