@@ -2656,8 +2656,27 @@ async def scrape_dealer_items(browser, dealer):
     return items
 
 
+async def install_playwright_browsers():
+    """Install Playwright browsers if not already installed."""
+    try:
+        import subprocess
+        logger.info("[Playwright] Installing Chromium browser...")
+        result = subprocess.run(
+            ["playwright", "install", "chromium"],
+            capture_output=True, text=True, timeout=120
+        )
+        if result.returncode == 0:
+            logger.info("[Playwright] Chromium installed successfully")
+        else:
+            logger.warning(f"[Playwright] Install output: {result.stdout} {result.stderr}")
+    except Exception as e:
+        logger.error(f"[Playwright] Could not install Chromium: {e}")
+
+
 async def check_playwright_dealers():
     """Background task — checks all Playwright dealers every 10 minutes."""
+    # Install browsers first
+    await install_playwright_browsers()
     # Wait for bot to be fully ready
     await asyncio.sleep(15)
     logger.info(f"[Playwright] Scraper starting — monitoring {len(PLAYWRIGHT_DEALERS)} dealers")
