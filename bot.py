@@ -2673,10 +2673,17 @@ async def check_playwright_dealers():
             try:
                 from playwright.async_api import async_playwright
                 pw = await async_playwright().start()
-                browser = await pw.chromium.launch(
+                # Try system chromium first (Railway), fall back to Playwright's own
+                import shutil
+                chromium_path = shutil.which("chromium") or shutil.which("chromium-browser") or None
+                launch_kwargs = dict(
                     headless=True,
-                    args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
+                    args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--single-process"]
                 )
+                if chromium_path:
+                    launch_kwargs["executable_path"] = chromium_path
+                    logger.debug(f"[Playwright] Using system Chromium at {chromium_path}")
+                browser = await pw.chromium.launch(**launch_kwargs)
                 logger.debug("[Playwright] Browser launched")
             except Exception as be:
                 logger.error(f"[Playwright] Could not launch browser: {be}")
@@ -2919,11 +2926,8 @@ def parse_usmf_email(subject, body):
         "forum_url": topic_url,
     }
 
-async def send_usmf_alert(channel, parsed):
+async def send_usmf_alert(parsed):
     """Send a USMF forum alert to the USMF channel."""
-    if not channel:
-        logger.error("[USMF] Channel not found!")
-        return
 
     # Build description
     description = f"**{parsed['item_title']}**\n"
@@ -2940,9 +2944,6 @@ async def send_usmf_alert(channel, parsed):
         color=discord.Color.dark_blue(),
         timestamp=datetime.now(timezone.utc)
     )
-    embed.add_field(name="📬 Notification #", value=str(notif_count), inline=True)
-    if bump_count > 0:
-        embed.add_field(name="🔄 Times Bumped", value=str(bump_count), inline=True)
     embed.set_footer(text="Adrian — Forum Alert | You may need to make a free forum account to see this listing")
 
     logo_file = os.path.join(SCRIPT_DIR, "logos", "usmf.png")
@@ -3038,7 +3039,7 @@ async def send_usmf_alert(channel, parsed):
     except Exception as e:
         logger.error(f"[Watchlist] USMF keyword matching failed: {e}")
 
-async def send_waf_alert(channel, parsed, guild):
+async def send_waf_alert(parsed, guild=None):
     """Send a formatted WAF Estate alert to members with the correct role."""
     forum_url = parsed.get("forum_url", "")
     item_title = parsed.get("item_title", "Unknown")
@@ -3292,15 +3293,13 @@ async def _check_email_dealers_inner():
                 try:
                     parsed = parse_waf_email(subject, body)
                     guild = client.guilds[0] if client.guilds else None
-                    waf_channel = client.get_channel(WAF_CHANNEL_ID)
-                    await send_waf_alert(waf_channel, parsed, guild)
+                    await send_waf_alert(parsed, guild)
                 except Exception as e:
                     logger.error(f"[WAF] Error processing email '{subject}': {e}\n{traceback.format_exc()}")
             elif dealer.get("usmf", False):
                 try:
                     parsed = parse_usmf_email(subject, body)
-                    usmf_channel = client.get_channel(USMF_CHANNEL_ID)
-                    await send_usmf_alert(usmf_channel, parsed)
+                    await send_usmf_alert(parsed)
                 except Exception as e:
                     logger.error(f"[USMF] Error processing email '{subject}': {e}\n{traceback.format_exc()}")
             else:
