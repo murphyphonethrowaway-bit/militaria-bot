@@ -2631,9 +2631,15 @@ async def scrape_dealer_items(browser, dealer):
                 continue
 
         if not found_sel:
-            # Log page title to help debug
-            title = await page.title()
-            logger.warning(f"[Playwright] No product selector found on {name} (page title: \'{title}\')")
+            # Log page details to help debug
+            try:
+                title = await page.title()
+                current_url = page.url
+                html_len = len(await page.content())
+                logger.warning(f"[Playwright] No product selector found on {name}")
+                logger.warning(f"[Playwright]   Title: \'{title}\' | URL: {current_url} | HTML: {html_len} chars")
+            except Exception:
+                logger.warning(f"[Playwright] No product selector found on {name} — could not get debug info")
             return items
 
         product_elements = await page.query_selector_all(found_sel)
@@ -2732,8 +2738,14 @@ async def check_playwright_dealers():
 
             for dealer in PLAYWRIGHT_DEALERS:
                 name = dealer["name"]
+                # Create fresh browser for each dealer to prevent crashes bleeding across
+                dealer_browser = None
                 try:
-                    items = await scrape_dealer_items(browser, dealer)
+                    dealer_browser = await pw.chromium.launch(
+                        headless=True,
+                        args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--single-process"]
+                    )
+                    items = await scrape_dealer_items(dealer_browser, dealer)
 
                     if not items:
                         logger.debug(f"[Playwright] {name} — no items found, skipping")
@@ -2775,6 +2787,12 @@ async def check_playwright_dealers():
                 except Exception as de:
                     logger.error(f"[Playwright] Error checking {name}: {de}\n{traceback.format_exc()}")
                     bot_state["error_count"] += 1
+                finally:
+                    if dealer_browser:
+                        try:
+                            await dealer_browser.close()
+                        except Exception:
+                            pass
 
         except Exception as e:
             logger.error(f"[Playwright] Scraper loop error: {e}\n{traceback.format_exc()}")
