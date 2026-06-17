@@ -101,7 +101,7 @@ EMAIL_DEALERS = [
     {"name": "Militaria Sales", "flag": "🇺🇸", "region": "NA", "match": ["militariasales.com", "militaria sales"], "logo_file": "militaria_sales.png", "url": "https://www.militariasales.com/new-item/", "eras": [2, 3, 6], "countries": ['A', 'D', 'J', 'G']},
     {"name": "Military Collectibles", "flag": "🇺🇸", "region": "NA", "match": ["info@militarycollectibles.com", "militarycollectibles.com"], "logo_file": "military_collectibles.png", "url": "https://militarycollectibles.com/shop?s=n", "eras": [2, 3], "countries": ['D']},
     {"name": "Military Collectors HQ", "flag": "🇺🇸", "region": "NA", "match": ["militarycollectorshq.com", "military collectors hq"], "logo_file": "militarycollectorshq.png", "url": "https://militarycollectorshq.com/store-catalog", "eras": [0], "countries": ['Z']},
-    {"name": "Soviet Orders", "flag": "🇺🇸", "region": "NA", "match": ["sovietorders.com", "soviet orders"], "logo_file": "Soviet_Orders.png", "url": "https://sovietorders.com/new-in-store/", "eras": [2, 3], "countries": ['E']},
+    {"name": "Soviet Orders", "flag": "🇳🇱", "region": "NA", "match": ["sovietorders.com", "soviet orders"], "logo_file": "Soviet_Orders.png", "url": "https://sovietorders.com/new-in-store/", "eras": [2, 3], "countries": ['E']},
     {"name": "Empire's Past", "flag": "🇺🇸", "region": "NA", "match": ["empirespast.com", "empire's past", "empires past"], "logo_file": "Empire_past.png", "url": "https://empirespast.com/newly-listed/", "eras": [2, 3], "countries": ['D', 'J']},
     {"name": "1944 Militaria", "flag": "🇺🇸", "region": "NA", "match": ["1944militaria.com", "1944 militaria"], "logo_file": "1944militaria.png", "url": "https://www.1944militaria.com/New_Original_Items_s/1900.htm", "eras": [2, 3], "countries": ['A', 'D', 'J']},
     {"name": "International Military Antiques", "flag": "🇺🇸", "region": "NA", "match": ["ima-usa.com", "international military antiques", "ima usa"], "logo_file": "ima.png", "url": "https://www.ima-usa.com/collections/new-arrivals", "eras": [0], "countries": ['Z']},
@@ -126,8 +126,8 @@ EMAIL_DEALERS = [
     {"name": "Griffin Militaria", "flag": "🇺🇸", "region": "NA", "match": ["griffinmilitaria.com", "griffin militaria"], "logo_file": "Griffin_Militaria.png", "url": "https://griffinmilitaria.com/", "eras": [0], "countries": ['Z']},
     {"name": "EA Militaria", "flag": "🇳🇱", "region": "EU", "match": ["ea-militaria.com", "ea militaria"], "logo_file": "eamilitaria.png", "url": "https://www.ea-militaria.com/new-items?hideSold=1", "eras": [3], "countries": ['D']},
     {"name": "Militaria Plaza", "flag": "🇳🇱", "region": "EU", "match": ["militariaplaza.nl", "militaria plaza"], "logo_file": "Militaria_Plaza.png", "url": "https://militariaplaza.nl/new", "eras": [2, 3], "countries": ['A', 'B', 'C', 'E', 'D']},
-    {"name": "The Collector's Guild", "flag": "🇺🇸", "region": "NA", "match": ["germanmilitaria.com", "collector's guild", "collectors guild"], "logo_file": "germanmilitaria.png", "url": "https://www.germanmilitaria.com/Advanced.html", "eras": [0], "countries": ['Z']},
-    {"name": "General Assault Militaria", "flag": "🇺🇸", "region": "NA", "match": ["generalassaultmilitaria.com", "general assault militaria", "gam"], "logo_file": "gam.png", "url": "https://www.generalassaultmilitaria.com/", "eras": [3], "countries": ['D']},
+    {"name": "The Collector's Guild", "flag": "🇨🇦", "region": "NA", "match": ["germanmilitaria.com", "collector's guild", "collectors guild"], "logo_file": "germanmilitaria.png", "url": "https://www.germanmilitaria.com/Advanced.html", "eras": [0], "countries": ['Z']},
+    {"name": "General Assault Militaria", "flag": "🇩🇪", "region": "NA", "match": ["generalassaultmilitaria.com", "general assault militaria", "gam"], "logo_file": "gam.png", "url": "https://www.generalassaultmilitaria.com/", "eras": [3], "countries": ['D']},
     {"name": "Bevo Militaria", "flag": "🇩🇪", "region": "EU", "match": ["bevo-militaria.com", "bevo militaria"], "logo_file": "Bevo_Militaria.png", "url": "https://bevo-militaria.com/shop/", "eras": [2, 3], "countries": ['D']},
     {"name": "The Canadian Soldier", "flag": "🇨🇦", "region": "NA", "match": ["thecanadiansoldier.com", "canadian soldier"], "logo_file": "the_canadian_soldier.png", "url": "https://thecanadiansoldier.com/en-us/collections/newly-listed", "eras": [0], "countries": ['C']},
     {"name": "Wehrmacht Militaria", "flag": "🇺🇸", "region": "NA", "match": ["wehrmacht-militaria.com", "Wehrmacht militaria"], "logo_file": "Wehrmacht_Militaria.png", "url": "https://wehrmacht-militaria.com/shop", "eras": [2, 3], "countries": ['A', 'D']},
@@ -661,6 +661,18 @@ PLAYWRIGHT_DEALERS = [
         "logo_file": "eamilitaria.png",
         "eras": [3],
         "countries": ["D"],
+    },
+    {
+        "name": "SMG War Relics",
+        "flag": "🇺🇸",
+        "region": "NA",
+        "url": "https://war-relics.com/shop/",
+        "item_sel": "li.product",
+        "title_sel": ".woocommerce-loop-product__title",
+        "id_sel": None,
+        "logo_file": "smg_war_relics.png",
+        "eras": [0],
+        "countries": ["Z"],
     },
 ]
 
@@ -2605,11 +2617,34 @@ async def scrape_dealer_items(browser, dealer):
     try:
         # Use isolated browser context per dealer so failures don\'t bleed across
         context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
             locale="en-US",
-            extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
+            viewport={"width": 1920, "height": 1080},
+            java_script_enabled=True,
+            extra_http_headers={
+                "Accept-Language": "en-US,en;q=0.9",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+                "Accept-Encoding": "gzip, deflate, br",
+                "Cache-Control": "max-age=0",
+                "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+                "Sec-Ch-Ua-Mobile": "?0",
+                "Sec-Ch-Ua-Platform": '"Windows"',
+                "Sec-Fetch-Dest": "document",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "none",
+                "Sec-Fetch-User": "?1",
+                "Upgrade-Insecure-Requests": "1",
+            }
         )
         page = await context.new_page()
+
+        # Hide webdriver fingerprint
+        await page.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+            Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+            Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+            window.chrome = {runtime: {}};
+        """)
 
         logger.debug(f"[Playwright] Loading {name}...")
         try:
@@ -2617,6 +2652,9 @@ async def scrape_dealer_items(browser, dealer):
         except Exception:
             # Fall back to domcontentloaded if networkidle times out
             await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+
+        # Small human-like delay
+        await asyncio.sleep(2)
 
         # Wait for products to appear — try multiple common selectors
         selectors_to_try = [item_sel, "li.product", ".product", ".product-item", "article.product"]
