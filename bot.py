@@ -464,6 +464,14 @@ class MilitariaBot(discord.Client):
                 )
             ''')
             await conn.execute('''
+                CREATE TABLE IF NOT EXISTS user_bans (
+                    user_id TEXT PRIMARY KEY,
+                    reason TEXT,
+                    banned_by TEXT,
+                    banned_at BIGINT DEFAULT 0
+                )
+            ''')
+            await conn.execute('''
                 CREATE TABLE IF NOT EXISTS server_config (
                     guild_id TEXT PRIMARY KEY,
                     guild_name TEXT,
@@ -5910,7 +5918,165 @@ async def show_public_profile(interaction, user: discord.Member):
         embed.add_field(name="⚠️ Warnings", value=f"{warnings} active warning(s)", inline=False)
 
     embed.set_footer(text="Adrian — Collector Profile")
-    await interaction.followup.send(embed=embed, ephemeral=True)
+
+    # Public profile action buttons
+    pub_view = discord.ui.View(timeout=300)
+
+    # Button 1 — Send Message
+    msg_btn = discord.ui.Button(label="Send Message", emoji="📩", style=discord.ButtonStyle.primary, row=0)
+    async def on_send_message(interaction2: discord.Interaction):
+        class MessageModal(discord.ui.Modal, title="Send a Message"):
+            message = discord.ui.TextInput(
+                label="Your message",
+                style=discord.TextStyle.paragraph,
+                placeholder="Write your message here...",
+                max_length=1000
+            )
+            async def on_submit(self2, interaction3: discord.Interaction):
+                try:
+                    dm_embed = discord.Embed(
+                        title="📩 New Message via Adrian",
+                        description=self2.message.value,
+                        color=discord.Color.dark_gold(),
+                        timestamp=datetime.now(timezone.utc)
+                    )
+                    dm_embed.add_field(name="From", value=f"{interaction3.user.display_name} (`{interaction3.user.id}`)", inline=True)
+                    dm_embed.set_footer(text="Reply to this user directly in Discord")
+                    target_user = await client.fetch_user(int(uid))
+                    await target_user.send(embed=dm_embed)
+                    await interaction3.response.send_message("✅ Message sent!", ephemeral=True)
+                    logger.info(f"[Profile] {interaction3.user} sent message to {uid}")
+                except discord.Forbidden:
+                    await interaction3.response.send_message("⚠️ This user has DMs disabled.", ephemeral=True)
+                except Exception as e:
+                    await interaction3.response.send_message(f"⚠️ Could not send message: {e}", ephemeral=True)
+        await interaction2.response.send_modal(MessageModal())
+    msg_btn.callback = on_send_message
+    pub_view.add_item(msg_btn)
+
+    # Button 2 — Report User
+    report_btn = discord.ui.Button(label="Report User", emoji="🚩", style=discord.ButtonStyle.danger, row=0)
+    async def on_report(interaction2: discord.Interaction):
+        class ReportModal(discord.ui.Modal, title="Report User"):
+            reason = discord.ui.TextInput(
+                label="Reason for report",
+                style=discord.TextStyle.paragraph,
+                placeholder="Describe why you are reporting this user...",
+                max_length=500
+            )
+            async def on_submit(self2, interaction3: discord.Interaction):
+                await interaction3.response.defer(ephemeral=True)
+                try:
+                    report_channel = client.get_channel(1516868724479492107)
+                    if not report_channel:
+                        await interaction3.followup.send("⚠️ Could not submit report. Please try again later.", ephemeral=True)
+                        return
+
+                    reported_user = await client.fetch_user(int(uid))
+                    reporter = interaction3.user
+
+                    report_embed = discord.Embed(
+                        title="🚩 User Report",
+                        color=discord.Color.red(),
+                        timestamp=datetime.now(timezone.utc)
+                    )
+                    report_embed.add_field(name="Reported User", value=f"{reported_user.display_name} (`{uid}`)", inline=True)
+                    report_embed.add_field(name="Reporter", value=f"{reporter.display_name} (`{reporter.id}`)", inline=True)
+                    report_embed.add_field(name="Server", value=interaction3.guild.name if interaction3.guild else "Unknown", inline=True)
+                    report_embed.add_field(name="Reason", value=self2.reason.value, inline=False)
+                    report_embed.set_thumbnail(url=reported_user.display_avatar.url if reported_user.display_avatar else None)
+                    report_embed.set_footer(text="Adrian — Report System")
+
+                    # Action buttons on report
+                    report_action_view = discord.ui.View(timeout=None)
+
+                    do_nothing_btn = discord.ui.Button(label="✅ Do Nothing", style=discord.ButtonStyle.secondary, row=0)
+                    async def on_do_nothing(interaction4: discord.Interaction):
+                        for child in report_action_view.children:
+                            child.disabled = True
+                        await interaction4.message.edit(view=report_action_view)
+                        await interaction4.response.send_message("Report dismissed.", ephemeral=True)
+                        logger.info(f"[Report] {interaction4.user} dismissed report on {uid}")
+                    do_nothing_btn.callback = on_do_nothing
+                    report_action_view.add_item(do_nothing_btn)
+
+                    warn_reporter_btn = discord.ui.Button(label="⚠️ Warn Reporter", style=discord.ButtonStyle.secondary, row=0)
+                    async def on_warn_reporter(interaction4: discord.Interaction):
+                        class WarnReporterModal(discord.ui.Modal, title="Warn Reporter"):
+                            msg = discord.ui.TextInput(label="Warning message", style=discord.TextStyle.paragraph, max_length=500, required=False, placeholder="Leave blank for default message")
+                            async def on_submit(self3, interaction5: discord.Interaction):
+                                try:
+                                    default = "Please do not abuse the report system. False reports may result in a ban."
+                                    final_msg = self3.msg.value if self3.msg.value else default
+                                    warn_embed = discord.Embed(title="⚠️ Warning", description=final_msg, color=discord.Color.orange(), timestamp=datetime.now(timezone.utc))
+                                    warn_embed.set_footer(text="Adrian — Report System")
+                                    await reporter.send(embed=warn_embed)
+                                    await interaction5.response.send_message(f"✅ Warning sent to {reporter.display_name}.", ephemeral=True)
+                                    logger.info(f"[Report] {interaction5.user} warned reporter {reporter.id}")
+                                except discord.Forbidden:
+                                    await interaction5.response.send_message("⚠️ Could not DM the reporter.", ephemeral=True)
+                        await interaction4.response.send_modal(WarnReporterModal())
+                    warn_reporter_btn.callback = on_warn_reporter
+                    report_action_view.add_item(warn_reporter_btn)
+
+                    warn_user_btn = discord.ui.Button(label="⚠️ Warn User", style=discord.ButtonStyle.danger, row=0)
+                    async def on_warn_user(interaction4: discord.Interaction):
+                        class WarnUserModal(discord.ui.Modal, title="Warn Reported User"):
+                            msg = discord.ui.TextInput(label="Warning message", style=discord.TextStyle.paragraph, max_length=500)
+                            async def on_submit(self3, interaction5: discord.Interaction):
+                                try:
+                                    warn_embed = discord.Embed(title="⚠️ Warning from Adrian", description=self3.msg.value, color=discord.Color.red(), timestamp=datetime.now(timezone.utc))
+                                    warn_embed.set_footer(text="Adrian — Report System")
+                                    await reported_user.send(embed=warn_embed)
+                                    await db_add_user_warning(str(uid), self3.msg.value, warning_type="report", issued_by=str(interaction5.user.id), guild_id=str(interaction5.guild.id) if interaction5.guild else None)
+                                    await interaction5.response.send_message(f"✅ Warning sent to {reported_user.display_name}.", ephemeral=True)
+                                    logger.info(f"[Report] {interaction5.user} warned reported user {uid}")
+                                except discord.Forbidden:
+                                    await interaction5.response.send_message("⚠️ Could not DM the reported user.", ephemeral=True)
+                        await interaction4.response.send_modal(WarnUserModal())
+                    warn_user_btn.callback = on_warn_user
+                    report_action_view.add_item(warn_user_btn)
+
+                    ban_btn = discord.ui.Button(label="🔨 Ban", style=discord.ButtonStyle.danger, row=1)
+                    async def on_ban(interaction4: discord.Interaction):
+                        ban_view = discord.ui.View(timeout=60)
+                        ban_select = discord.ui.Select(
+                            placeholder="Who do you want to ban?",
+                            options=[
+                                discord.SelectOption(label=f"Ban Reporter — {reporter.display_name}", value="reporter", emoji="🚩"),
+                                discord.SelectOption(label=f"Ban Reported User — {reported_user.display_name}", value="reported", emoji="🔨"),
+                            ]
+                        )
+                        async def on_ban_select(interaction5: discord.Interaction):
+                            target = ban_select.values[0]
+                            target_id = str(reporter.id) if target == "reporter" else str(uid)
+                            target_name = reporter.display_name if target == "reporter" else reported_user.display_name
+                            async with client.db.acquire() as conn:
+                                await conn.execute(
+                                    "INSERT INTO user_bans (user_id, reason, banned_by, banned_at) VALUES ($1, $2, $3, $4) ON CONFLICT (user_id) DO UPDATE SET reason=$2, banned_by=$3, banned_at=$4",
+                                    target_id, f"Banned via report system by {interaction5.user.display_name}", str(interaction5.user.id), int(datetime.now(timezone.utc).timestamp())
+                                )
+                            await interaction5.response.send_message(f"🔨 **{target_name}** has been banned from Adrian.", ephemeral=True)
+                            logger.info(f"[Report] {interaction5.user} banned {target_id} via report system")
+                        ban_select.callback = on_ban_select
+                        ban_view.add_item(ban_select)
+                        await interaction4.response.send_message("Who do you want to ban?", view=ban_view, ephemeral=True)
+                    ban_btn.callback = on_ban
+                    report_action_view.add_item(ban_btn)
+
+                    await report_channel.send(embed=report_embed, view=report_action_view)
+                    await interaction3.followup.send("✅ Your report has been submitted. Thank you.", ephemeral=True)
+                    logger.info(f"[Report] {reporter.id} reported {uid}: {self2.reason.value[:50]}")
+
+                except Exception as e:
+                    logger.error(f"[Report] Error submitting report: {e}\n{traceback.format_exc()}")
+                    await interaction3.followup.send("⚠️ Something went wrong submitting your report.", ephemeral=True)
+
+        await interaction2.response.send_modal(ReportModal())
+    report_btn.callback = on_report
+    pub_view.add_item(report_btn)
+
+    await interaction.followup.send(embed=embed, view=pub_view, ephemeral=True)
 
 
 async def show_private_profile(interaction):
