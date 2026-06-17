@@ -1536,21 +1536,56 @@ async def get_server_role(guild, role_key, fallback_id=None):
         return guild.get_role(int(fallback_id))
     return None
 
+# Map channel keys to their Discord channel names for fallback lookup
+CHANNEL_NAME_MAP = {
+    "updates_channel_id": "dealer-updates",
+    "na_updates_channel_id": "na-dealer-updates",
+    "eu_updates_channel_id": "eu-dealer-updates",
+    "waf_channel_id": "waf-updates",
+    "usmf_channel_id": "usmf-updates",
+    "channel_id": "adrian",
+    "estand_channel_id": "estand",
+}
+
 async def get_all_server_channels(channel_key, fallback_id=None):
     """Get a specific channel from ALL servers — for broadcasting alerts."""
     servers = await db_get_all_servers()
     channels = []
+    channel_name = CHANNEL_NAME_MAP.get(channel_key)
+
     for server in servers:
+        guild_id = get_config_value(server, "guild_id")
         channel_id = get_config_value(server, channel_key)
+
+        # Try by saved ID first
         if channel_id:
-            channel = client.get_channel(channel_id)
+            channel = client.get_channel(int(channel_id))
             if channel:
                 channels.append(channel)
-    # Also include fallback channel if not already included
-    if fallback_id:
-        fallback = client.get_channel(fallback_id)
-        if fallback and fallback not in channels:
-            channels.append(fallback)
+                continue
+
+        # Fall back to searching by name in the guild
+        if channel_name and guild_id:
+            guild = client.get_guild(int(guild_id))
+            if guild:
+                ch = discord.utils.get(guild.text_channels, name=channel_name)
+                if not ch:
+                    ch = discord.utils.get(guild.forums, name=channel_name)
+                if ch:
+                    channels.append(ch)
+                    # Save it for next time
+                    await db_save_server_config(str(guild_id), **{channel_key: str(ch.id)})
+                    logger.debug(f"[Channels] Found #{channel_name} by name in {guild.name}")
+
+    # Also search all connected guilds not in DB
+    if channel_name:
+        for guild in client.guilds:
+            already = any(c.guild.id == guild.id for c in channels)
+            if not already:
+                ch = discord.utils.get(guild.text_channels, name=channel_name)
+                if ch and ch not in channels:
+                    channels.append(ch)
+
     return channels
 
 # ==================== RATE LIMITING ====================
@@ -1711,14 +1746,25 @@ async def send_alert(channel, name, url, logo_file, test=False, waf=False):
 
     follow_view = FollowDealerView(name)
 
-    # Post full embed to ALL servers' updates channels
-    updates_channels = await get_all_server_channels("updates_channel_id", ADRIAN_UPDATES_CHANNEL_ID)
-    for updates_channel in updates_channels:
+    # Route to correct channels based on dealer region
+    # Always post to #dealer-updates (all dealers)
+    all_channels = await get_all_server_channels("updates_channel_id")
+    # Post to #na-dealer-updates if NA dealer
+    if dealer_region.upper() in ("NA", "BOTH"):
+        na_channels = await get_all_server_channels("na_updates_channel_id")
+        all_channels = list({c.id: c for c in all_channels + na_channels}.values())
+    # Post to #eu-dealer-updates if EU dealer
+    if dealer_region.upper() in ("EU", "BOTH"):
+        eu_channels = await get_all_server_channels("eu_updates_channel_id")
+        all_channels = list({c.id: c for c in all_channels + eu_channels}.values())
+
+    for updates_channel in all_channels:
         try:
             if file and os.path.exists(logo_file):
-                await updates_channel.send(content=content_msg, file=discord.File(logo_file, filename="logo.png"), embed=embed, view=follow_view)
+                await updates_channel.send(file=discord.File(logo_file, filename="logo.png"), embed=embed, view=follow_view)
             else:
-                await updates_channel.send(content=content_msg, embed=embed, view=follow_view)
+                await updates_channel.send(embed=embed, view=follow_view)
+            logger.info(f"[Alert] {name} → #{updates_channel.name} in {updates_channel.guild.name}")
         except Exception as e:
             logger.error(f"[Alert] Failed to send to {updates_channel.guild.name}: {e}")
 
@@ -2682,14 +2728,14 @@ async def send_usmf_alert(channel, parsed):
         embed.set_thumbnail(url="attachment://logo.png")
 
     # Post to #adrian-updates
-    usmf_updates_channels = await get_all_server_channels("updates_channel_id", ADRIAN_UPDATES_CHANNEL_ID)
+    usmf_updates_channels = await get_all_server_channels("usmf_channel_id")
     for usmf_updates_channel in usmf_updates_channels:
         try:
             if file and os.path.exists(logo_file):
                 await usmf_updates_channel.send(file=discord.File(logo_file, filename="logo.png"), embed=embed)
             else:
                 await usmf_updates_channel.send(embed=embed)
-            logger.info(f"[USMF] Alert sent to {usmf_updates_channel.guild.name}: {parsed['item_title']}")
+            logger.info(f"[USMF] Alert sent to #{usmf_updates_channel.name} in {usmf_updates_channel.guild.name}: {parsed['item_title']}")
         except Exception as e:
             logger.error(f"[USMF] Failed to send to {usmf_updates_channel.guild.name}: {e}")
 
@@ -2846,7 +2892,7 @@ async def send_waf_alert(channel, parsed, guild):
     watch_view = WatchItemView(parsed["forum_url"], parsed["item_title"], price_str) if parsed["forum_url"] else None
 
     # Post to #adrian-updates (no role ping — users get DMs based on their profile)
-    waf_updates_channels = await get_all_server_channels("updates_channel_id", ADRIAN_UPDATES_CHANNEL_ID)
+    waf_updates_channels = await get_all_server_channels("waf_channel_id")
     for waf_updates_channel in waf_updates_channels:
         try:
             if file and os.path.exists(logo_file):
@@ -2854,7 +2900,7 @@ async def send_waf_alert(channel, parsed, guild):
             else:
                 await waf_updates_channel.send(embed=embed, view=watch_view)
             bot_state["alert_count"] += 1
-            logger.info(f"[WAF] Alert sent to {waf_updates_channel.guild.name}: {parsed['item_title']}")
+            logger.info(f"[WAF] Alert sent to #{waf_updates_channel.name} in {waf_updates_channel.guild.name}: {parsed['item_title']}")
         except Exception as e:
             logger.error(f"[WAF] Failed to send to {waf_updates_channel.guild.name}: {e}")
 
@@ -8049,10 +8095,17 @@ async def handle_webhook(request):
         except Exception as se:
             logger.debug(f"[Webhook] Snapshot check error: {se} — firing alert anyway")
 
-        # Post to ALL servers' updates channels
-        updates_channels = await get_all_server_channels("updates_channel_id", ADRIAN_UPDATES_CHANNEL_ID)
-        if not updates_channels:
-            updates_channels = [client.get_channel(CHANNEL_ID)]
+        # Route to correct regional channels
+        wh_region = dealer.get("region", "both").upper()
+        updates_channels = await get_all_server_channels("updates_channel_id")
+        if wh_region in ("NA", "BOTH"):
+            na_wh = await get_all_server_channels("na_updates_channel_id")
+            updates_channels = list({c.id: c for c in updates_channels + na_wh}.values())
+        if wh_region in ("EU", "BOTH"):
+            eu_wh = await get_all_server_channels("eu_updates_channel_id")
+            updates_channels = list({c.id: c for c in updates_channels + eu_wh}.values())
+        updates_channels = [c for c in updates_channels if c]
+        logger.info(f"[Webhook] Routing {dealer_name} ({wh_region}) to {len(updates_channels)} channel(s)")
         for channel in updates_channels:
           if channel:
             # Use specific page URL if provided, otherwise use dealer default
