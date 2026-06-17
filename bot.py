@@ -691,11 +691,12 @@ PLAYWRIGHT_DEALERS = [
 
     {
         "name": "Past Glories Militaria",
+        "extra_wait_ms": 5000,
         "flag": "🇬🇧",
         "region": "EU",
         "url": "https://www.pastgloriesmilitaria.com/shop.php",
-        "item_sel": "a.itemlink, .itemlink, .item-name a, td.item a",
-        "title_sel": "a.itemlink, .item-name",
+        "item_sel": "div.c500item, div[class*='item'], .shop-item, .product-list-item",
+        "title_sel": "a, h3, h4, .title",
         "id_sel": None,
         "logo_file": "Past_Glories_Militaria.png",
         "eras": [0],
@@ -703,11 +704,12 @@ PLAYWRIGHT_DEALERS = [
     },
     {
         "name": "The Old Brigade",
+        "extra_wait_ms": 5000,
         "flag": "🇬🇧",
         "region": "EU",
         "url": "https://www.theoldbrigade.co.uk/shop.php?q=&d=2&c=all&hide=unavailabe",
-        "item_sel": "a.itemlink, .itemlink, .item-name a, td.item a",
-        "title_sel": "a.itemlink, .item-name",
+        "item_sel": "div.c500item, div[class*='item'], .shop-item, .product-list-item",
+        "title_sel": "a, h3, h4, .title",
         "id_sel": None,
         "logo_file": "The_Old_Brigade.png",
         "eras": [0],
@@ -718,8 +720,8 @@ PLAYWRIGHT_DEALERS = [
         "flag": "🇺🇸",
         "region": "NA",
         "url": "https://wwiigimilitarysurplus.com/shop.php?p=t|hhh||",
-        "item_sel": "td.desc, td.itemdesc, .itemdesc, td[class*='item']",
-        "title_sel": "a, b",
+        "item_sel": "table tr",
+        "title_sel": "td:nth-child(2) a, td a, td b",
         "id_sel": None,
         "logo_file": "Overlook_Militaria_Surplus.png",
         "eras": [0],
@@ -730,8 +732,8 @@ PLAYWRIGHT_DEALERS = [
         "flag": "🇺🇸",
         "region": "NA",
         "url": "https://www.svmilitaria.com/NewItems.htm",
-        "item_sel": "table tr td:nth-child(2) b",
-        "title_sel": "b",
+        "item_sel": "table tr",
+        "title_sel": "td:nth-child(2) b, td b",
         "id_sel": None,
         "logo_file": "summer_vacation_militaria.png",
         "eras": [0],
@@ -2728,8 +2730,9 @@ async def scrape_dealer_items(browser, dealer):
             # Fall back to domcontentloaded if networkidle times out
             await page.goto(url, wait_until="domcontentloaded", timeout=30000)
 
-        # Small human-like delay
-        await asyncio.sleep(2)
+        # Extra wait for AJAX-heavy sites
+        extra_wait = dealer.get("extra_wait_ms", 0)
+        await asyncio.sleep(2 + extra_wait / 1000)
 
         # Wait for products to appear — try multiple common selectors
         selectors_to_try = [item_sel, "li.product", ".product", ".product-item", "article.product"]
