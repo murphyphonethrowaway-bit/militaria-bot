@@ -473,6 +473,15 @@ class MilitariaBot(discord.Client):
                 )
             ''')
             await conn.execute('''
+                CREATE TABLE IF NOT EXISTS playwright_seen_items (
+                    dealer_name TEXT NOT NULL,
+                    item_id TEXT NOT NULL,
+                    item_title TEXT,
+                    seen_at BIGINT DEFAULT 0,
+                    PRIMARY KEY (dealer_name, item_id)
+                )
+            ''')
+            await conn.execute('''
                 CREATE TABLE IF NOT EXISTS server_config (
                     guild_id TEXT PRIMARY KEY,
                     guild_name TEXT,
@@ -702,6 +711,18 @@ PLAYWRIGHT_DEALERS = [
 PLAYWRIGHT_CHECK_INTERVAL = 600  # 10 minutes
 
 # ==================== DATABASE FUNCTIONS ====================
+
+bot_state = {
+    "paused": False,
+    "force_rescan": False,
+    "last_check": None,
+    "startup_time": None,
+    "alert_count": 0,
+    "error_count": 0,
+    "dealer_cooldowns": {},
+    "command_cooldowns": {},
+}
+
 async def db_get_reviews(dealer_name, status='approved'):
     async with client.db.acquire() as conn:
         if status == 'all':
@@ -2255,6 +2276,40 @@ async def _check_all_dealers_inner():
         await asyncio.sleep(CHECK_INTERVAL)
 
 # ==================== PLAYWRIGHT SCRAPER ====================
+
+async def db_get_seen_items(dealer_name):
+    """Get all seen item IDs for a Playwright dealer."""
+    try:
+        async with client.db.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT item_id FROM playwright_seen_items WHERE dealer_name=$1",
+                dealer_name
+            )
+            return {row["item_id"] for row in rows}
+    except Exception as e:
+        logger.error(f"[DB] db_get_seen_items error: {e}")
+        return set()
+
+
+async def db_save_seen_items(dealer_name, item_ids, item_titles=None):
+    """Save new seen item IDs for a Playwright dealer."""
+    if not item_ids:
+        return
+    try:
+        now = int(datetime.now(timezone.utc).timestamp())
+        async with client.db.acquire() as conn:
+            for item_id in item_ids:
+                title = (item_titles or {}).get(item_id, "")
+                await conn.execute(
+                    """INSERT INTO playwright_seen_items (dealer_name, item_id, item_title, seen_at)
+                       VALUES ($1, $2, $3, $4)
+                       ON CONFLICT (dealer_name, item_id) DO NOTHING""",
+                    dealer_name, str(item_id), str(title), now
+                )
+    except Exception as e:
+        logger.error(f"[DB] db_save_seen_items error: {e}")
+
+
 
 async def get_playwright_browser():
     """Launch a shared Playwright browser instance."""
