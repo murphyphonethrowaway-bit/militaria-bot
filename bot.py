@@ -692,8 +692,8 @@ PLAYWRIGHT_DEALERS = [
         "flag": "🇩🇪",
         "region": "EU",
         "url": "https://www.miro-militaria.com/en/category/all-products",
-        "item_sel": ".product-item",
-        "title_sel": ".product-item-info .product-item-link",
+        "item_sel": ".product-item-info",
+        "title_sel": ".product-item-link",
         "id_sel": None,
         "logo_file": "Miro_Militaria.png",
         "eras": [0],
@@ -2799,6 +2799,10 @@ async def scrape_dealer_items(browser, dealer):
                     item_id = title_text
 
                 if item_id and title_text:
+                    # Skip category counters like "AMERICAN (1497)"
+                    import re as _re2
+                    if _re2.match(r'^[A-Z\\s&]+\\s*\\(\\d+\\)$', item_id.strip()):
+                        continue
                     items.append((item_id[:200], title_text[:200]))
             except Exception as ie:
                 logger.debug(f"[Playwright] Error parsing item on {name}: {ie}")
