@@ -2383,6 +2383,18 @@ async def scrape_dealer_items(browser, dealer):
             # Fall back to domcontentloaded if networkidle times out
             await page.goto(url, wait_until="domcontentloaded", timeout=30000)
 
+        # Accept cookie consent banners if present
+        for cookie_sel in ["#accept-cookies", ".cookie-accept", "button[id*='accept']", "button[class*='accept']", "a[class*='accept']", ".got-it", "button:has-text('Got it')", "button:has-text('Accept')", "button:has-text('I Accept')"]:
+            try:
+                btn = await page.query_selector(cookie_sel)
+                if btn:
+                    await btn.click()
+                    await asyncio.sleep(1)
+                    logger.debug(f"[Playwright] Accepted cookie consent on {name}")
+                    break
+            except Exception:
+                pass
+
         # Extra wait for AJAX-heavy sites
         extra_wait = dealer.get("extra_wait_ms", 0)
         await asyncio.sleep(2 + extra_wait / 1000)
