@@ -2662,7 +2662,7 @@ async def install_playwright_browsers():
         import subprocess
         logger.info("[Playwright] Installing Chromium browser...")
         result = subprocess.run(
-            ["playwright", "install", "chromium"],
+            ["playwright", "install", "chromium", "--with-deps"],
             capture_output=True, text=True, timeout=120
         )
         if result.returncode == 0:
