@@ -676,18 +676,6 @@ PLAYWRIGHT_DEALERS = [
         "countries": ["Z"],
     },
     {
-        "name": "OD43",
-        "flag": "🇺🇸",
-        "region": "NA",
-        "url": "https://od43.com/product-category/z60/",
-        "item_sel": "li.product",
-        "title_sel": ".woocommerce-loop-product__title",
-        "id_sel": None,
-        "logo_file": "OD43.png",
-        "eras": [0],
-        "countries": ["Z"],
-    },
-    {
         "name": "Miro Militaria",
         "flag": "🇩🇪",
         "region": "EU",
