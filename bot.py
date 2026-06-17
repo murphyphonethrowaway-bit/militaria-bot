@@ -1701,7 +1701,7 @@ def extract_item_links(html_bytes, selector, base_url):
         return set()
 
 # ==================== ALERTS ====================
-async def send_alert(channel, name, url, logo_file, test=False, waf=False):
+async def send_alert(name, url, logo_file, test=False, waf=False):
     # Check cooldown for dealers that have one set
     if not test:
         dealer_info = find_dealer(name)
@@ -2281,7 +2281,7 @@ async def flush_pending_pings():
     finally:
         bot_state["ping_task_running"] = False
 
-async def check_dealer(session, dealer, seen, channel):
+async def check_dealer(session, dealer, seen):
     name = dealer["name"]
     url = dealer["url"]
     logo_file = os.path.join(SCRIPT_DIR, "logos", dealer["logo_file"])
@@ -2311,7 +2311,7 @@ async def check_dealer(session, dealer, seen, channel):
         logger.info(f"[{name}] {len(new_items)} NEW ITEM(S) DETECTED!")
         seen[items_key] = list(current_items)
         await db_increment_stat(name)
-        await send_alert(channel, name, url, logo_file)
+        await send_alert(name, url, logo_file)
     else:
         logger.debug(f"[{name}] No new items ({len(current_items)} items unchanged).")
 
@@ -2519,7 +2519,7 @@ async def _check_all_dealers_inner():
         seen = load_seen()
         async with aiohttp.ClientSession() as session:
             for dealer in DEALERS:
-                await check_dealer(session, dealer, seen, channel)
+                await check_dealer(session, dealer, seen)
                 await asyncio.sleep(2)
         save_seen(seen)
         logger.info(f"--- Done. Next check in {CHECK_INTERVAL//60} minutes. ---")
@@ -3081,7 +3081,7 @@ async def _check_email_dealers_inner():
                     logger.error(f"[USMF] Error processing email '{subject}': {e}\n{traceback.format_exc()}")
             else:
                 logo_file = os.path.join(SCRIPT_DIR, "logos", dealer["logo_file"])
-                await send_alert(channel, dealer["name"], dealer["url"], logo_file)
+                await send_alert(dealer["name"], dealer["url"], logo_file)
 
 
         await asyncio.sleep(EMAIL_CHECK_INTERVAL)
@@ -5279,7 +5279,7 @@ async def test_cmd(interaction: discord.Interaction):
     channel = client.get_channel(CHANNEL_ID)
     for dealer in get_all_dealers():
         logo_file = os.path.join(SCRIPT_DIR, "logos", dealer["logo_file"])
-        await send_alert(channel, dealer["name"], dealer["url"], logo_file, test=True)
+        await send_alert(dealer["name"], dealer["url"], logo_file, test=True)
         await asyncio.sleep(1)
     await interaction.followup.send("✅ Test complete!", ephemeral=True)
 
@@ -7782,17 +7782,8 @@ async def on_ready():
     client.add_view(WatchItemView("placeholder", "placeholder", ""))
     client.add_view(FollowDealerView("placeholder"))
     client.add_view(MilitariaAlertAdView())
-    client.add_view(EraSelectView())
-    client.add_view(CountrySelectView())
-    client.add_view(ForumSelectView())
-    client.add_view(FinalScreenView())
     client.add_view(SellerProfileView("placeholder"))
     client.add_view(EstateRatingView("placeholder", "placeholder", "placeholder"))
-    client.add_view(SetupEstateConfirmView())
-    client.add_view(SetupStep3EstateView())
-    client.add_view(SetupNoForumView())
-    client.add_view(SetupCrossPostView())
-    client.add_view(SetupPermissionsView())
     client.add_view(WelcomeView())
     logger.info("Persistent views registered.")
 
