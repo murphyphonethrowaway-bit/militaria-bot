@@ -695,6 +695,103 @@ PLAYWRIGHT_DEALERS = [
         "countries": ["Z"],
     },
     {
+        "name": "Griffin Militaria",
+        "flag": "🇺🇸",
+        "region": "NA",
+        "url": "https://griffinmilitaria.com/product-category/united-states/",  # primary URL (unused, pages overrides)
+        "item_sel": "li.product",
+        "title_sel": ".woocommerce-loop-product__title",
+        "id_sel": None,
+        "logo_file": "Griffin_Militaria.png",
+        "eras": [0],
+        "countries": ["Z"],
+        "pages": [
+            # United States
+            "https://griffinmilitaria.com/product-category/united-states/civil-war/accoutrements/",
+            "https://griffinmilitaria.com/product-category/united-states/civil-war/civil-war-span-am-war-veterans/",
+            "https://griffinmilitaria.com/product-category/united-states/civil-war/edged_weapons/",
+            "https://griffinmilitaria.com/product-category/united-states/civil-war/miscellaneous-civil-war/",
+            "https://griffinmilitaria.com/product-category/united-states/civil-war/photos-paper/",
+            "https://griffinmilitaria.com/product-category/united-states/pre-wwi/",
+            "https://griffinmilitaria.com/product-category/united-states/world-war-i/us-wwi-chevrons/",
+            "https://griffinmilitaria.com/product-category/united-states/world-war-i/collar-disks/",
+            "https://griffinmilitaria.com/product-category/united-states/world-war-i/dog-tags/",
+            "https://griffinmilitaria.com/product-category/united-states/world-war-i/enlisted-squadron-patches/",
+            "https://griffinmilitaria.com/product-category/united-states/world-war-i/us-wwi-field-gear/",
+            "https://griffinmilitaria.com/product-category/united-states/world-war-i/us-wwi-headgear/",
+            "https://griffinmilitaria.com/product-category/united-states/world-war-i/medals/",
+            "https://griffinmilitaria.com/product-category/united-states/world-war-i/us-wwi-metal-insignia/",
+            "https://griffinmilitaria.com/product-category/united-states/world-war-i/miscellaneous-wwi-items/",
+            "https://griffinmilitaria.com/product-category/united-states/world-war-i/patches/",
+            "https://griffinmilitaria.com/product-category/united-states/world-war-i/us-wwi-uniforms/",
+            "https://griffinmilitaria.com/product-category/united-states/world-war-ii/us-wwii-chevrons/",
+            "https://griffinmilitaria.com/product-category/united-states/world-war-ii/us-wwii-cloth-insignia/",
+            "https://griffinmilitaria.com/product-category/united-states/world-war-ii/crest-drop-in/",
+            "https://griffinmilitaria.com/product-category/united-states/world-war-ii/us-wwii-field-gear/",
+            "https://griffinmilitaria.com/product-category/united-states/world-war-ii/us-wwii-headgear/",
+            "https://griffinmilitaria.com/product-category/united-states/world-war-ii/medal-ribbons/",
+            "https://griffinmilitaria.com/product-category/united-states/world-war-ii/us-wwii-metal-insignia/",
+            "https://griffinmilitaria.com/product-category/united-states/world-war-ii/miscellaneous-wwii-items-world-war-ii/",
+            "https://griffinmilitaria.com/product-category/united-states/world-war-ii/navy-rates/",
+            "https://griffinmilitaria.com/product-category/united-states/world-war-ii/posters/",
+            "https://griffinmilitaria.com/product-category/united-states/world-war-ii/sweetheart-homefront/",
+            "https://griffinmilitaria.com/product-category/united-states/world-war-ii/us-wwii-uniforms/",
+            "https://griffinmilitaria.com/product-category/united-states/world-war-ii/us-paper/",
+            "https://griffinmilitaria.com/product-category/united-states/world-war-ii/wings/",
+            "https://griffinmilitaria.com/product-category/united-states/cold-war-steins/",
+            # Japan
+            "https://griffinmilitaria.com/product-category/japan/japanese-medals/",
+            "https://griffinmilitaria.com/product-category/japan/japanese-insignia/",
+            "https://griffinmilitaria.com/product-category/japan/japanese-head-gear/",
+            "https://griffinmilitaria.com/product-category/japan/japanese-flags-and-banners/",
+            "https://griffinmilitaria.com/product-category/japan/Overcoats/",
+            "https://griffinmilitaria.com/product-category/japan/japanese-uniforms/shirts/",
+            "https://griffinmilitaria.com/product-category/japan/Tunics/",
+            "https://griffinmilitaria.com/product-category/japan/japanese-uniforms/trousers/",
+            "https://griffinmilitaria.com/product-category/japan/japanese-edged-weapons/",
+            "https://griffinmilitaria.com/product-category/japan/japanese-field-gear/",
+            "https://griffinmilitaria.com/product-category/japan/japanese-personal-items/",
+            "https://griffinmilitaria.com/product-category/japan/japanese-cups/",
+            "https://griffinmilitaria.com/product-category/japan/japanese-paper/",
+            "https://griffinmilitaria.com/product-category/japan/miscellaneous-japanese-militaria/",
+            # Germany WWI
+            "https://griffinmilitaria.com/product-category/germany/germany-wwi/edged-weapons-germany-wwi/",
+            "https://griffinmilitaria.com/product-category/germany/germany-wwi/headgear/",
+            "https://griffinmilitaria.com/product-category/germany/germany-wwi/imperial-german-steins/",
+            "https://griffinmilitaria.com/product-category/germany/germany-wwi/medals-decorations/",
+            "https://griffinmilitaria.com/product-category/germany/germany-wwi/Miscellaneous-WWI-German-Items/",
+            # Germany WWII
+            "https://griffinmilitaria.com/product-category/germany/germany-wwii/belts-belt-buckles/",
+            "https://griffinmilitaria.com/product-category/germany/germany-wwii/germany-wwii-cloth-insignia/",
+            "https://griffinmilitaria.com/product-category/germany/germany-wwii/documents-and-photographs/",
+            "https://griffinmilitaria.com/product-category/germany/germany-wwii/edged-weapons/",
+            "https://griffinmilitaria.com/product-category/germany/germany-wwii/flags-banners/",
+            "https://griffinmilitaria.com/product-category/germany/germany-wwii/germany-wwii-headgear/",
+            "https://griffinmilitaria.com/product-category/germany/germany-wwii/medals-badges/",
+            "https://griffinmilitaria.com/product-category/germany/germany-wwii/germany-wwii-metal-insignia/",
+            "https://griffinmilitaria.com/product-category/germany/germany-wwii/miscellaneous-wwii-items/",
+            "https://griffinmilitaria.com/product-category/germany/germany-wwii/ribbon-bars/",
+            "https://griffinmilitaria.com/product-category/germany/germany-wwii/stickpins/",
+            "https://griffinmilitaria.com/product-category/germany/germany-wwii/tinnies/",
+            "https://griffinmilitaria.com/product-category/germany/germany-wwii/third-reich-steins/",
+            # Other
+            "https://griffinmilitaria.com/product-category/militaria-of-other-countries/",
+            # Vietnam
+            "https://griffinmilitaria.com/product-category/vietnam-war/beercan-di/",
+            "https://griffinmilitaria.com/product-category/vietnam-war/headgear-vietnam-war/",
+            "https://griffinmilitaria.com/product-category/vietnam-war/medals-vietnam-war/",
+            "https://griffinmilitaria.com/product-category/vietnam-war/miscellaneous/",
+            "https://griffinmilitaria.com/product-category/vietnam-war/patches-insignia/",
+            "https://griffinmilitaria.com/product-category/vietnam-war/uniforms/",
+            # Photos & Books
+            "https://griffinmilitaria.com/product-category/military-photographs/american-military-photos/",
+            "https://griffinmilitaria.com/product-category/military-photographs/german-military-photos/",
+            "https://griffinmilitaria.com/product-category/military-photographs/japanese-military-photos/",
+            "https://griffinmilitaria.com/product-category/military-photographs/other-countries-military-photos/",
+            "https://griffinmilitaria.com/product-category/reference-books/",
+        ],
+    },
+    {
         "name": "SMG War Relics",
         "flag": "🇺🇸",
         "region": "NA",
@@ -2539,7 +2636,20 @@ async def check_playwright_dealers():
                         headless=True,
                         args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--single-process"]
                     )
-                    items = await scrape_dealer_items(dealer_browser, dealer)
+                    # Handle multi-page dealers (like Griffin)
+                    pages = dealer.get("pages")
+                    if pages:
+                        items = []
+                        for page_url in pages:
+                            page_dealer = dict(dealer)
+                            page_dealer["url"] = page_url
+                            page_items = await scrape_dealer_items(dealer_browser, page_dealer)
+                            items.extend(page_items)
+                            if page_items:
+                                logger.debug(f"[Playwright] {name} — {page_url.split('/')[-2]}: {len(page_items)} items")
+                        logger.debug(f"[Playwright] {name} — total {len(items)} items across {len(pages)} pages")
+                    else:
+                        items = await scrape_dealer_items(dealer_browser, dealer)
 
                     if not items:
                         logger.debug(f"[Playwright] {name} — no items found, skipping")
