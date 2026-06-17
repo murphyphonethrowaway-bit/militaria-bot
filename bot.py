@@ -558,60 +558,6 @@ GRIFFIN_PAGES = {
     "imperial": "https://griffinmilitaria.com/product-category/germany/world-war-i/imperial-steins/",
 }
 
-def lookup_griffin_url(title):
-    """Try to match a Changedetection.io watch title to a Griffin page URL."""
-    if not title:
-        return "https://griffinmilitaria.com/"
-    title_lower = title.lower()
-    for keyword, url in GRIFFIN_PAGES.items():
-        if keyword in title_lower:
-            return url
-    return "https://griffinmilitaria.com/"
-
-bot_state = {
-    "paused": False,
-    "last_check": None,
-    "force_rescan": False,
-    "promo_paused": False,
-    "last_email_check": None,
-    "last_promo": None,
-    "griffin_buffer": [],
-    "griffin_timer": None,
-    "dealer_cooldowns": {},
-    "waf_notification_count": 0,
-    "startup_time": None,
-    "alert_count": 0,
-    "error_count": 0,
-    "last_error": None,
-    "last_error_time": None,
-    "db_query_count": 0,
-    "cross_post_count": 0,
-    "estand_listing_count": 0,
-    "question1_img_url": None,
-    "question2_img_url": None,
-    "question3_img_url": None,
-    "question4_img_url": None,
-    "question5_img_url": None,
-    "thankyou_img_url": None,
-    "check_before_buy_img_url": None,
-    "setup_img_url": None,
-    "setup_q1_img_url": None,
-    "setup_q2_img_url": None,
-    "setup_end_img_url": None,
-    "setup_stop_img_url": None,
-    "setup_estand_img_url": None,
-    "setup_crosspost_img_url": None,
-    "setup_please_img_url": None,
-    "error_404_img_url": None,
-    "command_cooldowns": {},
-    "health_status": "starting",
-    "startup_time": None,
-    "watched_channels": {},
-    "pending_pings": {},
-    "ping_task_running": False,
-}
-
-# ==================== DATA FUNCTIONS ====================
 def load_json(filepath, default):
     if os.path.exists(filepath):
         with open(filepath, "r") as f:
@@ -1119,354 +1065,6 @@ async def db_get_waf_thread_stats(forum_url):
 
 import re as _re
 
-def parse_snapshot_items(snapshot_text):
-    """Parse item numbers and titles from a Changedetection.io snapshot."""
-    if not snapshot_text:
-        return []
-    items = []
-    # Match "Item Number: XXXXX" pattern (Griffin style)
-    item_number_matches = _re.findall(r'Item Number[:\\s]+([A-Za-z0-9\\-]+)', snapshot_text)
-    for item_id in item_number_matches:
-        items.append(item_id.strip())
-    # If no item numbers found, try extracting product titles/links
-    if not items:
-        # Match lines that look like product titles (short lines with capital words)
-        lines = [l.strip() for l in snapshot_text.splitlines() if l.strip()]
-        for line in lines:
-            # Skip navigation, prices, generic text
-            if len(line) < 5 or len(line) > 150:
-                continue
-            if line.startswith('$') or line.startswith('€') or line.startswith('*'):
-                continue
-            if any(skip in line.lower() for skip in ['menu', 'cart', 'search', 'home', 'contact', 'shipping', 'add to']):
-                continue
-            items.append(line[:100])
-    return items
-
-async def db_get_seen_items(dealer_name):
-    """Get all seen item IDs for a dealer."""
-    async with client.db.acquire() as conn:
-        rows = await conn.fetch(
-            "SELECT item_id FROM seen_dealer_items WHERE dealer_name=$1",
-            dealer_name
-        )
-        return {r["item_id"] for r in rows}
-
-async def db_save_seen_items(dealer_name, item_ids, item_titles=None):
-    """Save new item IDs as seen for a dealer."""
-    now = int(datetime.now(timezone.utc).timestamp())
-    async with client.db.acquire() as conn:
-        for item_id in item_ids:
-            title = (item_titles or {}).get(item_id, "")
-            await conn.execute(
-                "INSERT INTO seen_dealer_items (dealer_name, item_id, item_title, seen_at) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING",
-                dealer_name, item_id, title, now
-            )
-
-async def db_cleanup_seen_items():
-    """Remove seen items older than 90 days to prevent DB bloat."""
-    cutoff = int(datetime.now(timezone.utc).timestamp()) - (90 * 86400)
-    async with client.db.acquire() as conn:
-        deleted = await conn.execute(
-            "DELETE FROM seen_dealer_items WHERE seen_at < $1", cutoff
-        )
-        logger.debug(f"[Cleanup] Removed old seen dealer items")
-
-# ==================== ESTAND BLOCKED TAGS DB ====================
-
-async def db_get_blocked_tags(guild_id):
-    async with client.db.acquire() as conn:
-        rows = await conn.fetch("SELECT tag_name FROM estand_blocked_tags WHERE guild_id=$1", str(guild_id))
-        return [r["tag_name"] for r in rows]
-
-async def db_set_blocked_tags(guild_id, tag_names):
-    async with client.db.acquire() as conn:
-        await conn.execute("DELETE FROM estand_blocked_tags WHERE guild_id=$1", str(guild_id))
-        for tag_name in tag_names:
-            await conn.execute(
-                "INSERT INTO estand_blocked_tags (guild_id, tag_name) VALUES ($1,$2) ON CONFLICT DO NOTHING",
-                str(guild_id), tag_name
-            )
-
-async def is_listing_blocked_for_guild(thread, dest_guild_id):
-    """Check if a listing's tags are blocked by the destination guild."""
-    blocked = await db_get_blocked_tags(str(dest_guild_id))
-    if not blocked:
-        return False
-    thread_tag_names = {t.name for t in getattr(thread, "applied_tags", [])}
-    for blocked_tag in blocked:
-        if blocked_tag in thread_tag_names:
-            return True
-    return False
-
-# ==================== ESTAND STANDARD TAGS ====================
-
-ESTAND_STANDARD_TAGS = [
-    # Status tags
-    discord.ForumTag(name="Active", emoji=discord.PartialEmoji(name="🟢")),
-    discord.ForumTag(name="Sold", emoji=discord.PartialEmoji(name="🔴")),
-    discord.ForumTag(name="On Hold", emoji=discord.PartialEmoji(name="🟡")),
-    discord.ForumTag(name="Cross-Posted", emoji=discord.PartialEmoji(name="🌐")),
-    # Country tags
-    discord.ForumTag(name="🇺🇸 American"),
-    discord.ForumTag(name="🇩🇪 German"),
-    discord.ForumTag(name="🇬🇧 British"),
-    discord.ForumTag(name="🇷🇺 Soviet"),
-    discord.ForumTag(name="🇯🇵 Japanese"),
-    discord.ForumTag(name="🇫🇷 French"),
-    discord.ForumTag(name="🇮🇹 Italian"),
-    discord.ForumTag(name="🇨🇦 Canadian"),
-    discord.ForumTag(name="🇦🇹 Austro-Hungarian"),
-    discord.ForumTag(name="🌍 Other"),
-    # Era tags
-    discord.ForumTag(name="WWI"),
-    discord.ForumTag(name="WWII"),
-    discord.ForumTag(name="Pre-WWI"),
-    discord.ForumTag(name="Cold War"),
-    discord.ForumTag(name="Vietnam"),
-    discord.ForumTag(name="Korea"),
-    discord.ForumTag(name="GWOT"),
-]
-
-async def add_standard_tags_to_forum(forum_channel):
-    """Add any missing standard tags to an existing Estand forum channel."""
-    existing_names = {t.name for t in forum_channel.available_tags}
-    new_tags = list(forum_channel.available_tags)
-    added = []
-    for tag in ESTAND_STANDARD_TAGS:
-        if tag.name not in existing_names and len(new_tags) < 20:  # Discord limit is 20 tags
-            new_tags.append(tag)
-            added.append(tag.name)
-    if added:
-        await forum_channel.edit(available_tags=new_tags)
-    return added
-
-# ==================== SCAM FLAG SYSTEM ====================
-
-SCAM_FLAG_THRESHOLD = 2  # Number of mod flags needed to trigger global ban
-
-async def db_add_scam_flag(flagged_user_id, flagged_by, guild_id, reason):
-    """Add a scam flag. Returns (total_flags, newly_added)."""
-    async with client.db.acquire() as conn:
-        try:
-            await conn.execute(
-                "INSERT INTO scam_flags (flagged_user_id, flagged_by, guild_id, reason, created_at) VALUES ($1,$2,$3,$4,$5)",
-                str(flagged_user_id), str(flagged_by), str(guild_id), reason,
-                int(datetime.now(timezone.utc).timestamp())
-            )
-            newly_added = True
-        except Exception:
-            newly_added = False  # Already flagged by this mod
-        total = await conn.fetchval(
-            "SELECT COUNT(*) FROM scam_flags WHERE flagged_user_id=$1",
-            str(flagged_user_id)
-        )
-        return total or 0, newly_added
-
-async def db_get_scam_flags(user_id):
-    async with client.db.acquire() as conn:
-        rows = await conn.fetch(
-            "SELECT * FROM scam_flags WHERE flagged_user_id=$1 ORDER BY created_at ASC",
-            str(user_id)
-        )
-        return [dict(r) for r in rows]
-
-async def db_remove_scam_flag(flagged_user_id):
-    """Clear all scam flags for a user (bot owner only)."""
-    async with client.db.acquire() as conn:
-        await conn.execute("DELETE FROM scam_flags WHERE flagged_user_id=$1", str(flagged_user_id))
-        await conn.execute(
-            "DELETE FROM user_warnings WHERE user_id=$1 AND warning_type='scammer'",
-            str(flagged_user_id)
-        )
-
-# ==================== KEYWORD WATCHLIST DB ====================
-
-FREE_DEALER_FOLLOW_LIMIT = 20
-FREE_KEYWORD_LIMIT = 3
-
-async def db_get_user_keywords(user_id):
-    async with client.db.acquire() as conn:
-        rows = await conn.fetch(
-            "SELECT * FROM keyword_watchlist WHERE user_id=$1 ORDER BY created_at ASC",
-            str(user_id)
-        )
-        return [dict(r) for r in rows]
-
-async def db_add_keyword(user_id, keyword, is_premium=False):
-    """Add keyword — returns (success, message)."""
-    async with client.db.acquire() as conn:
-        # Check limit for free users
-        if not is_premium:
-            count = await conn.fetchval(
-                "SELECT COUNT(*) FROM keyword_watchlist WHERE user_id=$1",
-                str(user_id)
-            )
-            if count >= FREE_KEYWORD_LIMIT:
-                return False, f"You've reached the free limit of {FREE_KEYWORD_LIMIT} keyword alerts. Upgrade to premium for unlimited keywords!"
-        # Check duplicate
-        existing = await conn.fetchrow(
-            "SELECT 1 FROM keyword_watchlist WHERE user_id=$1 AND LOWER(keyword)=LOWER($2)",
-            str(user_id), keyword
-        )
-        if existing:
-            return False, f"You're already watching the keyword **{keyword}**."
-        await conn.execute(
-            "INSERT INTO keyword_watchlist (user_id, keyword, created_at) VALUES ($1,$2,$3)",
-            str(user_id), keyword.lower().strip(), int(datetime.now(timezone.utc).timestamp())
-        )
-        return True, f"✅ Keyword **{keyword}** added to your watchlist!"
-
-async def db_remove_keyword(user_id, keyword):
-    async with client.db.acquire() as conn:
-        result = await conn.execute(
-            "DELETE FROM keyword_watchlist WHERE user_id=$1 AND LOWER(keyword)=LOWER($2)",
-            str(user_id), keyword.lower().strip()
-        )
-        return result != "DELETE 0"
-
-async def db_get_users_for_keyword(keyword):
-    """Get all users watching a specific keyword."""
-    async with client.db.acquire() as conn:
-        rows = await conn.fetch(
-            "SELECT user_id FROM keyword_watchlist WHERE $1 ILIKE '%' || keyword || '%'",
-            keyword
-        )
-        return [r["user_id"] for r in rows]
-
-async def db_get_dealer_follow_count(user_id):
-    async with client.db.acquire() as conn:
-        return await conn.fetchval(
-            "SELECT COUNT(*) FROM dealer_follows WHERE user_id=$1",
-            str(user_id)
-        ) or 0
-
-async def db_is_premium(user_id):
-    """Check if user has premium — placeholder until premium system is built."""
-    return False  # Everyone is free for now
-
-# ==================== LISTING NEGOTIATION DB ====================
-
-async def db_block_buyer(seller_id, buyer_id, thread_id):
-    async with client.db.acquire() as conn:
-        await conn.execute(
-            "INSERT INTO listing_blocks (seller_id, buyer_id, thread_id, created_at) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING",
-            str(seller_id), str(buyer_id), str(thread_id),
-            int(datetime.now(timezone.utc).timestamp())
-        )
-
-async def db_is_buyer_blocked(seller_id, buyer_id, thread_id):
-    async with client.db.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT 1 FROM listing_blocks WHERE seller_id=$1 AND buyer_id=$2 AND thread_id=$3",
-            str(seller_id), str(buyer_id), str(thread_id)
-        )
-        return row is not None
-
-# ==================== CROSS-POST DB ====================
-
-async def db_save_cross_post_mirror(original_thread_id, original_guild_id, original_seller_id, mirror_guild_id, mirror_channel_id, item_title, mirror_thread_id=None):
-    async with client.db.acquire() as conn:
-        await conn.execute(
-            """INSERT INTO cross_post_mirrors
-               (original_thread_id, original_guild_id, original_seller_id, mirror_thread_id, mirror_guild_id, mirror_channel_id, item_title, created_at)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-               ON CONFLICT DO NOTHING""",
-            str(original_thread_id), str(original_guild_id), str(original_seller_id),
-            str(mirror_thread_id) if mirror_thread_id else None,
-            str(mirror_guild_id), str(mirror_channel_id), item_title,
-            int(datetime.now(timezone.utc).timestamp())
-        )
-
-async def db_get_mirror_servers(original_thread_id):
-    """Get servers that already have a mirror for this thread."""
-    async with client.db.acquire() as conn:
-        rows = await conn.fetch(
-            "SELECT mirror_guild_id FROM cross_post_mirrors WHERE original_thread_id=$1",
-            str(original_thread_id)
-        )
-        return [r["mirror_guild_id"] for r in rows]
-
-async def db_mark_mirror_sold(original_thread_id):
-    """Mark all mirrors of a thread as sold."""
-    async with client.db.acquire() as conn:
-        rows = await conn.fetch(
-            "SELECT mirror_channel_id, mirror_thread_id FROM cross_post_mirrors WHERE original_thread_id=$1 AND status='active'",
-            str(original_thread_id)
-        )
-        await conn.execute(
-            "UPDATE cross_post_mirrors SET status='sold' WHERE original_thread_id=$1",
-            str(original_thread_id)
-        )
-        return [dict(r) for r in rows]
-
-# ==================== RANK SYSTEM ====================
-
-RANKS = [
-    (0,     "🪖 Private"),
-    (30,    "🪖 Private 1st Class"),
-    (100,   "⚔️ Corporal"),
-    (300,   "⚔️ Sergeant"),
-    (600,   "⚔️ Sergeant Major"),
-    (1000,  "🎖️ Warrant Officer"),
-    (1500,  "🎖️ Lieutenant"),
-    (2000,  "🎖️ Captain"),
-    (3000,  "🏅 Major"),
-    (5000,  "🏅 Colonel"),
-    (10000, "👑 Maréchal d'Empire"),
-]
-
-async def db_get_user_points(user_id):
-    """Calculate total rank points for a user."""
-    logger.debug(f"[DB] db_get_user_points: user={user_id}")
-    async with client.db.acquire() as conn:
-        # Points from completed transactions (30 each)
-        tx_count = await conn.fetchval(
-            "SELECT COUNT(*) FROM estate_transactions WHERE (seller_id=$1 OR buyer_id=$1) AND status='completed'",
-            str(user_id)
-        ) or 0
-        # Points from dealer reviews (10 each)
-        review_count = await conn.fetchval(
-            "SELECT COUNT(*) FROM reviews WHERE user_id=$1 AND status='approved'",
-            str(user_id)
-        ) or 0
-        return (tx_count * 30) + (review_count * 10)
-
-async def db_get_user_warnings(user_id):
-    """Check if user has active warnings."""
-    try:
-        async with client.db.acquire() as conn:
-            count = await conn.fetchval(
-                "SELECT COUNT(*) FROM user_warnings WHERE user_id=$1",
-                str(user_id)
-            )
-            return count or 0
-    except Exception:
-        return 0
-
-async def db_add_user_warning(user_id, reason, warning_type="warning", issued_by=None, guild_id=None):
-    """Add a warning to a user."""
-    async with client.db.acquire() as conn:
-        await conn.execute(
-            "INSERT INTO user_warnings (user_id, reason, warning_type, issued_by, guild_id, timestamp) VALUES ($1,$2,$3,$4,$5,$6)",
-            str(user_id), reason, warning_type, str(issued_by) if issued_by else None,
-            str(guild_id) if guild_id else None, int(datetime.now(timezone.utc).timestamp())
-        )
-
-async def db_get_user_warning_list(user_id):
-    """Get all warnings for a user."""
-    async with client.db.acquire() as conn:
-        rows = await conn.fetch(
-            "SELECT * FROM user_warnings WHERE user_id=$1 ORDER BY timestamp DESC",
-            str(user_id)
-        )
-        return [dict(r) for r in rows]
-
-async def db_remove_user_warning(warning_id):
-    """Remove a specific warning by ID."""
-    async with client.db.acquire() as conn:
-        await conn.execute("DELETE FROM user_warnings WHERE id=$1", warning_id)
-
 def get_rank(points, has_warnings=False):
     """Get rank name based on points. Warnings block above Corporal."""
     rank_name = RANKS[0][1]
@@ -1873,7 +1471,7 @@ async def send_alert(name, url, logo_file, test=False, waf=False):
         file = discord.File(logo_file, filename="logo.png")
         embed.set_thumbnail(url="attachment://logo.png")
 
-    content_msg = f"<@&{WAF_ROLE_ID}> New WAF Estate listing!" if waf and not test else None
+    content_msg = None  # No pings in channel — DMs only for followers/subscribers
 
     follow_view = FollowDealerView(name)
 
@@ -1892,9 +1490,9 @@ async def send_alert(name, url, logo_file, test=False, waf=False):
     for updates_channel in all_channels:
         try:
             if file and os.path.exists(logo_file):
-                await updates_channel.send(file=discord.File(logo_file, filename="logo.png"), embed=embed, view=follow_view)
+                await updates_channel.send(file=discord.File(logo_file, filename="logo.png"), embed=embed, view=follow_view, allowed_mentions=discord.AllowedMentions.none())
             else:
-                await updates_channel.send(embed=embed, view=follow_view)
+                await updates_channel.send(embed=embed, view=follow_view, allowed_mentions=discord.AllowedMentions.none())
             logger.info(f"[Alert] {name} → #{updates_channel.name} in {updates_channel.guild.name}")
         except Exception as e:
             logger.error(f"[Alert] Failed to send to {updates_channel.guild.name}: {e}")
@@ -2747,13 +2345,22 @@ async def scrape_dealer_items(browser, dealer):
                 continue
 
         if not found_sel:
-            # Log page details to help debug
             try:
                 title = await page.title()
                 current_url = page.url
-                html_len = len(await page.content())
+                html = await page.content()
+                html_len = len(html)
                 logger.warning(f"[Playwright] No product selector found on {name}")
                 logger.warning(f"[Playwright]   Title: \'{title}\' | URL: {current_url} | HTML: {html_len} chars")
+                # Dump first 2000 chars of body to help find the right selector
+                import re as _re3
+                body_match = _re3.search(r'<body[^>]*>(.*)', html, _re3.DOTALL | _re3.IGNORECASE)
+                if body_match:
+                    body_snippet = body_match.group(1)[:2000]
+                    # Strip tags for readability
+                    clean = _re3.sub(r'<[^>]+>', ' ', body_snippet)
+                    clean = _re3.sub(r'\s+', ' ', clean).strip()
+                    logger.debug(f"[Playwright] {name} body snippet: {clean[:500]}")
             except Exception:
                 logger.warning(f"[Playwright] No product selector found on {name} — could not get debug info")
             return items
@@ -3135,9 +2742,9 @@ async def send_usmf_alert(parsed):
     for usmf_updates_channel in usmf_updates_channels:
         try:
             if file and os.path.exists(logo_file):
-                await usmf_updates_channel.send(file=discord.File(logo_file, filename="logo.png"), embed=embed)
+                await usmf_updates_channel.send(file=discord.File(logo_file, filename="logo.png"), embed=embed, allowed_mentions=discord.AllowedMentions.none())
             else:
-                await usmf_updates_channel.send(embed=embed)
+                await usmf_updates_channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
             logger.info(f"[USMF] Alert sent to #{usmf_updates_channel.name} in {usmf_updates_channel.guild.name}: {parsed['item_title']}")
         except Exception as e:
             logger.error(f"[USMF] Failed to send to {usmf_updates_channel.guild.name}: {e}")
@@ -3299,9 +2906,9 @@ async def send_waf_alert(parsed, guild=None):
     for waf_updates_channel in waf_updates_channels:
         try:
             if file and os.path.exists(logo_file):
-                await waf_updates_channel.send(file=discord.File(logo_file, filename="logo.png"), embed=embed, view=watch_view)
+                await waf_updates_channel.send(file=discord.File(logo_file, filename="logo.png"), embed=embed, view=watch_view, allowed_mentions=discord.AllowedMentions.none())
             else:
-                await waf_updates_channel.send(embed=embed, view=watch_view)
+                await waf_updates_channel.send(embed=embed, view=watch_view, allowed_mentions=discord.AllowedMentions.none())
             bot_state["alert_count"] += 1
             logger.info(f"[WAF] Alert sent to #{waf_updates_channel.name} in {waf_updates_channel.guild.name}: {parsed['item_title']}")
         except Exception as e:
@@ -8365,176 +7972,6 @@ async def send_griffin_combined():
     except Exception as e:
         logger.error(f"[Griffin] Failed to send DMs to followers: {e}")
 
-async def handle_webhook(request):
-    """Receives webhook from Changedetection.io when a page changes."""
-    try:
-        from urllib.parse import unquote
-        dealer_name = request.query.get("dealer", "")
-        page_name = request.query.get("page", "")
-        page_url = unquote(request.query.get("url", ""))
-
-        # Also try to get URL from request body or title header
-        if not page_url or "%7B" in page_url:
-            try:
-                # Check title header (Changedetection.io sends watch_url there)
-                title = request.headers.get("Title", "") or request.headers.get("X-Title", "")
-                if title and title.startswith("http"):
-                    page_url = title.strip()
-                    logger.info(f"[Webhook] Got URL from title header: {page_url}")
-                else:
-                    # Try request body
-                    body = await request.text()
-                    if body:
-                        # Extract first URL from body
-                        import re
-                        urls = re.findall(r'https?://[^\s<>"]+', body)
-                        if urls:
-                            page_url = urls[0].strip()
-                            logger.info(f"[Webhook] Got URL from body: {page_url}")
-            except Exception as e:
-                logger.error(f"[Webhook] Error extracting URL: {e}")
-
-        if not dealer_name:
-            return web.Response(text="Missing dealer parameter", status=400)
-
-        logger.info(f"[Webhook] Change detected for: {dealer_name} — {page_name}")
-
-        # Special handling for Griffin Militaria — buffer changes
-        if dealer_name == "Griffin Militaria":
-            # Get title from request headers (Changedetection.io sends watch title there)
-            watch_title = request.headers.get("Title", "") or request.headers.get("X-Title", "")
-            # Look up the URL from the title if we don't have it
-            if not page_url or "griffinmilitaria.com/" == page_url or "%7B" in page_url:
-                page_url = lookup_griffin_url(watch_title)
-                logger.info(f"[Griffin] Looked up URL from title '{watch_title}': {page_url}")
-            # Extract readable name from URL path
-            if page_url and page_url != "https://griffinmilitaria.com/":
-                path_parts = page_url.rstrip("/").split("/")
-                url_name = path_parts[-1].replace("-", " ").replace("_", " ").title()
-                # Clean up common prefixes
-                for prefix in ["Us Wwii ", "Us Wwi ", "Germany Wwii ", "Germany Wwi ", "Japanese ", "Vietnam War "]:
-                    url_name = url_name.replace(prefix, "")
-                display_name = url_name
-            else:
-                display_name = watch_title.replace(" – Griffin Militaria", "").replace(" - Griffin Militaria", "").strip() or page_name or "New Items"
-            # Check snapshot for new Griffin items
-            try:
-                body_text = await request.text()
-                snapshot_text = ""
-                if body_text:
-                    try:
-                        import json as _json2
-                        body_json = _json2.loads(body_text)
-                        if isinstance(body_json, list) and body_json:
-                            snapshot_text = body_json[0].get("original_context", {}).get("current_snapshot", "") or ""
-                    except Exception:
-                        snapshot_text = body_text
-
-                if snapshot_text:
-                    parsed_items = parse_snapshot_items(snapshot_text)
-                    if parsed_items:
-                        seen = await db_get_seen_items("Griffin Militaria")
-                        new_items = [i for i in parsed_items if i not in seen]
-                        if not new_items:
-                            logger.info(f"[Griffin] No new items in {display_name} — skipping")
-                            return web.Response(text="No new items", status=200)
-                        await db_save_seen_items("Griffin Militaria", new_items)
-                        logger.info(f"[Griffin] {len(new_items)} new item(s) in {display_name}")
-            except Exception as ge:
-                logger.debug(f"[Griffin] Snapshot check error: {ge} — buffering anyway")
-
-            bot_state["griffin_buffer"].append((display_name, page_url))
-            if bot_state["griffin_timer"] is None:
-                bot_state["griffin_timer"] = asyncio.create_task(send_griffin_combined())
-                logger.info("[Griffin] Buffer started — waiting 5 minutes for more changes...")
-            return web.Response(text="OK", status=200)
-
-        dealer = find_dealer(dealer_name)
-        if not dealer:
-            logger.warning(f"[Webhook] Unknown dealer: {dealer_name}")
-            return web.Response(text="Unknown dealer", status=404)
-
-        # Parse snapshot to check for genuinely new items
-        try:
-            body_text = await request.text()
-            snapshot_text = ""
-            if body_text:
-                try:
-                    import json as _json
-                    body_json = _json.loads(body_text)
-                    if isinstance(body_json, list) and body_json:
-                        snapshot_text = body_json[0].get("original_context", {}).get("current_snapshot", "") or ""
-                    elif isinstance(body_json, dict):
-                        snapshot_text = body_json.get("original_context", {}).get("current_snapshot", "") or ""
-                except Exception:
-                    snapshot_text = body_text
-
-            if snapshot_text:
-                parsed_items = parse_snapshot_items(snapshot_text)
-                if parsed_items:
-                    seen = await db_get_seen_items(dealer_name)
-                    new_items = [i for i in parsed_items if i not in seen]
-                    if not new_items:
-                        logger.info(f"[Webhook] {dealer_name} — no new items (all {len(parsed_items)} already seen) — skipping alert")
-                        return web.Response(text="No new items", status=200)
-                    # Save new items as seen
-                    await db_save_seen_items(dealer_name, new_items)
-                    logger.info(f"[Webhook] {dealer_name} — {len(new_items)} NEW item(s) detected: {new_items[:3]}")
-                else:
-                    logger.debug(f"[Webhook] {dealer_name} — could not parse items from snapshot, firing alert anyway")
-            else:
-                logger.debug(f"[Webhook] {dealer_name} — no snapshot in payload, firing alert anyway")
-        except Exception as se:
-            logger.debug(f"[Webhook] Snapshot check error: {se} — firing alert anyway")
-
-        # Route to correct regional channels
-        wh_region = dealer.get("region", "both").upper()
-        updates_channels = await get_all_server_channels("updates_channel_id")
-        if wh_region in ("NA", "BOTH"):
-            na_wh = await get_all_server_channels("na_updates_channel_id")
-            updates_channels = list({c.id: c for c in updates_channels + na_wh}.values())
-        if wh_region in ("EU", "BOTH"):
-            eu_wh = await get_all_server_channels("eu_updates_channel_id")
-            updates_channels = list({c.id: c for c in updates_channels + eu_wh}.values())
-        updates_channels = [c for c in updates_channels if c]
-        logger.info(f"[Webhook] Routing {dealer_name} ({wh_region}) to {len(updates_channels)} channel(s)")
-        for channel in updates_channels:
-          if channel:
-            # Use specific page URL if provided, otherwise use dealer default
-            alert_url = page_url if page_url else dealer["url"]
-            logo_file = os.path.join(SCRIPT_DIR, "logos", dealer["logo_file"])
-            await db_increment_stat(dealer_name)
-
-            warning = await db_get_warning(dealer["name"])
-            dealer_reviews = await db_get_reviews(dealer["name"])
-            rating, review_count = get_dealer_rating_sync(dealer_reviews)
-
-            color = discord.Color.red() if warning else discord.Color.dark_gold()
-            desc = f"New items have been added to [{dealer['name']}]({alert_url})\n\n[**Click here to view new items \u2192**]({alert_url})"
-            if warning:
-                desc = f"⚠️ **WARNING: {warning}**\n\n" + desc
-
-            dealer_flag = dealer.get("flag", "🌐")
-            embed = discord.Embed(title=f"🆕 {dealer_flag} New Items at {dealer['name']}!", description=desc, color=color, timestamp=datetime.now(timezone.utc))
-            embed.add_field(name="Rating", value=stars_display(rating), inline=True)
-            embed.add_field(name="Total Reviews", value=f"📝 {review_count}", inline=True)
-            embed.set_footer(text="Adrian — Dealer Update")
-
-            file = None
-            if os.path.exists(logo_file):
-                file = discord.File(logo_file, filename="logo.png")
-                embed.set_thumbnail(url="attachment://logo.png")
-
-            if file:
-                await channel.send(file=file, embed=embed, view=FollowDealerView(dealer_name))
-            else:
-                await channel.send(embed=embed, view=FollowDealerView(dealer_name))
-        logger.info(f"[Webhook] Alert sent for {dealer_name} to {len(updates_channels)} server(s)!")
-
-        return web.Response(text="OK", status=200)
-    except Exception as e:
-        logger.error(f"[Webhook] Error: {e}\n{traceback.format_exc()}")
-        return web.Response(text=str(e), status=500)
 
 async def handle_guide(request):
     guide_path = os.path.join(SCRIPT_DIR, "guide.html")
@@ -8581,8 +8018,6 @@ async def start_web_server():
     app.router.add_get("/", handle_guide)
     app.router.add_get("/guide", handle_guide)
     app.router.add_get("/health", handle_health)
-    app.router.add_get("/alert", handle_webhook)
-    app.router.add_post("/alert", handle_webhook)
     app.router.add_route("*", "/{path_info:.*}", handle_404)
     runner = web.AppRunner(app)
     await runner.setup()
