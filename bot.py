@@ -2525,6 +2525,188 @@ async def _check_all_dealers_inner():
         logger.info(f"--- Done. Next check in {CHECK_INTERVAL//60} minutes. ---")
         await asyncio.sleep(CHECK_INTERVAL)
 
+# ==================== PLAYWRIGHT SCRAPER ====================
+
+async def get_playwright_browser():
+    """Launch a shared Playwright browser instance."""
+    try:
+        from playwright.async_api import async_playwright
+        pw = await async_playwright().start()
+        browser = await pw.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--no-first-run",
+                "--no-zygote",
+            ]
+        )
+        return pw, browser
+    except Exception as e:
+        logger.error(f"[Playwright] Failed to launch browser: {e}")
+        return None, None
+
+
+async def scrape_dealer_items(browser, dealer):
+    """Scrape a dealer page and return list of (item_id, item_title) tuples."""
+    name = dealer["name"]
+    url = dealer["url"]
+    item_sel = dealer["item_sel"]
+    title_sel = dealer["title_sel"]
+    id_sel = dealer.get("id_sel")
+
+    items = []
+    page = None
+    try:
+        page = await browser.new_page()
+
+        # Set realistic browser headers
+        await page.set_extra_http_headers({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9",
+        })
+
+        logger.debug(f"[Playwright] Loading {name}...")
+        await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+
+        # Wait for products to appear
+        try:
+            await page.wait_for_selector(item_sel, timeout=10000)
+        except Exception:
+            logger.warning(f"[Playwright] Selector '{item_sel}' not found on {name} — page may be empty or blocked")
+            return items
+
+        product_elements = await page.query_selector_all(item_sel)
+        logger.debug(f"[Playwright] Found {len(product_elements)} product elements on {name}")
+
+        for el in product_elements:
+            try:
+                # Get title
+                title_el = await el.query_selector(title_sel)
+                title = (await title_el.inner_text()).strip() if title_el else ""
+
+                # Get ID (SKU/item code) or fall back to title
+                if id_sel:
+                    id_el = await el.query_selector(id_sel)
+                    item_id = (await id_el.inner_text()).strip() if id_el else title
+                else:
+                    item_id = title
+
+                if item_id and title:
+                    items.append((item_id, title))
+            except Exception as ie:
+                logger.debug(f"[Playwright] Error parsing item on {name}: {ie}")
+                continue
+
+        logger.debug(f"[Playwright] Extracted {len(items)} items from {name}")
+
+    except Exception as e:
+        logger.error(f"[Playwright] Error scraping {name}: {e}")
+    finally:
+        if page:
+            try:
+                await page.close()
+            except Exception:
+                pass
+
+    return items
+
+
+async def check_playwright_dealers():
+    """Background task — checks all Playwright dealers every 10 minutes."""
+    # Wait for bot to be fully ready
+    await asyncio.sleep(15)
+    logger.info(f"[Playwright] Scraper starting — monitoring {len(PLAYWRIGHT_DEALERS)} dealers")
+
+    pw = None
+    browser = None
+
+    while not client.is_closed():
+        try:
+            logger.info(f"[Playwright] --- Checking {len(PLAYWRIGHT_DEALERS)} dealers at {datetime.now().strftime('%H:%M:%S')} ---")
+
+            # Launch browser
+            try:
+                from playwright.async_api import async_playwright
+                pw = await async_playwright().start()
+                browser = await pw.chromium.launch(
+                    headless=True,
+                    args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
+                )
+                logger.debug("[Playwright] Browser launched")
+            except Exception as be:
+                logger.error(f"[Playwright] Could not launch browser: {be}")
+                await asyncio.sleep(PLAYWRIGHT_CHECK_INTERVAL)
+                continue
+
+            for dealer in PLAYWRIGHT_DEALERS:
+                name = dealer["name"]
+                try:
+                    items = await scrape_dealer_items(browser, dealer)
+
+                    if not items:
+                        logger.debug(f"[Playwright] {name} — no items found, skipping")
+                        continue
+
+                    # Check against seen items
+                    seen = await db_get_seen_items(name)
+
+                    if not seen:
+                        # First run — save baseline, no alert
+                        item_ids = [i[0] for i in items]
+                        item_titles = {i[0]: i[1] for i in items}
+                        await db_save_seen_items(name, item_ids, item_titles)
+                        logger.info(f"[Playwright] {name} — first check, saved {len(items)} items as baseline")
+                        continue
+
+                    # Find new items
+                    new_items = [(iid, title) for iid, title in items if iid not in seen]
+
+                    if new_items:
+                        logger.info(f"[Playwright] {name} — {len(new_items)} NEW item(s) detected!")
+                        for iid, title in new_items:
+                            logger.info(f"[Playwright]   → {title} ({iid})")
+
+                        # Save new items as seen
+                        new_ids = [i[0] for i in new_items]
+                        new_titles = {i[0]: i[1] for i in new_items}
+                        await db_save_seen_items(name, new_ids, new_titles)
+
+                        # Fire alert
+                        logo_file = os.path.join(SCRIPT_DIR, "logos", dealer["logo_file"])
+                        await send_alert(name, dealer["url"], logo_file)
+                        bot_state["alert_count"] += 1
+                    else:
+                        logger.debug(f"[Playwright] {name} — no new items ({len(items)} seen)")
+
+                    await asyncio.sleep(3)  # Small delay between dealers
+
+                except Exception as de:
+                    logger.error(f"[Playwright] Error checking {name}: {de}\n{traceback.format_exc()}")
+                    bot_state["error_count"] += 1
+
+        except Exception as e:
+            logger.error(f"[Playwright] Scraper loop error: {e}\n{traceback.format_exc()}")
+            bot_state["error_count"] += 1
+
+        finally:
+            # Always close browser after each check cycle
+            try:
+                if browser:
+                    await browser.close()
+                if pw:
+                    await pw.stop()
+            except Exception:
+                pass
+            browser = None
+            pw = None
+
+        logger.info(f"[Playwright] --- Done. Next check in {PLAYWRIGHT_CHECK_INTERVAL//60} minutes ---")
+        await asyncio.sleep(PLAYWRIGHT_CHECK_INTERVAL)
+
+
 # ==================== WAF EMAIL PARSER ====================
 
 BUMP_KEYWORDS = ["up", "bump", "still available", "still for sale", "ttt", "btt", "to the top", "glws", "price reduced", "price drop", "make offer", "reduced", "price drop", "lowered", "will consider", "open to offers", "bump it up", "bringing to top", "back to top", "anyone interested", "still here", "available", "taking offers"]
@@ -8287,6 +8469,8 @@ async def main():
     try:
         async with client:
             tasks.append(asyncio.create_task(check_all_dealers()))
+            tasks.append(asyncio.create_task(check_playwright_dealers()))
+            logger.info(f"[Playwright] Scraper task started for {len(PLAYWRIGHT_DEALERS)} dealers")
             tasks.append(asyncio.create_task(onboarding_reminder_task()))
             tasks.append(asyncio.create_task(health_log_task()))
             tasks.append(asyncio.create_task(check_email_dealers()))
