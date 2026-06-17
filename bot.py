@@ -2600,44 +2600,65 @@ async def scrape_dealer_items(browser, dealer):
     id_sel = dealer.get("id_sel")
 
     items = []
+    context = None
     page = None
     try:
-        page = await browser.new_page()
-
-        # Set realistic browser headers
-        await page.set_extra_http_headers({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept-Language": "en-US,en;q=0.9",
-        })
+        # Use isolated browser context per dealer so failures don\'t bleed across
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            locale="en-US",
+            extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
+        )
+        page = await context.new_page()
 
         logger.debug(f"[Playwright] Loading {name}...")
-        await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-
-        # Wait for products to appear
         try:
-            await page.wait_for_selector(item_sel, timeout=10000)
+            await page.goto(url, wait_until="networkidle", timeout=45000)
         except Exception:
-            logger.warning(f"[Playwright] Selector '{item_sel}' not found on {name} — page may be empty or blocked")
+            # Fall back to domcontentloaded if networkidle times out
+            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+
+        # Wait for products to appear — try multiple common selectors
+        selectors_to_try = [item_sel, "li.product", ".product", ".product-item", "article.product"]
+        found_sel = None
+        for sel in selectors_to_try:
+            try:
+                await page.wait_for_selector(sel, timeout=8000)
+                found_sel = sel
+                logger.debug(f"[Playwright] Found products with selector \'{sel}\' on {name}")
+                break
+            except Exception:
+                continue
+
+        if not found_sel:
+            # Log page title to help debug
+            title = await page.title()
+            logger.warning(f"[Playwright] No product selector found on {name} (page title: \'{title}\')")
             return items
 
-        product_elements = await page.query_selector_all(item_sel)
+        product_elements = await page.query_selector_all(found_sel)
         logger.debug(f"[Playwright] Found {len(product_elements)} product elements on {name}")
 
         for el in product_elements:
             try:
-                # Get title
-                title_el = await el.query_selector(title_sel)
-                title = (await title_el.inner_text()).strip() if title_el else ""
+                # Get title — try multiple selectors
+                title_text = ""
+                for t_sel in [title_sel, "h2", "h3", ".product-title", ".name", "a"]:
+                    title_el = await el.query_selector(t_sel)
+                    if title_el:
+                        title_text = (await title_el.inner_text()).strip()
+                        if title_text:
+                            break
 
                 # Get ID (SKU/item code) or fall back to title
                 if id_sel:
                     id_el = await el.query_selector(id_sel)
-                    item_id = (await id_el.inner_text()).strip() if id_el else title
+                    item_id = (await id_el.inner_text()).strip() if id_el else title_text
                 else:
-                    item_id = title
+                    item_id = title_text
 
-                if item_id and title:
-                    items.append((item_id, title))
+                if item_id and title_text:
+                    items.append((item_id[:200], title_text[:200]))
             except Exception as ie:
                 logger.debug(f"[Playwright] Error parsing item on {name}: {ie}")
                 continue
@@ -2647,11 +2668,11 @@ async def scrape_dealer_items(browser, dealer):
     except Exception as e:
         logger.error(f"[Playwright] Error scraping {name}: {e}")
     finally:
-        if page:
-            try:
-                await page.close()
-            except Exception:
-                pass
+        try:
+            if page: await page.close()
+            if context: await context.close()
+        except Exception:
+            pass
 
     return items
 
