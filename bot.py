@@ -624,6 +624,48 @@ def save_json(filepath, data):
 def load_seen(): return load_json(SEEN_FILE, {})
 def save_seen(d): save_json(SEEN_FILE, d)
 
+# ==================== PLAYWRIGHT DEALERS ====================
+PLAYWRIGHT_DEALERS = [
+    {
+        "name": "Time Traveler Militaria",
+        "flag": "🇺🇸",
+        "region": "NA",
+        "url": "https://www.ttmilitaria.com/",
+        "item_sel": ".product",
+        "title_sel": ".woocommerce-loop-product__title",
+        "id_sel": ".sku",
+        "logo_file": "Time_traveler_militaria.png",
+        "eras": [0],
+        "countries": ["Z"],
+    },
+    {
+        "name": "Oorlogsspullen",
+        "flag": "🇳🇱",
+        "region": "EU",
+        "url": "https://oorlogsspullen.nl/product-categorie/new/",
+        "item_sel": "li.product",
+        "title_sel": ".woocommerce-loop-product__title",
+        "id_sel": None,
+        "logo_file": "Oorlogspullen.png",
+        "eras": [3],
+        "countries": ["Z"],
+    },
+    {
+        "name": "EA Militaria",
+        "flag": "🇳🇱",
+        "region": "EU",
+        "url": "https://www.ea-militaria.com/new-items?hideSold=1",
+        "item_sel": ".product-item",
+        "title_sel": ".product-item-name",
+        "id_sel": None,
+        "logo_file": "eamilitaria.png",
+        "eras": [3],
+        "countries": ["D"],
+    },
+]
+
+PLAYWRIGHT_CHECK_INTERVAL = 600  # 10 minutes
+
 # ==================== DATABASE FUNCTIONS ====================
 async def db_get_reviews(dealer_name, status='approved'):
     async with client.db.acquire() as conn:
