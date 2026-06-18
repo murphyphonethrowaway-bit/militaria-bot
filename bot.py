@@ -834,6 +834,8 @@ bot_state = {
     "ping_task_running": False,
     "waf_notification_count": 0,
     "usmf_notification_count": 0,
+    "griffin_buffer": [],
+    "griffin_timer": None,
 }
 
 async def db_get_reviews(dealer_name, status='approved'):
@@ -2120,25 +2122,29 @@ async def flush_pending_pings():
         bot_state["pending_pings"] = {}
 
         servers = await db_get_all_servers()
-        updates_channels = await get_all_server_channels("updates_channel_id", ADRIAN_UPDATES_CHANNEL_ID)
-
         for uid, alerts in pings.items():
             try:
-                # Build batched message
+                # Build DM message
                 if len(alerts) == 1:
-                    msg = f"🆕 **{alerts[0]['name']}** has new items!"
+                    a = alerts[0]
+                    embed = discord.Embed(
+                        title=f"🆕 {a['flag']} {a['name']} has new items!",
+                        description=f"[View listings]({a['url']})" if a.get('url') else "Check the dealer channel for new listings.",
+                        color=discord.Color.dark_gold()
+                    )
                 else:
-                    dealer_list = "\n".join([f"• {a['flag']} **{a['name']}**" for a in alerts])
-                    msg = f"🆕 **{len(alerts)} dealers** have new items!\n{dealer_list}"
-
-                for updates_channel in updates_channels:
-                    member = updates_channel.guild.get_member(int(uid))
-                    if member:
-                        await updates_channel.send(
-                            content=f"{member.mention}\n{msg}",
-                            delete_after=3
-                        )
-                        break
+                    dealer_list = "\n".join([f"{a['flag']} **{a['name']}**" for a in alerts])
+                    embed = discord.Embed(
+                        title=f"🆕 {len(alerts)} dealers have new items!",
+                        description=dealer_list,
+                        color=discord.Color.dark_gold()
+                    )
+                embed.set_footer(text="Adrian — Dealer Alert | Click 🔕 on any alert to unfollow")
+                user = await client.fetch_user(int(uid))
+                await user.send(embed=embed)
+                logger.debug(f"[Alert] DM sent to {uid} for {len(alerts)} dealer(s)")
+            except discord.Forbidden:
+                logger.debug(f"[Alert] Could not DM {uid} — DMs disabled")
             except Exception as e:
                 logger.debug(f"[Alert] Batch ping failed for {uid}: {e}")
     finally:
@@ -4199,21 +4205,32 @@ class FollowDealerView(discord.ui.View):
 
     @discord.ui.button(emoji="🔔", style=discord.ButtonStyle.secondary, custom_id="follow_dealer")
     async def follow(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Get dealer name from embed if self.dealer_name is placeholder
+        dealer_name = self.dealer_name
+        if dealer_name == "placeholder" and interaction.message and interaction.message.embeds:
+            dealer_name = interaction.message.embeds[0].author.name or dealer_name
         user_id = str(interaction.user.id)
-        if await db_is_following(user_id, self.dealer_name):
-            await interaction.response.send_message(f"⚠️ You are already following **{self.dealer_name}**!", ephemeral=True)
+        can_follow, reason = await db_can_follow_dealer(user_id)
+        if not can_follow:
+            await interaction.response.send_message(f"⚠️ {reason}", ephemeral=True)
             return
-        await db_follow_dealer(user_id, self.dealer_name)
-        await interaction.response.send_message(f"🔔 You are now following **{self.dealer_name}**! You'll receive a DM whenever they have new items.", ephemeral=True)
+        if await db_is_following(user_id, dealer_name):
+            await interaction.response.send_message(f"⚠️ You are already following **{dealer_name}**!", ephemeral=True)
+            return
+        await db_follow_dealer(user_id, dealer_name)
+        await interaction.response.send_message(f"🔔 Now following **{dealer_name}**! You'll get a DM whenever they post new items.", ephemeral=True)
 
     @discord.ui.button(emoji="🔕", style=discord.ButtonStyle.secondary, custom_id="unfollow_dealer")
     async def unfollow(self, interaction: discord.Interaction, button: discord.ui.Button):
+        dealer_name = self.dealer_name
+        if dealer_name == "placeholder" and interaction.message and interaction.message.embeds:
+            dealer_name = interaction.message.embeds[0].author.name or dealer_name
         user_id = str(interaction.user.id)
-        if not await db_is_following(user_id, self.dealer_name):
-            await interaction.response.send_message(f"⚠️ You are not following **{self.dealer_name}**.", ephemeral=True)
+        if not await db_is_following(user_id, dealer_name):
+            await interaction.response.send_message(f"⚠️ You are not following **{dealer_name}**.", ephemeral=True)
             return
-        await db_unfollow_dealer(user_id, self.dealer_name)
-        await interaction.response.send_message(f"🔕 You have unfollowed **{self.dealer_name}**.", ephemeral=True)
+        await db_unfollow_dealer(user_id, dealer_name)
+        await interaction.response.send_message(f"🔕 Unfollowed **{dealer_name}**.", ephemeral=True)
 
 # ==================== REVIEW MODERATION BUTTONS ====================
 
@@ -8113,13 +8130,15 @@ async def send_griffin_combined():
     await asyncio.sleep(300)  # Wait 5 minutes to collect all changes
     if not bot_state["griffin_buffer"]:
         return
-    channel = client.get_channel(CHANNEL_ID)
-    if not channel:
-        return
-
     pages = bot_state["griffin_buffer"].copy()
     bot_state["griffin_buffer"] = []
     bot_state["griffin_timer"] = None
+
+    channels = await get_all_server_channels("updates_channel_id")
+    na_channels = await get_all_server_channels("na_updates_channel_id")
+    all_channels = list({c.id: c for c in channels + na_channels}.values())
+    if not all_channels:
+        return
 
     logo_file = os.path.join(SCRIPT_DIR, "logos", "Griffin_Militaria.png")
     warning = await db_get_warning("Griffin Militaria")
@@ -8150,10 +8169,11 @@ async def send_griffin_combined():
         embed.set_thumbnail(url="attachment://logo.png")
 
     try:
-        if file:
-            await channel.send(file=file, embed=embed, view=FollowDealerView("Griffin Militaria"))
-        else:
-            await channel.send(embed=embed, view=FollowDealerView("Griffin Militaria"))
+        for channel in all_channels:
+            if file:
+                await channel.send(file=discord.File(logo_file, filename="logo.png"), embed=embed, view=FollowDealerView("Griffin Militaria"), allowed_mentions=discord.AllowedMentions.none())
+            else:
+                await channel.send(embed=embed, view=FollowDealerView("Griffin Militaria"), allowed_mentions=discord.AllowedMentions.none())
         await db_increment_stat("Griffin Militaria")
         logger.info(f"[Griffin] Combined alert sent for {len(pages)} pages!")
     except Exception as e:
