@@ -2653,12 +2653,26 @@ async def check_playwright_dealers():
                     if pages:
                         items = []
                         for page_url in pages:
-                            page_dealer = dict(dealer)
-                            page_dealer["url"] = page_url
-                            page_items = await scrape_dealer_items(dealer_browser, page_dealer)
-                            items.extend(page_items)
-                            if page_items:
-                                logger.debug(f"[Playwright] {name} — {page_url.split('/')[-2]}: {len(page_items)} items")
+                            page_browser = None
+                            try:
+                                page_browser = await pw.chromium.launch(
+                                    headless=True,
+                                    args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--single-process"]
+                                )
+                                page_dealer = dict(dealer)
+                                page_dealer["url"] = page_url
+                                page_items = await scrape_dealer_items(page_browser, page_dealer)
+                                items.extend(page_items)
+                                if page_items:
+                                    logger.debug(f"[Playwright] {name} — {page_url.rstrip('/').split('/')[-1]}: {len(page_items)} items")
+                            except Exception as pe:
+                                logger.debug(f"[Playwright] {name} — error on {page_url}: {pe}")
+                            finally:
+                                if page_browser:
+                                    try:
+                                        await page_browser.close()
+                                    except Exception:
+                                        pass
                         logger.debug(f"[Playwright] {name} — total {len(items)} items across {len(pages)} pages")
                     else:
                         items = await scrape_dealer_items(dealer_browser, dealer)
