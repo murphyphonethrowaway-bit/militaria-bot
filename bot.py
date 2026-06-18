@@ -918,6 +918,16 @@ async def db_cleanup_watchlist():
         if deleted:
             logger.info(f"[Watchlist] Cleaned up {deleted} expired watchlist entries")
 
+async def db_can_follow_dealer(user_id, is_premium=False):
+    """Check if user can follow another dealer (under free limit or premium)."""
+    if is_premium:
+        return True, ""
+    async with client.db.acquire() as conn:
+        count = await conn.fetchval("SELECT COUNT(*) FROM dealer_follows WHERE user_id=$1", str(user_id))
+    if count >= FREE_DEALER_FOLLOW_LIMIT:
+        return False, f"You've reached the free limit of {FREE_DEALER_FOLLOW_LIMIT} dealer follows. Upgrade to premium for unlimited follows!"
+    return True, ""
+
 async def db_follow_dealer(user_id, dealer_name, is_premium=False):
     logger.debug(f"[DB] db_follow_dealer: user={user_id} dealer={dealer_name}")
     async with client.db.acquire() as conn:
@@ -6874,6 +6884,188 @@ async def nextemail_cmd(interaction: discord.Interaction):
         await interaction.response.send_message(f"📧 **Next email check:** <t:{next_ts}:R>\n🕐 **Last check:** <t:{last_ts}:R>", ephemeral=True)
     else:
         await interaction.response.send_message("⚠️ No email check has run yet.", ephemeral=True)
+
+
+@client.tree.command(name="scraper", description="🔒 View Playwright scraper status")
+async def scraper_cmd(interaction: discord.Interaction):
+    if interaction.user.id != BOT_OWNER_ID:
+        await interaction.response.send_message("❓ Unknown command.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+
+    lines = []
+    for dealer in PLAYWRIGHT_DEALERS:
+        name = dealer["name"]
+        try:
+            seen = await db_get_seen_items(name)
+            page_count = len(dealer.get("pages", [])) if dealer.get("pages") else 1
+            extra = f" ({page_count} pages)" if dealer.get("pages") else ""
+            lines.append(f"**{dealer['flag']} {name}**{extra}\n  └ {len(seen)} items seen | {dealer['url'][:50]}")
+        except Exception as e:
+            lines.append(f"**{dealer['flag']} {name}**\n  └ ⚠️ DB error: {e}")
+
+    embed = discord.Embed(
+        title="🕷️ Playwright Scraper Status",
+        description="\n\n".join(lines) if lines else "No Playwright dealers configured.",
+        color=discord.Color.dark_gold(),
+        timestamp=datetime.now(timezone.utc)
+    )
+    embed.add_field(name="Check Interval", value=f"{PLAYWRIGHT_CHECK_INTERVAL//60} minutes", inline=True)
+    embed.add_field(name="Dealers", value=str(len(PLAYWRIGHT_DEALERS)), inline=True)
+    embed.set_footer(text="Adrian — Scraper Debug")
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+@client.tree.command(name="diagnostics", description="🔒 Full system health check — DB, roles, channels, scrapers, views")
+async def diagnostics_cmd(interaction: discord.Interaction):
+    if interaction.user.id != BOT_OWNER_ID:
+        await interaction.response.send_message("❓ Unknown command.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+
+    results = {"pass": [], "warn": [], "fail": []}
+
+    # ── 1. DATABASE TABLES ──────────────────────────────────
+    required_tables = [
+        "reviews", "warnings", "seen_emails", "waf_thread_stats", "seen_dealer_items",
+        "dealer_stats", "blocked_reviewers", "reviewer_warnings", "dealer_follows",
+        "waf_watchlist", "user_preferences", "pending_alerts", "estate_transactions",
+        "estate_ratings", "estand_blocked_tags", "scam_flags", "keyword_watchlist",
+        "listing_blocks", "cross_post_mirrors", "image_url_cache", "user_warnings",
+        "user_bans", "playwright_seen_items", "server_config"
+    ]
+    try:
+        async with client.db.acquire() as conn:
+            existing = await conn.fetch(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema='public'"
+            )
+            existing_names = {r["table_name"] for r in existing}
+        missing_tables = [t for t in required_tables if t not in existing_names]
+        if missing_tables:
+            results["fail"].append(f"**DB Tables** — missing: {', '.join(missing_tables)}")
+        else:
+            results["pass"].append(f"**DB Tables** — all {len(required_tables)} present")
+    except Exception as e:
+        results["fail"].append(f"**DB Tables** — could not check: {e}")
+
+    # ── 2. CRITICAL FUNCTIONS DEFINED ───────────────────────
+    critical_funcs = [
+        "db_get_seen_items", "db_save_seen_items", "db_follow_dealer", "db_unfollow_dealer",
+        "db_is_following", "db_get_follows", "db_can_follow_dealer", "db_get_server_config",
+        "db_save_server_config", "db_get_all_servers", "db_save_user_waf_categories",
+        "db_save_user_usmf_categories", "db_get_users_for_keyword", "get_all_server_channels",
+        "send_alert", "send_waf_alert", "send_usmf_alert", "flush_pending_pings",
+    ]
+    missing_funcs = [f for f in critical_funcs if f not in globals()]
+    if missing_funcs:
+        results["fail"].append(f"**Functions** — missing: {', '.join(missing_funcs)}")
+    else:
+        results["pass"].append(f"**Functions** — all {len(critical_funcs)} critical functions defined")
+
+    # ── 3. BOT STATE KEYS ────────────────────────────────────
+    required_state_keys = [
+        "paused", "force_rescan", "pending_pings", "ping_task_running",
+        "waf_notification_count", "usmf_notification_count", "dealer_cooldowns",
+        "command_cooldowns", "alert_count", "error_count"
+    ]
+    missing_keys = [k for k in required_state_keys if k not in bot_state]
+    if missing_keys:
+        results["fail"].append(f"**bot_state** — missing keys: {', '.join(missing_keys)}")
+    else:
+        results["pass"].append(f"**bot_state** — all {len(required_state_keys)} keys present")
+
+    # ── 4. PERSISTENT VIEWS REGISTERED ──────────────────────
+    view_classes = ["SellerProfileView", "WatchItemView", "FollowDealerView", "MilitariaAlertAdView", "EstateRatingView", "WelcomeView"]
+    missing_views = [v for v in view_classes if v not in globals()]
+    if missing_views:
+        results["fail"].append(f"**View Classes** — missing: {', '.join(missing_views)}")
+    else:
+        results["pass"].append(f"**View Classes** — all {len(view_classes)} defined")
+
+    # ── 5. PER-SERVER CONFIG CHECK ──────────────────────────
+    try:
+        servers = await db_get_all_servers()
+        for server in servers:
+            guild_id = get_config_value(server, "guild_id")
+            guild = client.get_guild(int(guild_id)) if guild_id else None
+            if not guild:
+                results["warn"].append(f"**Server {guild_id}** — bot not currently in this guild")
+                continue
+
+            guild_issues = []
+            required_channel_keys = ["channel_id", "updates_channel_id", "na_updates_channel_id", "eu_updates_channel_id", "waf_channel_id", "usmf_channel_id", "estand_channel_id"]
+            for key in required_channel_keys:
+                ch_id = get_config_value(server, key)
+                if not ch_id or not guild.get_channel(int(ch_id)):
+                    guild_issues.append(key)
+
+            required_role_keys = ["verified_role_id", "estand_verified_role_id", "na_role_id", "eu_role_id", "waf_role_id", "usmf_role_id", "premium_role_id"]
+            for key in required_role_keys:
+                role_id = get_config_value(server, key)
+                if not role_id or not guild.get_role(int(role_id)):
+                    guild_issues.append(key)
+
+            # Role hierarchy check
+            bot_role = guild.me.top_role if guild.me else None
+            if bot_role:
+                adrian_role_names = {"Adrian Verified", "Estand Verified", "NA", "EU", "WAF", "USMF", "Adrian Premium"}
+                adrian_roles = [r for r in guild.roles if r.name in adrian_role_names]
+                if adrian_roles:
+                    highest_adrian = max(adrian_roles, key=lambda r: r.position)
+                    if bot_role.position <= highest_adrian.position:
+                        guild_issues.append("role_hierarchy_broken")
+
+            if guild_issues:
+                results["warn"].append(f"**{guild.name}** — issues: {', '.join(guild_issues)}")
+            else:
+                results["pass"].append(f"**{guild.name}** — config complete, role hierarchy OK")
+    except Exception as e:
+        results["fail"].append(f"**Per-Server Config** — error: {e}")
+
+    # ── 6. SCRAPER STATUS ────────────────────────────────────
+    try:
+        empty_dealers = []
+        for dealer in PLAYWRIGHT_DEALERS:
+            seen = await db_get_seen_items(dealer["name"])
+            if not seen:
+                empty_dealers.append(dealer["name"])
+        if empty_dealers:
+            results["warn"].append(f"**Scraper** — {len(empty_dealers)} dealer(s) with 0 items: {', '.join(empty_dealers)}")
+        else:
+            results["pass"].append(f"**Scraper** — all {len(PLAYWRIGHT_DEALERS)} dealers have data")
+    except Exception as e:
+        results["fail"].append(f"**Scraper** — error checking: {e}")
+
+    # ── 7. ENVIRONMENT / BACKGROUND TASKS ───────────────────
+    results["pass"].append(f"**Uptime** — {bot_state.get('startup_time')}")
+    results["pass"].append(f"**Email checker** — last ran {bot_state.get('last_email_check')}")
+    results["pass"].append(f"**Dealer checker** — last ran {bot_state.get('last_check')}")
+
+    # ── BUILD EMBED(S) ──────────────────────────────────────
+    def build_embed(title, items, color):
+        text = "\n".join(items) if items else "None"
+        if len(text) > 4000:
+            text = text[:3997] + "..."
+        return discord.Embed(title=title, description=text, color=color, timestamp=datetime.now(timezone.utc))
+
+    embeds = []
+    if results["fail"]:
+        embeds.append(build_embed(f"❌ FAILURES ({len(results['fail'])})", results["fail"], discord.Color.red()))
+    if results["warn"]:
+        embeds.append(build_embed(f"⚠️ WARNINGS ({len(results['warn'])})", results["warn"], discord.Color.orange()))
+    if results["pass"]:
+        embeds.append(build_embed(f"✅ PASSED ({len(results['pass'])})", results["pass"], discord.Color.green()))
+
+    summary = discord.Embed(
+        title="🩺 Adrian Diagnostics Report",
+        description=f"**{len(results['fail'])}** failures · **{len(results['warn'])}** warnings · **{len(results['pass'])}** passed",
+        color=discord.Color.red() if results["fail"] else (discord.Color.orange() if results["warn"] else discord.Color.green())
+    )
+    embeds.insert(0, summary)
+
+    # Discord allows max 10 embeds per message
+    await interaction.followup.send(embeds=embeds[:10], ephemeral=True)
+
 
 # ==================== WELCOME VIEW ====================
 
