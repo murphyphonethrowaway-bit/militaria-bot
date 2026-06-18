@@ -5089,6 +5089,39 @@ async def _show_start_onboarding(interaction):
 
 
 
+async def fix_role_hierarchy(guild):
+    """Move the bot's role as high as possible in the hierarchy. Returns a result string."""
+    try:
+        bot_role = guild.me.top_role
+        # Find the highest role the bot can move to — just below the highest
+        # role it doesn't control (server owner, other bots, admin roles above it)
+        all_roles = sorted(guild.roles, key=lambda r: r.position, reverse=True)
+        target_position = None
+        for role in all_roles:
+            if role.is_default():
+                continue
+            if role.managed and role.id != bot_role.id:
+                continue
+            if role.id == bot_role.id:
+                continue
+            if role.position >= bot_role.position:
+                target_position = role.position
+                break
+
+        if target_position and bot_role.position < target_position - 1:
+            await bot_role.edit(position=target_position - 1, reason="Adrian — maximizing role position")
+            logger.info(f"[RoleFix] Bot role moved to position {target_position - 1} in {guild.name}")
+            return "✅ Bot role moved to highest possible position"
+        else:
+            return "✅ Bot role already at optimal position"
+    except discord.Forbidden:
+        logger.warning(f"[RoleFix] No permission to move bot role in {guild.name}")
+        return "⚠️ Could not auto-fix role hierarchy — missing permission"
+    except Exception as e:
+        logger.warning(f"[RoleFix] Role hierarchy fix failed in {guild.name}: {e}")
+        return f"⚠️ Could not auto-fix role hierarchy: {e}"
+
+
 @client.tree.command(name="setup", description="Set up Adrian on your server — creates all channels, roles and permissions")
 async def setup_cmd(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.administrator:
@@ -5166,36 +5199,8 @@ async def _run_auto_setup(interaction):
         premium_role   = await get_or_create_role("Adrian Premium",   discord.Color.gold(),   "premium_role_id")
 
         # ── FIX ROLE HIERARCHY ─────────────────────────────────
-        try:
-            bot_role = guild.me.top_role
-            # Find the highest role the bot can move to
-            # Bot cannot move roles above its current position, so we find the
-            # highest non-managed role below @everyone that isn't the bot's own role
-            # In practice: move to just below the server owner / highest admin role
-            all_roles = sorted(guild.roles, key=lambda r: r.position, reverse=True)
-            target_position = None
-            for role in all_roles:
-                # Skip @everyone, managed roles (other bots), and roles above or equal to bot's current position
-                if role.is_default():
-                    continue
-                if role.managed and role.id != bot_role.id:
-                    continue
-                if role.id == bot_role.id:
-                    continue
-                if role.position >= bot_role.position:
-                    # This is a role we can't go above — set target just below it
-                    target_position = role.position
-                    break
-            
-            if target_position and bot_role.position < target_position - 1:
-                await bot_role.edit(position=target_position - 1, reason="Adrian setup — maximizing role position")
-                results.append(f"✅ Bot role moved to highest possible position")
-                logger.info(f"[Setup] Bot role moved to position {target_position - 1} in {guild.name}")
-            else:
-                results.append("✅ Bot role already at optimal position")
-        except Exception as e:
-            results.append(f"⚠️ Could not auto-fix role hierarchy: {e}")
-            logger.warning(f"[Setup] Role hierarchy fix failed: {e}")
+        hierarchy_result = await fix_role_hierarchy(guild)
+        results.append(hierarchy_result)
 
         # ── CHANNELS ───────────────────────────────────────────
         everyone   = guild.default_role
@@ -8209,6 +8214,15 @@ async def on_ready():
     for g in client.guilds:
         logger.info(f"[Startup] Connected to guild: {g.name} ({g.id})")
     logger.info(f"[Startup] ============================")
+
+    # Auto-fix role hierarchy in every connected guild (self-healing)
+    for g in client.guilds:
+        try:
+            result = await fix_role_hierarchy(g)
+            logger.info(f"[Startup] Role hierarchy in {g.name}: {result}")
+        except Exception as e:
+            logger.warning(f"[Startup] Could not check role hierarchy in {g.name}: {e}")
+
     logger.info(f"SCRIPT_DIR: {SCRIPT_DIR}")
     logos_path = os.path.join(SCRIPT_DIR, "logos")
     adrian_path = os.path.join(SCRIPT_DIR, "logos", "adrian")
