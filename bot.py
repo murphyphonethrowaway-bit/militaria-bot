@@ -2880,7 +2880,16 @@ def parse_waf_email(subject, body):
     else:
         logger.debug(f"[WAF] Matched '{subject_category}' to role {matched_role_id}")
 
-    logger.debug(f"[WAF] Parsed: title='{item_title}' | category='{category_name}' | poster='{poster}' | url='{forum_url}' | prices={clean_prices} | bump={is_bump}")
+    # Detect sold items — check title and message body for sold indicators
+    sold_keywords = ["sold", "[sold]", "(sold)", "- sold", "sold out", "sold!", "sold pending"]
+    title_lower = item_title.lower()
+    msg_lower_check = msg_body_clean.lower()
+    is_sold = (
+        any(kw in title_lower for kw in sold_keywords) or
+        any(kw in msg_lower_check[:100] for kw in sold_keywords)  # Check start of message only
+    )
+
+    logger.debug(f"[WAF] Parsed: title='{item_title}' | category='{category_name}' | poster='{poster}' | url='{forum_url}' | prices={clean_prices} | bump={is_bump} | sold={is_sold}")
 
     return {
         "item_title": item_title,
@@ -2891,6 +2900,7 @@ def parse_waf_email(subject, body):
         "prices": clean_prices,
         "role_id": matched_role_id,
         "msg_body": msg_body_clean,
+        "is_sold": is_sold,
     }
 
 # ==================== USMF EMAIL PARSER ====================
@@ -2940,17 +2950,27 @@ def parse_usmf_email(subject, body):
                 matched_category = cat["name"]
                 break
 
-    logger.debug(f"[USMF] Parsed: title='{item_title}' | category='{matched_category}' | price='{price_str}' | url='{topic_url}'")
+    # Detect sold items
+    sold_keywords = ["sold", "[sold]", "(sold)", "- sold", "sold out", "sold!", "sold pending"]
+    is_sold = any(kw in item_title.lower() for kw in sold_keywords)
+
+    logger.debug(f"[USMF] Parsed: title='{item_title}' | category='{matched_category}' | price='{price_str}' | url='{topic_url}' | sold={is_sold}")
 
     return {
         "item_title": item_title,
         "category": matched_category,
         "price_str": price_str,
         "forum_url": topic_url,
+        "is_sold": is_sold,
     }
 
 async def send_usmf_alert(parsed):
     """Send a USMF forum alert to the USMF channel."""
+
+    # Skip sold items entirely
+    if parsed.get("is_sold"):
+        logger.info(f"[USMF] Skipping sold item: {parsed.get('item_title', 'Unknown')}")
+        return
 
     # Build description
     description = f"**{parsed['item_title']}**\n"
@@ -3067,6 +3087,11 @@ async def send_waf_alert(parsed, guild=None):
     forum_url = parsed.get("forum_url", "")
     item_title = parsed.get("item_title", "Unknown")
     price_str_raw = " | ".join(parsed["prices"]) if parsed["prices"] else ""
+
+    # Skip sold items entirely — no alert, no DM
+    if parsed.get("is_sold"):
+        logger.info(f"[WAF] Skipping sold item: {item_title}")
+        return
 
     if parsed["is_bump"]:
         # Track bump but check for price drop first
