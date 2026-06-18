@@ -1507,7 +1507,7 @@ def stars_display(rating):
     return "⭐" * full + "✨" * half + "☆" * empty + f" {rating}/5"
 
 def get_all_dealers():
-    return DEALERS + EMAIL_DEALERS
+    return DEALERS + EMAIL_DEALERS + PLAYWRIGHT_DEALERS
 
 async def dealer_autocomplete(interaction: discord.Interaction, current: str):
     all_dealers = sorted(get_all_dealers(), key=lambda x: x["name"].lower())
