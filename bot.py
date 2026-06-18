@@ -5178,11 +5178,26 @@ async def _run_auto_setup(interaction):
     )
 
     try:
+        # ── FIX ROLE HIERARCHY FIRST ────────────────────────────
+        # Maximize bot's position before creating any roles, so every
+        # role we create can be guaranteed to land below the bot
+        hierarchy_result = await fix_role_hierarchy(guild)
+        results.append(hierarchy_result)
+
         # ── ROLES ──────────────────────────────────────────────
         async def get_or_create_role(name, color, save_key=None):
             role = discord.utils.get(guild.roles, name=name)
             if not role:
                 role = await guild.create_role(name=name, color=color, reason="Adrian setup")
+                # Force the new role to sit just below the bot's own role,
+                # not wherever Discord defaults it to. This guarantees the
+                # bot can always manage roles it creates.
+                try:
+                    bot_role = guild.me.top_role
+                    if role.position >= bot_role.position:
+                        await role.edit(position=max(1, bot_role.position - 1))
+                except Exception as pe:
+                    logger.debug(f"[Setup] Could not reposition new role {name}: {pe}")
                 results.append(f"✅ Created **@{name}** role")
             else:
                 results.append(f"✅ Found **@{name}** role")
@@ -5198,9 +5213,6 @@ async def _run_auto_setup(interaction):
         usmf_role      = await get_or_create_role("USMF",             discord.Color.from_rgb(0, 100, 0),   "usmf_role_id")
         premium_role   = await get_or_create_role("Adrian Premium",   discord.Color.gold(),   "premium_role_id")
 
-        # ── FIX ROLE HIERARCHY ─────────────────────────────────
-        hierarchy_result = await fix_role_hierarchy(guild)
-        results.append(hierarchy_result)
 
         # ── CHANNELS ───────────────────────────────────────────
         everyone   = guild.default_role
