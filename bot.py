@@ -35,7 +35,7 @@ TEST_GUILD_ID = 1513233559878369422  # Test server
 OWNER_GUILD_ID = 1357352905857826887  # Owner commands go here (main server)
 IMAGE_HOST_CHANNEL_ID = 1513273241043599530  # #image-host — test server
 CHANNEL_ID = 1513271593273655387  # #adrian — test server
-WAF_CHANNEL_ID = 1513271593273655387  # #adrian — test server
+WAF_CHANNEL_ID = None  # Deprecated — use get_all_server_channels() instead
 WAF_ROLE_ID = 1511101033349124318
 DEALER_SUGGEST_CHANNEL_ID = 1511487755266556034  # #dealer-reviews channel
 REVIEW_LOG_CHANNEL_ID = 1513271782436639011  # #review-log — test server
@@ -159,7 +159,7 @@ EMAIL_DEALERS = [
     {"name": "Clements Militaria", "flag": "🇳🇱", "region": "EU", "match": ["clementsm@emailer500.com", "clements militaria", "clementsmilitaria.com"], "logo_file": "clements_militaria.png", "url": "https://clementsmilitaria.com/shop.php", "eras": [3], "countries": ['B', 'A', 'D']},
 ]
 
-USMF_CHANNEL_ID = 1513271593273655387  # #adrian — test server
+USMF_CHANNEL_ID = None  # Deprecated — use get_all_server_channels() instead
 
 USMF_CATEGORIES = [
     {"name": "FS Field & Personal Gear", "emoji": "🎒", "keywords": ["field", "personal gear", "gear"]},
@@ -2496,14 +2496,26 @@ async def scrape_dealer_items(browser, dealer):
         """)
 
         logger.debug(f"[Playwright] Loading {name}...")
-        try:
-            await page.goto(url, wait_until="networkidle", timeout=45000)
-        except Exception:
-            # Fall back to domcontentloaded if networkidle times out
-            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        for attempt in range(3):
+            try:
+                await page.goto(url, wait_until="networkidle", timeout=45000)
+                # Check if page loaded properly (not a 39-char empty response)
+                html_check = await page.content()
+                if len(html_check) > 500:
+                    break
+                logger.debug(f"[Playwright] {name} got short response ({len(html_check)} chars), retrying...")
+                await asyncio.sleep(5)
+            except Exception:
+                try:
+                    await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                    break
+                except Exception:
+                    if attempt == 2:
+                        raise
+                    await asyncio.sleep(5)
 
         # Accept cookie consent banners if present
-        for cookie_sel in ["#accept-cookies", ".cookie-accept", "button[id*='accept']", "button[class*='accept']", "a[class*='accept']", ".got-it", "button:has-text('Got it')", "button:has-text('Accept')", "button:has-text('I Accept')"]:
+        for cookie_sel in ["#accept-cookies", ".cookie-accept", "button[id*='accept']", "button[class*='accept']", "a[class*='accept']", ".got-it", "a[class*='borderoff']"]:
             try:
                 btn = await page.query_selector(cookie_sel)
                 if btn:
@@ -2513,6 +2525,18 @@ async def scrape_dealer_items(browser, dealer):
                     break
             except Exception:
                 pass
+        # Try text-based click for sites like Overlook with "Got it!" text
+        try:
+            await page.get_by_text("Got it!").click(timeout=3000)
+            await asyncio.sleep(1)
+            logger.debug(f"[Playwright] Clicked 'Got it!' on {name}")
+        except Exception:
+            pass
+        try:
+            await page.get_by_text("Got It!").click(timeout=2000)
+            await asyncio.sleep(1)
+        except Exception:
+            pass
 
         # Extra wait for AJAX-heavy sites
         extra_wait = dealer.get("extra_wait_ms", 0)
@@ -5455,7 +5479,7 @@ async def testalert_cmd(interaction: discord.Interaction):
     await db_add_pending_alert(user_id, "TEST — Weitze Militaria", "https://www.weitze.com/neuheiten.html", "🇩🇪")
 
     # Ping in #adrian-updates
-    updates_channel = client.get_channel(ADRIAN_UPDATES_CHANNEL_ID) or channel
+    updates_channel = channel
     if updates_channel:
         member = updates_channel.guild.get_member(interaction.user.id)
         if member:
