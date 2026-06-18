@@ -830,6 +830,10 @@ bot_state = {
     "error_count": 0,
     "dealer_cooldowns": {},
     "command_cooldowns": {},
+    "pending_pings": {},
+    "ping_task_running": False,
+    "waf_notification_count": 0,
+    "usmf_notification_count": 0,
 }
 
 async def db_get_reviews(dealer_name, status='approved'):
@@ -4455,6 +4459,11 @@ async def db_set_user_forums(user_id, forums_choice):
         )
 
 # ==================== /START ONBOARDING ====================
+
+async def db_get_users_for_keyword(keyword):
+    """Get users who have keyword alerts for this term (Premium feature — stub)."""
+    return []
+
 
 async def db_save_user_waf_categories(user_id, category_names):
     """Save user WAF category subscriptions."""
