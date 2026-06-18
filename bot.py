@@ -792,6 +792,18 @@ PLAYWRIGHT_DEALERS = [
         ],
     },
     {
+        "name": "WarEra Militaria",
+        "flag": "🇵🇱",
+        "region": "EU",
+        "url": "https://warera-militaria.com/katalog/filter/icons=3/",
+        "item_sel": ".product-item, .catalog-item, li.product",
+        "title_sel": ".product-title, .item-title, .woocommerce-loop-product__title, h2, h3",
+        "id_sel": None,
+        "logo_file": "WarEra_Militaria.png",
+        "eras": [0],
+        "countries": ["Z"],
+    },
+    {
         "name": "SMG War Relics",
         "flag": "🇺🇸",
         "region": "NA",
