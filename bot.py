@@ -677,6 +677,7 @@ PLAYWRIGHT_DEALERS = [
         "url": "https://wwiigimilitarysurplus.com/shop.php?p=t|hhh||",
         "item_sel": "table tr",
         "title_sel": "td:nth-child(2) a, td a, td b",
+        "extra_wait_ms": 4000,
         "id_sel": None,
         "logo_file": "Overlook_Militaria_Surplus.png",
         "eras": [0],
@@ -3331,38 +3332,6 @@ async def _check_email_dealers_inner():
 
         await asyncio.sleep(EMAIL_CHECK_INTERVAL)
 
-async def send_promo():
-    await client.wait_until_ready()
-    channel = client.get_channel(CHANNEL_ID)
-    if not channel:
-        return
-    bot_state["last_promo"] = datetime.now(timezone.utc)  # Set at startup so /nextpromo works
-    while not client.is_closed():
-        await asyncio.sleep(48 * 3600)
-        if bot_state["promo_paused"]:
-            continue
-        banner_file = os.path.join(SCRIPT_DIR, "logos", "Server_Banner.png")
-        embed = discord.Embed(
-            title="🎖️ Adrian Militaria Community",
-            description="Looking for the best militaria collecting community on Discord?\n\n**Adrian** connects collectors across multiple servers with dealer alerts, an estate marketplace, and global reputation.\n\n📬 Dealer alerts from 100+ websites\n🏪 Estate marketplace with verified ratings\n\n[**Click here to join →**](https://discord.gg/yourserver)",
-            color=discord.Color.dark_red(),
-            timestamp=datetime.now(timezone.utc)
-        )
-        embed.set_footer(text="Adrian — Dealer Update")
-        file = None
-        if os.path.exists(banner_file):
-            file = discord.File(banner_file, filename="banner.png")
-            embed.set_image(url="attachment://banner.png")
-        try:
-            if file:
-                await channel.send(file=file, embed=embed)
-            else:
-                await channel.send(embed=embed)
-            bot_state["last_promo"] = datetime.now(timezone.utc)
-            logger.info("Promo message sent!")
-        except Exception as e:
-            logger.error(f"Failed to send promo: {e}")
-
 # ==================== SELLER PROFILE VIEW ====================
 
 class SellerProfileView(discord.ui.View):
@@ -5339,123 +5308,13 @@ async def help_cmd(interaction: discord.Interaction):
     embed.set_footer(text="🔒 = Mod only")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
-@client.tree.command(name="dealers", description="Lists all monitored dealers")
-async def dealers_cmd(interaction: discord.Interaction):
-    embed = discord.Embed(title="🏪 Monitored Dealers", color=discord.Color.dark_gold())
-    for dealer in DEALERS:
-        rating, count = get_dealer_rating(dealer["name"])
-        embed.add_field(name=f"🌐 {dealer['name']}", value=f"[Visit]({dealer['url']})\n{stars_display(rating)}", inline=True)
-    for dealer in EMAIL_DEALERS:
-        rating, count = get_dealer_rating(dealer["name"])
-        embed.add_field(name=f"📧 {dealer['name']}", value=f"[Visit]({dealer['url']})\n{stars_display(rating)}", inline=True)
-    embed.set_footer(text="Adrian — Dealer Update")
-    await interaction.response.send_message(embed=embed, ephemeral=True)
-
-@client.tree.command(name="status", description="Check which dealer websites are reachable")
-async def status_cmd(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
-    embed = discord.Embed(title="📡 Dealer Status", color=discord.Color.dark_gold(), timestamp=datetime.now(timezone.utc))
-    async with aiohttp.ClientSession() as session:
-        for dealer in DEALERS:
-            html = await fetch_page(session, dealer["url"])
-            status = "✅ Online" if html else "❌ Unreachable"
-            embed.add_field(name=dealer["name"], value=status, inline=True)
-            await asyncio.sleep(1)
-    for dealer in EMAIL_DEALERS:
-        embed.add_field(name=dealer["name"], value="📧 Via Email", inline=True)
-    await interaction.followup.send(embed=embed, ephemeral=True)
-
-@client.tree.command(name="lastcheck", description="Shows when the bot last checked dealers")
-async def lastcheck_cmd(interaction: discord.Interaction):
-    if bot_state["last_check"]:
-        ts = int(bot_state["last_check"].timestamp())
-        await interaction.response.send_message(f"🕐 Last check was <t:{ts}:R> at <t:{ts}:T>", ephemeral=True)
-    else:
-        await interaction.response.send_message("⚠️ No check has run yet since the bot started.", ephemeral=True)
-
-@client.tree.command(name="joinwaf", description="Subscribe to WAF Estate alerts by category")
-async def joinwaf_cmd(interaction: discord.Interaction):
-    try:
-        options = [discord.SelectOption(label=cat["name"][:100], value=str(cat["role_id"])) for cat in WAF_CATEGORIES]
-        select = discord.ui.Select(placeholder="Choose WAF categories...", min_values=1, max_values=len(options), options=options)
-
-        async def select_callback(i: discord.Interaction):
-            added = []
-            already_have = []
-            for value in select.values:
-                role_id = int(value)
-                role = i.guild.get_role(role_id)
-                if role:
-                    if role in i.user.roles:
-                        already_have.append(role.name)
-                    else:
-                        await i.user.add_roles(role)
-                        added.append(role.name)
-            waf_role = i.guild.get_role(WAF_ROLE_ID)
-            if waf_role and waf_role not in i.user.roles:
-                await i.user.add_roles(waf_role)
-            parts = []
-            if added:
-                parts.append(f"✅ Subscribed to: {', '.join(added)}")
-            if already_have:
-                parts.append(f"⚠️ Already had: {', '.join(already_have)}")
-            await i.response.send_message("\n".join(parts) if parts else "No changes made.", ephemeral=True)
-
-        select.callback = select_callback
-        view = discord.ui.View()
-        view.add_item(select)
-        await interaction.response.send_message("🎖️ **Select which WAF Estate categories you want alerts for:**", view=view, ephemeral=True)
-    except Exception as e:
-        logger.error(f"[WAF] Join error: {e}")
-        await interaction.response.send_message(f"⚠️ Error: {e}", ephemeral=True)
-
-@client.tree.command(name="leavewaf", description="Unsubscribe from WAF Estate alerts")
-async def leavewaf_cmd(interaction: discord.Interaction):
-    options = [
-        discord.SelectOption(label=cat["name"], value=str(cat["role_id"]))
-        for cat in WAF_CATEGORIES
-        if any(r.id == cat["role_id"] for r in interaction.user.roles)
-    ]
-    if not options:
-        await interaction.response.send_message("⚠️ You don't have any WAF Estate subscriptions.", ephemeral=True)
-        return
-    select = discord.ui.Select(placeholder="Choose categories to unsubscribe from...", min_values=1, max_values=len(options), options=options)
-
-    async def leave_callback(i: discord.Interaction):
-        removed = []
-        for value in select.values:
-            role_id = int(value)
-            role = i.guild.get_role(role_id)
-            if role and role in i.user.roles:
-                await i.user.remove_roles(role)
-                removed.append(role.name)
-        remaining = [r for r in i.user.roles if any(r.id == cat["role_id"] for cat in WAF_CATEGORIES)]
-        if not remaining:
-            waf_role = i.guild.get_role(WAF_ROLE_ID)
-            if waf_role and waf_role in i.user.roles:
-                await i.user.remove_roles(waf_role)
-        await i.response.send_message(f"✅ Unsubscribed from: {', '.join(removed)}", ephemeral=True)
-
-    select.callback = leave_callback
-    view = discord.ui.View()
-    view.add_item(select)
-    await interaction.response.send_message("Select categories to unsubscribe from:", view=view, ephemeral=True)
-
-@client.tree.command(name="myroles", description="Shows your current WAF alert subscriptions")
-async def myroles_cmd(interaction: discord.Interaction):
-    embed = discord.Embed(title="🎖️ Your WAF Alert Subscriptions", color=discord.Color.dark_gold(), timestamp=datetime.now(timezone.utc))
-    subscribed = [cat["name"] for cat in WAF_CATEGORIES if any(r.id == cat["role_id"] for r in interaction.user.roles)]
-    embed.add_field(name="✅ Subscribed", value="\n".join(subscribed) if subscribed else "None — use `/joinwaf` to subscribe", inline=False)
-    embed.set_footer(text="Adrian — Dealer Update")
-    await interaction.response.send_message(embed=embed, ephemeral=True)
-
 @client.tree.command(name="dealerprofile", description="View a dealer's full profile including ratings and reviews")
 @app_commands.describe(dealer_name="Name of the dealer")
 @app_commands.autocomplete(dealer_name=dealer_autocomplete)
 async def dealerprofile_cmd(interaction: discord.Interaction, dealer_name: str):
     dealer = find_dealer(dealer_name)
     if not dealer:
-        await interaction.response.send_message(f"⚠️ Dealer '{dealer_name}' not found. Use `/dealers` to see all dealers.", ephemeral=True)
+        await interaction.response.send_message(f"⚠️ Dealer '{dealer_name}' not found.", ephemeral=True)
         return
 
     dealer_reviews = await db_get_reviews(dealer["name"])
@@ -5592,30 +5451,6 @@ async def ratedealer_cmd(interaction: discord.Interaction, dealer_name: str, rat
     except Exception as e:
         logger.error(f"Review log error: {e}\n{traceback.format_exc()}")
 
-@client.tree.command(name="suggestdealer", description="Suggest a new dealer to be added to the bot")
-@app_commands.describe(dealer_name="Name of the dealer", url="Dealer website URL", reason="Why should this dealer be added?")
-async def suggestdealer_cmd(interaction: discord.Interaction, dealer_name: str, url: str, reason: str = None):
-    suggest_channel = client.get_channel(DEALER_SUGGEST_CHANNEL_ID)
-
-    embed = discord.Embed(
-        title="📬 New Dealer Suggestion",
-        color=discord.Color.blurple(),
-        timestamp=datetime.now(timezone.utc)
-    )
-    embed.add_field(name="Dealer Name", value=dealer_name, inline=True)
-    embed.add_field(name="URL", value=url, inline=True)
-    embed.add_field(name="Suggested By", value=f"{interaction.user.mention} ({interaction.user})", inline=False)
-    if reason:
-        embed.add_field(name="Reason", value=reason, inline=False)
-    embed.add_field(name="Action", value="Use `/approvedealer` to approve or simply ignore to reject.", inline=False)
-    embed.set_footer(text="Dealer Suggestion")
-
-    if suggest_channel:
-        await suggest_channel.send(embed=embed)
-        await interaction.response.send_message(f"✅ Your suggestion for **{dealer_name}** has been sent to the mods for review!", ephemeral=True)
-    else:
-        await interaction.response.send_message("⚠️ Could not find the suggestions channel. Please contact a mod.", ephemeral=True)
-
 @client.tree.command(name="leaderboard", description="Shows top rated dealers and most active reviewers")
 async def leaderboard_cmd(interaction: discord.Interaction):
     all_reviews = await db_get_all_reviews(status="approved")
@@ -5747,47 +5582,6 @@ async def test_cmd(interaction: discord.Interaction):
         await asyncio.sleep(1)
     await interaction.followup.send("✅ Test complete!", ephemeral=True)
 
-@client.tree.command(name="promo", description="🔒 Send the server promo message manually")
-async def promo_cmd(interaction: discord.Interaction):
-    if not is_mod(interaction.user):
-        await interaction.response.send_message("🚫 You need Moderator permissions.", ephemeral=True)
-        return
-    channel = client.get_channel(CHANNEL_ID)
-    banner_file = os.path.join(SCRIPT_DIR, "logos", "Server_Banner.png")
-    embed = discord.Embed(
-        title="🎖️ Adrian Militaria Community",
-        description="Looking for the best militaria collecting community on Discord?\n\n**Adrian** connects collectors across multiple servers with dealer alerts, an estate marketplace, and global reputation.\n\n📬 Dealer alerts from 100+ websites\n🏪 Estate marketplace with verified ratings\n\n[**Click here to join →**](https://discord.gg/yourserver)",
-        color=discord.Color.dark_red(),
-        timestamp=datetime.now(timezone.utc)
-    )
-    embed.set_footer(text="Adrian — Dealer Update")
-    file = None
-    if os.path.exists(banner_file):
-        file = discord.File(banner_file, filename="banner.png")
-        embed.set_image(url="attachment://banner.png")
-    if file:
-        await channel.send(file=file, embed=embed)
-    else:
-        await channel.send(embed=embed)
-    bot_state["last_promo"] = datetime.now(timezone.utc)
-    await interaction.response.send_message("✅ Promo sent!", ephemeral=True)
-
-@client.tree.command(name="pausepromo", description="🔒 Pause the automatic 48 hour promo")
-async def pausepromo_cmd(interaction: discord.Interaction):
-    if not is_mod(interaction.user):
-        await interaction.response.send_message("🚫 You need Moderator permissions.", ephemeral=True)
-        return
-    bot_state["promo_paused"] = True
-    await interaction.response.send_message("⏸️ Promo messages paused.", ephemeral=True)
-
-@client.tree.command(name="resumepromo", description="🔒 Resume the automatic 48 hour promo")
-async def resumepromo_cmd(interaction: discord.Interaction):
-    if not is_mod(interaction.user):
-        await interaction.response.send_message("🚫 You need Moderator permissions.", ephemeral=True)
-        return
-    bot_state["promo_paused"] = False
-    await interaction.response.send_message("▶️ Promo messages resumed!", ephemeral=True)
-
 @client.tree.command(name="adddealer", description="🔒 Add a new dealer to monitor")
 @app_commands.describe(name="Dealer name", url="Dealer website URL", logo_url="Direct URL to dealer logo image")
 async def adddealer_cmd(interaction: discord.Interaction, name: str, url: str, logo_url: str = None):
@@ -5868,25 +5662,6 @@ async def deletereview_cmd(interaction: discord.Interaction, dealer_name: str, r
     removed = dealer_reviews[idx]
     await db_delete_review(removed["id"])
     await interaction.response.send_message(f"✅ Deleted review #{review_index} for **{dealer['name']}** by {removed.get('username', 'Unknown')}.", ephemeral=True)
-
-@client.tree.command(name="approvedealer", description="🔒 Approve a suggested dealer and add them")
-@app_commands.describe(name="Dealer name", url="Dealer website URL", logo_url="Direct URL to dealer logo")
-async def approvedealer_cmd(interaction: discord.Interaction, name: str, url: str, logo_url: str = None):
-    if not is_mod(interaction.user):
-        await interaction.response.send_message("🚫 You need Moderator permissions.", ephemeral=True)
-        return
-    await interaction.response.defer(ephemeral=True)
-    logo_filename = name.lower().replace(" ", "_").replace("'", "").replace(".", "") + ".png"
-    logo_path = os.path.join(SCRIPT_DIR, "logos", logo_filename)
-    if logo_url:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(logo_url) as resp:
-                if resp.status == 200:
-                    with open(logo_path, "wb") as f:
-                        f.write(await resp.read())
-    match_keywords = [url.replace("https://", "").replace("http://", "").replace("www.", "").split("/")[0], name.lower()]
-    EMAIL_DEALERS.append({"name": name, "match": match_keywords, "logo_file": logo_filename, "url": url})
-    await interaction.followup.send(f"✅ **{name}** has been approved and added to the bot!", ephemeral=True)
 
 @client.tree.command(name="reviewerstats", description="🔒 Shows review stats for a specific member")
 @app_commands.describe(member="The member to look up")
@@ -7074,22 +6849,6 @@ async def nextemail_cmd(interaction: discord.Interaction):
         await interaction.response.send_message(f"📧 **Next email check:** <t:{next_ts}:R>\n🕐 **Last check:** <t:{last_ts}:R>", ephemeral=True)
     else:
         await interaction.response.send_message("⚠️ No email check has run yet.", ephemeral=True)
-
-@client.tree.command(name="nextpromo", description="🔒 Shows countdown to next automatic promo")
-async def nextpromo_cmd(interaction: discord.Interaction):
-    if not is_mod(interaction.user):
-        await interaction.response.send_message("🚫 You need Moderator permissions.", ephemeral=True)
-        return
-    if bot_state["promo_paused"]:
-        await interaction.response.send_message("⏸️ Promo is currently paused. Use `/resumepromo` to turn it back on.", ephemeral=True)
-        return
-    if bot_state["last_promo"]:
-        next_ts = int(bot_state["last_promo"].timestamp()) + (48 * 3600)
-        last_ts = int(bot_state["last_promo"].timestamp())
-        await interaction.response.send_message(f"📣 **Next promo:** <t:{next_ts}:R>\n🕐 **Last promo:** <t:{last_ts}:R>", ephemeral=True)
-    else:
-        await interaction.response.send_message("📣 No promo sent yet. First auto-promo fires 48 hours after bot start.", ephemeral=True)
-
 
 # ==================== WELCOME VIEW ====================
 
@@ -8587,7 +8346,6 @@ async def main():
             tasks.append(asyncio.create_task(onboarding_reminder_task()))
             tasks.append(asyncio.create_task(health_log_task()))
             tasks.append(asyncio.create_task(check_email_dealers()))
-            tasks.append(asyncio.create_task(send_promo()))
             tasks.append(asyncio.create_task(start_web_server()))
             tasks.append(asyncio.create_task(daily_cleanup()))
 
