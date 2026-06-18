@@ -5263,7 +5263,7 @@ async def _run_auto_setup(interaction):
         if estand_ch:
             await db_save_server_config(str(guild.id), estand_channel_id=str(estand_ch.id))
 
-        await db_save_server_config(str(guild.id), setup_complete="1")
+        await db_save_server_config(str(guild.id), setup_complete=1)
         logger.info(f"[Setup] Setup complete for {guild.name}")
 
         # Post welcome message
